@@ -52,15 +52,14 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 计划特性开发情况：
 
-- [x] 可交互的全流程界面（streamlit）
+<!-- - [x] 可交互的全流程界面（streamlit）
 
 - [x] 支持一键更换页面主题配色
 
 - [x] 更好的b30数据存档系统，可以保存多个历史副本
+ -->
+目前暂无正在开发计划中的特性。
 
-- [ ] 可自行筛选的特殊b30数据（如AP b30）
-
-- [ ] （远期）支持 中二B30/音击B45 视频生成
 
 ---
 
