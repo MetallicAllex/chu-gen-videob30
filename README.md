@@ -1,41 +1,32 @@
-# mai-gen-videob50
+# chu-gen-videob30
 
-自动从流媒体上搜索并构建你的舞萌DX B50视频
+自动从流媒体上搜索并构建你的中二节奏 b30视频
 
-Auto search and generate your best 50 videoes of MaimaiDX
+Auto search and generate your best 30 videoes of CHUNITHM
 
 ## 快速开始
 
 - 如果你具有基本的计算机和python知识，可以独立（或者GPT辅助）完成环境配置和脚本操作，请直接clone仓库代码，参考[使用说明](#使用说明（从源代码启动）)部分开始使用!
 
-- 如果你没有上述经验，请**从右侧Release页面下载最新的**打包版本，参考[【教程视频】](https://www.bilibili.com/video/BV1G2kBY5Edq)开始使用。
+<!-- - 如果你没有上述经验，请**从右侧Release页面下载最新的**打包版本，参考[【教程视频】](https://www.bilibili.com/video/BV1G2kBY5Edq)开始使用。 -->
+- 如果你没有上述经验，请**从右侧Release页面下载最新的**打包版本。
     - 请注意：**打包版本仅支持Windows10及以上操作系统**
-    - 要启动应用，请双击Release包内的`start.bat`文件。
-    - 首次启动时，如果没有立刻弹出浏览器窗口，请检查控制台，如果要求输入Email，请直接回车跳过即可。
-    - 使用打包版本时，**无需执行使用说明的步骤，浏览器页面弹出后即可直接使用**。遇到问题请参考[常见问题](#常见问题)一节。
+    - 要启动应用，请**完整解压**后，双击 `start.bat` 文件。
+    - 若没有立刻弹出浏览器窗口，请检查控制台，如要求输入Email，回车跳过即可。
+    - 使用打包版本时 **无需执行使用说明的步骤，浏览器页面弹出后即可直接使用**。遇到问题请参考[常见问题](#常见问题)一节。
 
-## 效果预览
-
-- 用户界面（支持主题换色）
-
-| ![alt text](md_res/page_fes.png) | ![alt text](md_res/page_bud.png) | ![alt text](md_res/page_pri.png) |
-|:---:|:---:|:---:|
-| FES | BUD | PRI |
-
-生成视频效果展示：[【舞萌2024/工具发布】还在手搓b50视频？我写了一个自动生成器！](https://www.bilibili.com/video/BV1bJi2YVEiE)
-
-使用教程视频：[【舞萌2024】新版B50视频生成器来啦！支持一键启动/站内下载/全面升级用户界面~](https://www.bilibili.com/video/BV1G2kBY5Edq)
+<!-- ## 效果预览
 
 - 生成视频帧效果
 
-![alt text](md_res/image.png)
+![alt text](md_res/image.png) -->
 
 
 ## 特性
 
 本工具的原理是：
 
-- 从查分器获取你的B50数据，并保存在本地。
+- 从查分器获取你的B30数据，并保存在本地。
 
 - 从流媒体上搜索并下载谱面确认视频，并保存在本地。
 
@@ -43,19 +34,15 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
 - 自动根据已缓存的素材合成视频。
 
-查分器源支持情况：
+数据源支持情况：
 
-- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取你的B50数据。
+- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取你的 B30 数据
 
-- [x] [国际服Maimai DX NET](https://maimaidx-eng.com/maimai-mobile/home/ratingTargetMusic/)
+- [x] [落雪查分器](https://maimai.lxns.net/)：您需要提供个人 API 密钥用于获取 B30 数据
 
-- [x] [日服Maimai DX NET](https://maimaidx.jp/maimai-mobile/home/ratingTargetMusic/) (缺乏测试样本)
+- [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：因缺少测试样本，我们目前无法支持此数据源
 
-- [x] [DXrating](https://dxrating.net/rating)：支持国服/国际服/日服
-
-    （国际服/日服官网以及DXrating网站导入数据需要通过下载网页或导出源码，点此查看[国际服/日服数据获取插件使用教程](docs/DX_NET_Guide.md)）
-
-- [ ] [落雪查分器](https://maimai.lxns.net/)（暂未支持）
+<!-- 由于 verse 修改 Rating 机制为 b30 + [b20](https://wikiwiki.jp/chunithmwiki/%E3%83%AC%E3%83%BC%E3%83%86%E3%82%A3%E3%83%B3%E3%82%B0%E3%83%BBOVER%20POWER#h3db37e3)，加上 -->
 
 流媒体源支持情况：
 
@@ -69,9 +56,9 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
 - [x] 支持一键更换页面主题配色
 
-- [x] 更好的B50数据存档系统，可以保存多个历史副本
+- [x] 更好的b30数据存档系统，可以保存多个历史副本
 
-- [ ] 可自行筛选的特殊B50数据（如AP B50）
+- [ ] 可自行筛选的特殊b30数据（如AP b30）
 
 - [ ] （远期）支持 中二B30/音击B45 视频生成
 
@@ -79,11 +66,11 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
 ## 使用说明（从源代码启动）
 
-1. 安装python环境和依赖，推荐使用 `conda`。注意，python版本需要3.10以上。
+1. 安装python环境和依赖，推荐使用 `conda`。注意 python 版本需 ≥ 3.10。
 
     ```bash
-    conda create -n mai-gen-videob50 python=3.10
-    conda activate mai-gen-videob50
+    conda create -n chu-gen-videob30 python=3.10
+    conda activate chu-gen-videob30
     ```
 
 2. 从 requirements.txt 安装依赖
@@ -115,7 +102,7 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
 - 如果你使用youtube源且使用代理下载，你可能会遇到风控情况，此时请额外按照youtube的 po token生成相关依赖，具体请参考：[使用自定义OAuth或PO Token](docs/UseTokenGuide.md)
 
-- 如果你使用国际服/日服，或使用DXrating网站作为B50数据源，在使用前请参考：[导入国际服/日服B50数据](docs/DX_NET_Guide.md)完成前置数据获取步骤。
+- 由于目前缺少使用国际服 CHUNITHM-NET 的样本，无法支持从本地导入 JSON 游玩数据。
 
 ---
 
@@ -186,11 +173,7 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
     如果登陆账号后仍出现此问题，目前没有较好的解决办法，请考虑等待24h后再试。
 
-- 下载视频期间未报错，但是没有视频文件：
-  
-    - 请检查ffmpeg环境是否正确配置。
-
-- 手动输入视频BV号或ID进行搜索时出现红色报错：
+- 手动输入视频BV号或ID进行搜索时出现红色报错
 
     - 请尝试删除输入框开头的BV字母。
 
@@ -212,19 +195,15 @@ Auto search and generate your best 50 videoes of MaimaiDX
     ![alt text](md_res/qa_2.png)
 
 
-- Q：我先填写了部分评论，但是后来B50数据更新了，怎么更新评论？
+- Q：我先填写了部分评论，但是后来b30数据更新了，怎么更新评论？
 
-    视频配置信息不会随B50数据的更新而自动更新，建议b50推分后建立一个新的存档。如果确实需要复制部分旧存档的评论，请参考如下步骤：
+    视频配置信息不会随b30数据的更新而自动更新，建议b30推分后建立一个新的存档。如果确实需要复制部分旧存档的评论，请参考如下步骤：
 
-    - 首先新建存档更新b50，在第1-3步将你的B50数据和视频搜索数据都更新到最新。
+    - 首先新建存档更新b30，在第1-3步将你的b30数据和视频搜索数据都更新到最新。
 
     - 保持当前编辑的页面不动，复制浏览器中的地址，打开一个新的页面，以加载历史存档。
     
     - 进入页面4-1并对比两个页面的信息以复制粘贴评论内容，手动还原评论和时长配置
-
-- Q：我不小心更新了B50数据，但是我还想要使用旧的B50数据生成视频
-
-    - 如果您使用的是`v0.4.0`以上的版本，每次更新数据（强制覆盖除外）将会自动新建存档，只需在首页加载历史存档继续编辑即可。
     
 
 ### 视频生成相关
@@ -249,7 +228,7 @@ Auto search and generate your best 50 videoes of MaimaiDX
     _ArrayMemoryError: Unable to allocate xxx MiB for an array with shape (1920, 1080, 3) and data type float64
     ```
 
-    这通常是由于ffmpeg没有被分配足够的内存导致的，由于B50视频的时长通常较长，且默认分辨率为高清，部分设备可能会出现内存瓶颈。
+    这通常是由于ffmpeg没有被分配足够的内存导致的，由于b30视频的时长通常较长，且默认分辨率为高清，部分设备可能会出现内存瓶颈。
 
     请考虑：
     
@@ -272,7 +251,7 @@ Auto search and generate your best 50 videoes of MaimaiDX
     OSError: [WinError 6] 句柄无效。
     ```
 
-    这是因为ffmpeg没有正常关闭视频文件导致的，但该问题不影响最终视频生成，可以忽略。
+    这是因为ffmpeg没有正常关闭视频文件导致的，不影响最终视频生成，可以忽略。
 
 ---
 
@@ -304,7 +283,7 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
 - `VIDEO_TRANS_TIME` ：设置生成完整视频时，两个视频片段之间的过渡时间，单位为秒。
 
-- `USE_ALL_CACHE` ：生成图片和视频需要一定时间。如果设置为`true`，则使用本地已经生成的缓存，从而跳过重新生成的步骤，推荐在已经获取过数据但是合成视频失败或中断后使用。如果你需要从水鱼更新新的b50数据，请设置为`false`。
+- `USE_ALL_CACHE` ：生成图片和视频需要一定时间。如果设置为`true`，则使用本地已经生成的缓存，从而跳过重新生成的步骤，推荐在已经获取过数据但是合成视频失败或中断后使用。如果你需要从水鱼更新新的b30数据，请设置为`false`。
 
 - `ONLY_GENERATE_CLIPS` ：设置为是否只生成视频片段，如果设置为`true`，则只会在`./videos/{USER_ID}`文件夹下生成每个b的视频片段，而不会生成完整的视频。
 
@@ -314,34 +293,32 @@ Auto search and generate your best 50 videoes of MaimaiDX
 
 ### 本地存档文件结构的解释
 
-- 在`./b50_datas`文件夹下是所有的用户b50存档，以及与其配对的视频搜索和生成配置文件
+- 在`./b30_datas`文件夹下是所有的用户b30存档，以及与其配对的视频搜索和生成配置文件
 
-    - 用户存档以时间戳命名，作为子文件夹，例如`./b50_datas/{user}/20250101_080011`是用户在2025.1.1 08:00:11创建的存档
+    - 用户存档以时间戳命名，作为子文件夹，例如`./b30_datas/{user}/20250101_080011`是用户在2025.1.1 08:00:11创建的存档
 
     - 每个存档文件夹中包含：
 
-        - `b50_raw.json` ：用户的原始b50数据，由查分器返回，目前统一采用水鱼API的格式
+        - `b30_raw.json` ：用户的原始b30数据，由查分器返回，目前统一采用水鱼API的格式
 
-        - `b50_config_{DOWNLOADER}.json` ：用户的b50数据与每个谱面的目标流媒体视频数据的映射。
-            - 其中无后缀的文件是空映射，为了使得用户更新b50数据时，不会覆盖已有的配置文件。
+        - `b30_config_{DOWNLOADER}.json` ：用户的b30数据与每个谱面的目标流媒体视频数据的映射。
+            - 其中无后缀的文件是空映射，为了使得用户更新b30数据时，不会覆盖已有的配置文件。
             - 后缀为`_downloader`的文件为下载器自动生成，存储不同平台搜索到的视频信息和备选视频信息。
 
         - `video_config.json` ：自动生成的视频渲染的配置文件，包括生成器索引的图片和视频位置，以及用户填写的评论和片段时长配置。
             - 注意本文件不含有视频链接等互联网信息，仅记录本地映射。因此删除本文将不影响搜索和下载，但是会影响已填写的评论和片段时长。
 
-        - `images`文件夹，存储所有生成的成绩图片，以`{PastBest/NewBest}_{id}.png`的格式命名。
+        - `images`文件夹，存储所有生成的成绩图片，以`{Best}_{id}.png`的格式命名。
 
         - `videos`文件夹，存储输出的视频
     
-    - 如果用户以复制源码方式导入数据，输入的html或json源码不会保存在存档内，而是作为缓存保存在`./b50_datas/{user}`文件夹下，新的原始数据会覆盖这些文件，但存档内的数据保持不变（除非用户手动修改或覆盖）
+    - 如果用户通过国际服导入数据，输入的html或json源码不会保存在存档内，而是作为缓存保存在`./b30_datas/{user}`文件夹下，新的原始数据会覆盖这些文件，但存档内的数据保持不变（除非用户手动修改或覆盖）
 
 - 在`./videos/downloads`文件夹下可以找到所有已下载的谱面确认视频，命名格式为`{song_id}-{level_index}-{type}.mp4`。其中，`song_id`为曲目的ID，`level_index`为难度，`type`为谱面类型，例如`834-4-SD.mp4`。
-    
-    - 您可能会见到具有负数`song_id`的视频文件，这是由于数据库缺少一些较新曲目id导致的，在单次使用时一般不会产生问题。在多次使用时，这可能导致视频索引错误，请删除对应的视频文件已解决这样的问题。
 
 `video_config.json`的详细格式解释：
 
- - "intro"和"ending"部分你填写的text会作为开头和结尾的文字展示。"main"部分填写的text为每条b50下的文字展示。
+ - "intro"和"ending"部分你填写的text会作为开头和结尾的文字展示。"main"部分填写的text为每条b30下的文字展示。
 
  - 输入的文字会根据模板长度自动换行
 
@@ -378,18 +355,19 @@ Auto search and generate your best 50 videoes of MaimaiDX
 ```json
 "main": [
     {
-        "id": "NewBest_1",
-        "achievement_title": "系ぎて-re:Master-DX",
-        "song_id": 11663,
-        "level_index": 4,
-        "type": "DX",
-        "main_image": "b50_images\\test\\PastBest_1.png",
-        "video": "videos\\test\\11663-4-DX.mp4",
-        "duration": 9,
-        "start": 49,
-        "end": 58,
-        "text": "【请填写b50评价】\n【你只需要填写这条字符串】"
-    },
+          "id": 678,
+          "song_name": "Parousia",
+          "level_index": 3,
+          "score": 1004306,
+          "rating": 15.8306,
+          "full_combo": null,
+          "main_image": "b30_datas\\test\\20250327_162029\\images\\Best_30.png",
+          "video": "videos\\downloads\\678-3.mp4",
+          "duration": 24,
+          "start": 36,
+          "end": 60,
+          "text": "不认识的曲子呢（不知道啥时候当地板了，奇怪），但也蛮离谱的"
+    }
 ]
 ```
 
@@ -401,3 +379,5 @@ Auto search and generate your best 50 videoes of MaimaiDX
 - [Tomsens Nanser](https://space.bilibili.com/255845314) 提供图片生成素材模板以及代码实现
 
 - [bilibili-api](https://github.com/Nemo2011/bilibili-api) 
+
+- [mai-gen-Vb30 原始项目](https://github.com/Nick-bit233/mai-gen-videob50) 及 [作者](https://github.com/Nick-bit233)
