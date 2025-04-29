@@ -1,16 +1,17 @@
 import json
-import os.path
 import requests
-from PIL import Image, ImageDraw, ImageFont
-
+import threading
+from PIL import Image
+from update_music_data import music_info_path
+from concurrent.futures import ThreadPoolExecutor
 
 class Utils:
     def __init__(self, InputUserID: int = 0):
         UserId = InputUserID
         if UserId != 0:
             try:
-                with open(f"./b50_datas/{UserId}_B50.json") as file:
-                    UserB50Data = json.load(file)
+                with open(f"./b30_datas/{UserId}_b30.json") as file:
+                    UserB30Data = json.load(file)
             except FileNotFoundError:
                 print("错误：未找到 JSON 文件。")
                 return {}
@@ -18,299 +19,224 @@ class Utils:
                 print("错误：JSON 解码失败。")
                 return {}
 
-    def JacketLoader(self, MusicId: int = 0):
-        __musicid = str(MusicId)[-4:].zfill(4)
+class TextAnchor:
+    """动态锚点定位系统"""
+    def __init__(self, x_center, y_center):
+        self.base = (x_center, y_center)
+    
+    def get_pos(self, draw, text, font, x_offset=0, y_offset=0):
+        bbox = draw.textbbox((0,0), text, font=font)
+        x = self.base[0] - (bbox[2]-bbox[0])//2 + x_offset
+        y = self.base[1] - (bbox[3]-bbox[1])//2 + y_offset
+        return (x, y)
+
+def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_file):
+    """Best30 数据清洗（只要关键的）。
+
+    Args:
+        raw_data(list): API 请求的原始数据
+        source_type(str): Best30 数据来源（水鱼 / 落雪）
+        b30_raw_file(JSON): Best30 原始数据存储文件
+        b30_data_file(JSON): Best30 处理数据存储文件
+    
+    Returns:
+        processed_data(list): 经过处理后的数据（使用落雪格式）
+    """
+    # 1. 加载本地曲目数据库（主线程完成）
+    with open(music_info_path, 'r', encoding='utf-8') as f:
+        song_db = json.load(f)
+
+    # 2. 根据数据源类型提取字段映射规则
+    field_map = {
+        "lxns": {
+            "id": "id",
+            "song_name": "song_name",
+            "level_index": "level_index",
+            "score": "score",
+            "rating": "rating",
+            "fc": "full_combo",
+            "data_field": "data"
+        },
+        "fish": {
+            "id": "mid",
+            "song_name": "title",
+            "level_index": "level_index",
+            "score": "score",
+            "rating": "ra",
+            "fc": "fc",
+            "data_field": "records.b30"
+        }
+    }
+    fields = field_map[source_type]
+
+    # 3. 提取原始 B30 数据（支持嵌套字段如 'records.b30'）
+    def get_nested_field(data, field_path):
+        keys = field_path.split('.')
+        for key in keys:
+            data = data[key]
+        return data
+    b30_data = get_nested_field(raw_data, fields["data_field"])[:30]
+
+    # 4. 缓存原始数据（主线程完成）
+    with open(b30_raw_file, 'w', encoding='utf-8') as f:
+        json.dump(raw_data, f, ensure_ascii=False, indent=4)
+
+    # 5. 多线程处理每条曲目数据
+    processed_data = []
+    print_lock = threading.Lock()  # 用于保护打印输出
+    
+    def process_song(song, i):
+        nonlocal song_db
         try:
-            with Image.open(f"./images/Jackets/UI_Jacket_00{__musicid}.png") as Jacket:
-                return Jacket.copy()
-        except FileNotFoundError:
-            print(f"乐曲{__musicid}不存在。")
-            with Image.open(f"./images/Jackets/UI_Jacket_000000.png") as Jacket:
-                return Jacket.copy()
+            processed_song = {
+                "id": song[fields["id"]],
+                "song_name": song[fields["song_name"]],
+                "level_index": song[fields["level_index"]],
+                "score": song[fields["score"]],
+                "rating": song[fields["rating"]],
+                "full_combo": song[fields["fc"]],
+                "clip_id": f"Best_{i + 1}"
+            }
 
-    def DsLoader(self, level: int = 0, Ds: float = 0.0):
-        if Ds >= 20 or Ds < 1:
-            raise Exception("定数无效")
-
-        __ds = str(Ds)
-
-        # 根据小数点拆分字符串
-        if '.' in __ds:
-            IntegerPart, DecimalPart = __ds.split('.')
-        else:
-            IntegerPart, DecimalPart = __ds, '0'
-        Background = Image.new('RGBA', (180, 120), (0, 0, 0, 0))
-        Background.convert("RGBA")
-
-        # 加载数字
-        if len(IntegerPart) == 1:
-            with Image.open(f'./images/Numbers/{str(level)}/{IntegerPart}.png') as Number:
-                Background.paste(Number, (48, 60), Number)
-        else:
-            with Image.open(f'./images/Numbers/{str(level)}/1.png') as FirstNumber:
-                Background.paste(FirstNumber, (18, 60), FirstNumber)
-            with Image.open(f'./images/Numbers/{str(level)}/{IntegerPart[1]}.png') as SecondNumber:
-                Background.paste(SecondNumber, (48, 60), SecondNumber)
-        if len(DecimalPart) == 1:
-            with Image.open(f'./images/Numbers/{str(level)}/{DecimalPart}.png') as Number:
-                Number = Number.resize((32, 40), Image.LANCZOS)
-                Background.paste(Number, (100, 79), Number)
-        else:
-            raise Exception("定数无效")
-
-        # 加载加号
-        if int(DecimalPart) >= 7:
-            with Image.open(f"./images/Numbers/{str(level)}/plus.png") as PlusMark:
-                Background.paste(PlusMark, (75, 50), PlusMark)
-
-        return Background
-
-    def TypeLoader(self, Type: str = "SD"):
-        _type = Type
-        with Image.open(f"./images/Types/{_type}.png") as _Type:
-            _Type = _Type.resize((180, 50), Image.BICUBIC)
-            return _Type.copy()
-
-    def AchievementLoader(self, Achievement: str):
-        IntegerPart = Achievement.split('.')[0]
-        DecimalPart = Achievement.split('.')[1]
-
-        Background = Image.new('RGBA', (800, 118), (0, 0, 0, 0))
-        Background.convert("RGBA")
-
-        for __index, __digit in enumerate(IntegerPart):
-            with Image.open(f"./images/Numbers/AchievementNumber/{__digit}.png") as Number:
-                Background.paste(Number, (__index * 78 + (3 - len(IntegerPart)) * 78, 0), Number)
-
-        for __index, __digit in enumerate(DecimalPart):
-            with Image.open(f"./images/Numbers/AchievementNumber/{__digit}.png") as Number:
-                ScalLevel = 0.75
-                Number = Number.resize((int(86 * ScalLevel), int(118 * ScalLevel)), Image.LANCZOS)
-                Background.paste(Number, (270 + __index * int(86 * ScalLevel - 5), int(118 * (1 - ScalLevel) - 3)),
-                                 Number)
-
-        return Background
-
-    def StarLoader(self, Star: int = 0):
-        match Star:
-            case _ if Star == 0:
-                with Image.open("./images/Stars/0.png") as _star:
-                    return _star.copy()
-            case _ if Star == 1 or Star == 2:
-                with Image.open("./images/Stars/1.png") as _star:
-                    return _star.copy()
-            case _ if Star == 3 or Star == 4:
-                with Image.open("./images/Stars/3.png") as _star:
-                    return _star.copy()
-            case _ if Star == 5:
-                with Image.open("./images/Stars/5.png") as _star:
-                    return _star.copy()
-
-    def ComboStatusLoader(self, ComboStatus: int = 0):
-        match ComboStatus:
-            case _ if ComboStatus == '' or ComboStatus is None:
-                return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
-            case _ if ComboStatus == 'fc':
-                with Image.open("./images/ComboStatus/1.png") as _comboStatus:
-                    return _comboStatus.copy()
-            case _ if ComboStatus == 'fcp':
-                with Image.open("./images/ComboStatus/2.png") as _comboStatus:
-                    return _comboStatus.copy()
-            case _ if ComboStatus == 'ap':
-                with Image.open("./images/ComboStatus/3.png") as _comboStatus:
-                    return _comboStatus.copy()
-            case _ if ComboStatus == 'app':
-                with Image.open("./images/ComboStatus/4.png") as _comboStatus:
-                    return _comboStatus.copy()
-
-    def SyncStatusLoader(self, SyncStatus: int = 0):
-        match SyncStatus:
-            case _ if SyncStatus == '' or SyncStatus is None:
-                return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
-            case _ if SyncStatus == 'fs':
-                with Image.open("./images/SyncStatus/1.png") as _syncStatus:
-                    return _syncStatus.copy()
-            case _ if SyncStatus == 'fsp':
-                with Image.open("./images/SyncStatus/2.png") as _syncStatus:
-                    return _syncStatus.copy()
-            case _ if SyncStatus == 'fsd':
-                with Image.open("./images/SyncStatus/3.png") as _syncStatus:
-                    return _syncStatus.copy()
-            case _ if SyncStatus == 'fsdp':
-                with Image.open("./images/SyncStatus/4.png") as _syncStatus:
-                    return _syncStatus.copy()
-            case _ if SyncStatus == 'sync':
-                with Image.open("./images/SyncStatus/5.png") as _syncStatus:
-                    return _syncStatus.copy()
-
-    def TextDraw(self, Image, Text: str = "", Position: tuple = (0, 0)):
-        # 文本居中绘制
-
-        # 载入文字元素
-        Draw = ImageDraw.Draw(Image)
-        FontPath = "./font/FOT_NewRodin_Pro_EB.otf"
-        FontSize = 32
-        FontColor = (255, 255, 255)
-        Font = ImageFont.truetype(FontPath, FontSize)
-
-        # 获取文本的边界框
-        Bbox = Draw.textbbox((0, 0), Text, font=Font)
-        # 计算文本宽度和高度
-        TextWidth = Bbox[2] - Bbox[0]  # 右下角x - 左上角x
-        TextHeight = Bbox[3] - Bbox[1]  # 右下角y - 左上角y
-        # 计算文本左上角位置，使文本在中心点居中
-        TextPosition = (Position[0] - TextWidth // 2, Position[1] - TextHeight // 2)
-        # 绘制
-        Draw.text(TextPosition, Text, fill=FontColor, font=Font)
-        return Image
-
-    def count_dx_stars(self, record_detail: dict):
-        # 计算DX星数
-        with open(os.path.join(os.getcwd(), "music_datasets/all_music_infos.json"),
-                  'r', encoding='utf-8') as f:
-            music_info = json.load(f)
-        # 匹配乐曲id和难度id找到谱面notes数量
-        level_index = record_detail['level_index']
-        song_id = record_detail['song_id']
-        user_dx_score = record_detail['dxScore']
-        max_dx_score = -1
-        for music in music_info:
-            if music['id'] == str(song_id):
-                notes_list = music['charts'][level_index]['notes']
-                max_dx_score = sum(notes_list) * 3
-                break
-        dx_stars = 0
-        if max_dx_score == -1:
-            print(f"未找到乐曲{song_id}的难度{level_index}的max dx score信息。")
-            return dx_stars
-        match user_dx_score:
-            case _ if 0 <= user_dx_score < max_dx_score * 0.85:
-                dx_stars = 0
-            case _ if max_dx_score * 0.85 <= user_dx_score < max_dx_score * 0.9:
-                dx_stars = 1
-            case _ if max_dx_score * 0.9 <= user_dx_score < max_dx_score * 0.92:
-                dx_stars = 2
-            case _ if max_dx_score * 0.93 <= user_dx_score < max_dx_score * 0.95:
-                dx_stars = 3
-            case _ if max_dx_score * 0.95 <= user_dx_score < max_dx_score * 0.97:
-                dx_stars = 4
-            case _ if max_dx_score * 0.97 <= user_dx_score <= max_dx_score:
-                dx_stars = 5
-        return dx_stars
-
-    def GenerateOneAchievement(self, record_detail: dict):
-        """生成单个成绩记录。
-
-        Args:
-            record_detail (dict): 成绩记录详情，包含以下字段：
-                - title (str): 乐曲标题
-                - level (int): 等级整数
-                - ds (float): 定数
-                - level_index (int): 难度颜色
-                - song_id (str): 乐曲ID
-                - type (str): 谱面类型
-                - achievements (float): 达成率
-                - dxScore (int): DX分数
-                - fc (str): FC状态，可选值：空字符串、'fc'、'fcp'、'ap'、'app'
-                - sync (str): SYNC状态，可选值：空字符串、'fs'、'fsd'、'fsdp'
-                - ra (int): Rating分数
-
-        Returns:
-            Background (Image.Image): 处理后的成绩记录图片
-        """
-        try:
-            assert record_detail['level_index'] in range(0, 5)
-            image_asset_path = os.path.join(os.getcwd(),
-                                            f"images/AchievementBase/{record_detail['level_index']}.png")
-            dx_stars = self.count_dx_stars(record_detail)
-            with Image.open(image_asset_path) as Background:
-                Background = Background.convert("RGBA")
-
-                # 载入图片元素
-                TempImage = Image.new('RGBA', Background.size, (0, 0, 0, 0))
-                # 加载乐曲封面
-                JacketPosition = (44, 53)
-                Jacket = self.JacketLoader(record_detail["song_id"])
-                TempImage.paste(Jacket, JacketPosition, Jacket)
-
-                # 加载类型
-                TypePosition = (1200, 75)
-                _Type = self.TypeLoader(record_detail["type"])
-                TempImage.paste(_Type, TypePosition, _Type)
-
-                # 加载定数
-                DsPosition = (1405, -55)
-                Ds = self.DsLoader(record_detail["level_index"], record_detail["ds"])
-                Ds = Ds.resize((270, 180), Image.LANCZOS)
-                TempImage.paste(Ds, DsPosition, Ds)
-
-                # 加载成绩
-                AchievementPosition = (770, 245)
-                Achievement = self.AchievementLoader(record_detail["achievements"])
-                TempImage.paste(Achievement, AchievementPosition, Achievement)
-
-                # 加载星级
-                StarPosition = (820, 439)
-                Star = self.StarLoader(dx_stars)
-                Star = Star.resize((45, 45), Image.LANCZOS)
-                TempImage.paste(Star, StarPosition, Star)
-
-                # 加载Combo状态
-                ComboStatusPosition = (960, 425)
-                ComboStatus = self.ComboStatusLoader(record_detail["fc"])
-                ComboStatus = ComboStatus.resize((70, 70), Image.LANCZOS)
-                TempImage.paste(ComboStatus, ComboStatusPosition, ComboStatus)
-
-                # 加载Sync状态
-                SyncStatusPosition = (1040, 425)
-                SyncStatus = self.SyncStatusLoader(record_detail["fs"])
-                SyncStatus = SyncStatus.resize((70, 70), Image.LANCZOS)
-                TempImage.paste(SyncStatus, SyncStatusPosition, SyncStatus)
-
-                # 标题
-                TextCentralPosition = (1042, 159)
-                Title = record_detail['title']
-                TempImage = self.TextDraw(TempImage, Title, TextCentralPosition)
-
-                # Rating值
-                TextCentralPosition = (670, 458)
-                RatingText = str(record_detail['ra'])
-                TempImage = self.TextDraw(TempImage, RatingText, TextCentralPosition)
-
-                # DX星数
-                TextCentralPosition = (880, 458)
-                StarText = str(dx_stars)
-                TempImage = self.TextDraw(TempImage, StarText, TextCentralPosition)
-
-                # 游玩次数（暂无获取方式，b50data中若有手动填写即可显示）
-                if "playCount" in record_detail:
-                    PlayCount = record_detail["playCount"]
+            # 从本地数据库匹配曲目信息
+            song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
+            if song_info:
+                for diff in song_info.get("difficulties", []):
+                    if diff.get("difficulty") == processed_song["level_index"]:
+                        level_value = diff["level_value"]
+                        processed_song["level"] = float(level_value) if isinstance(level_value, int) else level_value
+                        break
                 else:
-                    PlayCount = 0
-                if PlayCount >= 1:
-                    with Image.open("./images/Playcount/PlayCountBase.png") as PlayCountBase:
-                        TempImage.paste(PlayCountBase, (1170, 420), PlayCountBase)
-                    TextCentralPosition = (1435, 458)
-                    PlayCountText = str(PlayCount)
-                    TempImage = self.TextDraw(TempImage, PlayCountText, TextCentralPosition)
+                    with print_lock:
+                        print(f"警告：曲目【{processed_song['song_name']}】未找到 {processed_song['level_index']} 难度")
+            else:
+                with print_lock:
+                    print(f"警告：未找到曲目【{processed_song['song_name']}】的信息")
 
-                Background = Image.alpha_composite(Background, TempImage)
+            # 备用方案
+            if "level" not in processed_song:
+                try:
+                    raw_level = str(song.get("level", "")).rstrip('+')
+                    processed_song["level"] = float(raw_level) if raw_level.replace('.', '').isdigit() else song.get("level", "N/A")
+                except (ValueError, AttributeError):
+                    processed_song["level"] = song.get("level", "N/A")
+                with print_lock:
+                    print(f"使用原始 level 值: {processed_song['level']} (曲目ID: {processed_song['id']})")
+            
+            return processed_song
+        except Exception as e:
+            with print_lock:
+                print(f"处理曲目 {i} 时出错: {str(e)}")
+            return None
 
-        except FileNotFoundError as e:
-            print(e)
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_song, song, i) for i, song in enumerate(b30_data)]
+        for future in futures:
+            if result := future.result():
+                processed_data.append(result)
 
-        return Background
+    # 6. 保存处理后的数据（主线程完成）
+    with open(b30_data_file, 'w', encoding='utf-8') as f:
+        json.dump(processed_data, f, ensure_ascii=False, indent=4)
+    return processed_data
+
+def add_layer(base_image, layer_image, position=(0, 0), opacity=1.0):
+    """将图层叠加到基础图像上，支持透明度控制。
+
+    Args:
+        base_image(Image): 基础图像（RGBA 模式）
+        layer_image(Image): 要叠加的图层（RGBA 模式）
+        position(tuple[int, int]): 叠加位置 (x, y)
+        opacity(float): 图层透明度（0.0 完全透明，1.0 完全不透明）
+
+    Returns:
+        canvas: 合并后的新图像
+    """
+    if layer_image.mode != 'RGBA':
+        layer_image = layer_image.convert('RGBA')
+    
+    # 调整图层透明度
+    if opacity < 1.0:
+        alpha = layer_image.split()[3]
+        alpha = alpha.point(lambda p: p * opacity)
+        layer_image.putalpha(alpha)
+    
+    # 创建临时画布，避免直接修改原图
+    canvas = Image.new('RGBA', base_image.size)
+    canvas.paste(base_image, (0, 0))  # 先放基础图像
+    
+    # 将图层粘贴到指定位置
+    canvas.paste(layer_image, position, mask=layer_image)
+    return canvas
+
+# def diff_bg_change(num):
+#     """ 根据谱面难度返回对应的背景图像编号 """
+#     if num == 2:
+#         return "EXPERT"
+#     elif num == 3:
+#         return "MASTER"
+#     elif num == 4:
+#         return "ULTIMA"
+#     else:
+#         return 2
+
+def diff_bg_change(num):
+    """根据谱面难度返回对应的背景图像编号"""
+    return {2: "EXPERT", 3: "MASTER", 4: "ULTIMA"}.get(num, 2)
 
 
-def get_b50_data_from_fish(username):
-    url = "https://www.diving-fish.com/api/maimaidxprober/query/player"
+def special_mark(mark):
+    """FC | AJ 判定"""
+    if mark == "fullcombo":
+        return "(FC)"
+    elif mark == "alljustice":
+        return "(AJ)"
+    else:
+        return ""
+
+# def get_keyword(downloader_type, title_name, level_index):
+#     match level_index:
+#         case 0:
+#             dif_name = "BASIC"
+#         case 1:
+#             dif_name = "ADVANCED"
+#         case 2:
+#             dif_name = "EXPERT"
+#         case 3:
+#             dif_name = "MASTER"
+#         case 4:
+#             dif_name = "ULTIMA"
+#         # case 5:
+#             # dif_name = "World's End" # 不包含在内
+#         case _:
+#             dif_name = ""
+#             print(f"Warning: 谱面{title_name}具有未指定的难度！")
+#     if downloader_type == "youtube":
+#         suffix = "(譜面確認) [CHUNITHM チュウニズム]"
+#         return f"{title_name} {dif_name} {suffix}"
+#     elif downloader_type == "bilibili":
+#         prefix = "【CHUNITHM/谱面预览】"
+#         return f"{prefix} {title_name} {dif_name}"
+
+def get_keyword(downloader_type, title_name, level_index):
+    dif_name = {0: "BASIC", 1: "ADVANCED", 2: "EXPERT", 3: "MASTER", 4: "ULTIMA"}.get(level_index, "")
+    if not dif_name:
+        print(f"Warning: 谱面{title_name}具有未指定的难度！")
+    return (
+        f"{title_name} {dif_name} (譜面確認) [CHUNITHM チュウニズム]"
+        if downloader_type == "youtube"
+        else f"【CHUNITHM/谱面预览】 {title_name} {dif_name}"
+    )
+
+
+def get_b30_data_from_fish(username):
+    url = "https://www.diving-fish.com/api/chunithmprober/query/player"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "Content-Type": "application/json"
     }
     payload = {
         "username": username,
-        "b50": "1"
     }
 
     response = requests.post(url, headers=headers, json=payload)
@@ -318,8 +244,34 @@ def get_b50_data_from_fish(username):
     if response.status_code == 200:
         return response.json()
     elif response.status_code == 400:
-        return {"error": "No such user"}
+        return {"error": "未搜索到此用户"}
     elif response.status_code == 403:
-        return {"error": "User has set privacy or not agreed to the user agreement"}
+        return {"error": "查询被拒绝，请检查您是否已关闭【允许其他人查询您的成绩】"}
     else:
-        return {"error": f"Failed to get data, status code: {response.status_code}"}
+        return {"error": f"获取数据失败：{response.status_code}"}
+
+def get_b30_data_from_lxns(token):
+    url = "https://maimai.lxns.net/api/v0/user/chunithm/player/scores"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "X-User-Token": token
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()  # 自动处理 4xx/5xx 错误
+        data = response.json()
+        
+        # 检查业务逻辑错误（如 success=false）
+        if not data.get("success", True):
+            raise Exception(f"落雪 API 返回错误: {data.get('message')}")
+        
+        return data
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            raise Exception("Token 无效或已过期，请检查您的 API 密钥") from e
+        else:
+            raise Exception(f"API 请求失败: {e.response.status_code}") from e
+    except Exception as e:
+        raise Exception(f"获取数据时发生意外错误: {str(e)}") from e

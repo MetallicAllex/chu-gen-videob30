@@ -1,11 +1,14 @@
 import os
+from queue import Queue
+import threading
+from typing import Any, Dict, List, Tuple
 import numpy as np
 import subprocess
 from PIL import Image, ImageFilter
-from moviepy import VideoFileClip, ImageClip, TextClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip, concatenate_videoclips
+from moviepy import VideoFileClip, ImageClip, TextClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
 from moviepy import vfx, afx
 
-def get_splited_text(text, text_max_bytes=60):
+def get_splited_text(text, text_max_bytes=70):
     """
     将说明文本按照最大字节数限制切割成多行
     
@@ -117,11 +120,11 @@ def normalize_audio_volume(clip, target_dbfs=-20):
         # 应用音量调整
         return clip.with_volume_scaled(gain)
     except Exception as e:
-        print(f"Warning: Audio normalization failed - {str(e)}")
+        print(f"警告: 音频均衡化失败 - {str(e)}")
         return clip
 
 
-def create_info_segment(clip_config, resolution, font_path, text_size=44, inline_max_len=52):
+def create_info_segment(clip_config, resolution, font_path, text_size=44, inline_max_len=40):
     print(f"正在合成视频片段: {clip_config['id']}")
     bg_image = ImageClip("./images/IntroBase.png").with_duration(clip_config['duration'])
     bg_image = bg_image.with_effects([vfx.Resize(width=resolution[0])])
@@ -142,10 +145,10 @@ def create_info_segment(clip_config, resolution, font_path, text_size=44, inline
                         color="white",
                         duration=clip_config['duration'])
     
-    addtional_text = "【本视频由mai-genVb50视频生成器生成】"
+    addtional_text = "【本视频由 mai-genVb50 修改的 chu-gen-Vb30 生成】"
     addtional_txt_clip = TextClip(font=font_path, text=addtional_text,
                         method = "label",
-                        font_size=18,
+                        font_size=20,
                         vertical_align="bottom",
                         color="white",
                         duration=clip_config['duration']
@@ -171,104 +174,93 @@ def create_info_segment(clip_config, resolution, font_path, text_size=44, inline
     return composite_clip.with_duration(clip_config['duration'])
 
 
-def create_video_segment(clip_config, resolution, font_path, text_size=28, inline_max_len=48):
+def create_video_segment(clip_config, resolution, font_path, text_size=None, inline_max_len=21):
+    """
+    创建自适应分辨率的视频片段
+    
+    Args:
+        clip_config: 片段配置字典
+        resolution: 目标分辨率 (width, height)
+        font_path: 字体文件路径
+        text_size: 文字大小(可选，默认根据分辨率计算)
+        inline_max_len: 每行最大字符数
+    """
     print(f"正在合成视频片段: {clip_config['id']}")
     
-    # 默认的底部背景
-    default_bg_path = "./images/VideoUnderBase.png"
-
-    bg_video = VideoFileClip("./images/BgClips/black_bg.mp4")
-    bg_video = bg_video.with_effects([vfx.Loop(duration=clip_config['duration']), 
-                                      vfx.Resize(width=resolution[0])])
+    # 计算相对于1080p的缩放比例
+    scale_factor = resolution[1] / 1080  # 基于高度缩放
     
-    # 检查背景图片是否存在
+    # 自动计算文字大小（如果未指定）
+    if text_size is None:
+        text_size = int(32 * scale_factor)  # 1080p下默认32px
+    
+    # 1. 背景层（纯黑）
+    bg_video = VideoFileClip("./images/BgClips/black_bg.mp4")
+    bg_video = bg_video.with_effects([
+        vfx.Loop(duration=clip_config['duration']), 
+        vfx.Resize(resolution)  # 完整适配目标分辨率
+    ])
+    
+    # 2. 主图片层
     if 'main_image' in clip_config and os.path.exists(clip_config['main_image']):
         main_image = ImageClip(clip_config['main_image']).with_duration(clip_config['duration'])
-        main_image = main_image.with_effects([vfx.Resize(width=resolution[0])])
+        main_image = main_image.with_effects([vfx.Resize(resolution)])  # 全屏覆盖
     else:
-        print(f"Video Generator Warning: {clip_config['id']} 没有对应的成绩图, 请检查成绩图资源是否已生成")
-        main_image = ImageClip(create_blank_image(resolution[0], resolution[1])).with_duration(clip_config['duration'])
-
-    # 读取song_id，并获取预览图jacket
-    __musicid = str(clip_config['song_id'])[-4:].zfill(4)
-    __jacket_path = f"./images/Jackets/UI_Jacket_00{__musicid}.png"
-    if os.path.exists(__jacket_path):
-        # 高斯模糊处理图片
-        jacket_array = blur_image(__jacket_path, blur_radius=5)
-        # 创建 ImageClip
-        jacket_image = ImageClip(jacket_array).with_duration(clip_config['duration'])
-        # 将jacket图片按视频分辨率宽度等比例缩放，以填充整个背景
-        jacket_image = jacket_image.with_effects([vfx.Resize(width=resolution[0])])
-    else:
-        print(f"Video Generator Warning: {clip_config['id']} 没有找到对应的封面图, 将使用默认背景")
-        jacket_image = ImageClip(default_bg_path).with_duration(clip_config['duration'])
-
-    jacket_image = jacket_image.with_effects([vfx.MultiplyColor(0.65)])
-
-    # 检查视频是否存在
+        print(f"警告: {clip_config['id']} 缺少主图片")
+        main_image = ImageClip(create_blank_image(*resolution)).with_duration(clip_config['duration'])
+    
+    # 3. 视频片段层
     if 'video' in clip_config and os.path.exists(clip_config['video']):
         video_clip = VideoFileClip(clip_config['video'])
         
-        # 添加调试信息
-        print(f"Start time: {clip_config['start']}, Clip duration: {video_clip.duration}, End time: {clip_config['end']}")
-        
-        # 检查 start_time 和 end_time 是否超出 clip 的持续时间
+        # 时间范围校验
         if clip_config['start'] < 0 or clip_config['start'] >= video_clip.duration:
-            raise ValueError(f"片段开始时间 {clip_config['start']} 超出视频{clip_config['video']}的长度. 请检查该片段的时间配置.")
-        
+            raise ValueError(f"开始时间 {clip_config['start']} 超出视频长度")
         if clip_config['end'] <= clip_config['start'] or clip_config['end'] > video_clip.duration:
-            raise ValueError(f"片段结束时间 {clip_config['end']} 超出视频{clip_config['video']}的长度. 请检查该片段的时间配置.")
+            raise ValueError(f"结束时间 {clip_config['end']} 无效")
         
-        video_clip = video_clip.subclipped(start_time=clip_config['start'],
-                                            end_time=clip_config['end'])
-        # 等比例缩放，在高为1080像素的情况下，谱面确认的高度应该是540像素，因此比例为0.5
-        video_clip = video_clip.with_effects([vfx.Resize(height=0.5 * resolution[1])])
+        video_clip = video_clip.subclipped(clip_config['start'], clip_config['end'])
         
-        # 裁剪成正方形
-        video_height = video_clip.h
-        video_width = video_clip.w
-        x_center = video_width / 2
-        crop_size = video_height
-        x1 = x_center - (crop_size / 2)
-        x2 = x_center + (crop_size / 2)
-        video_clip = video_clip.cropped(x1=x1, y1=0, x2=x2, y2=video_height)
+        # 动态计算视频显示区域 (保持16:9比例中的核心区域)
+        video_height = int(0.667 * resolution[1])  # 原1080p下716px的逻辑
+        video_clip = video_clip.with_effects([vfx.Resize(height=video_height)])
     else:
-        print(f"Video Generator Warning:{clip_config['id']} 没有对应的视频, 请检查本地资源")
-        # 创建一个透明的视频片段
-        blank_frame = create_blank_image(
-            int(540/1080 * resolution[1]),  # 使用相同的尺寸计算
-            int(540/1080 * resolution[1])   
-        )
-        video_clip = ImageClip(blank_frame).with_duration(clip_config['duration'])
-
-    # 计算位置
-    video_pos = (int(0.092 * resolution[0]), int(0.328 * resolution[1]))
-    text_pos = (int(0.54 * resolution[0]), int(0.54 * resolution[1]))
-
-    # 创建文字
+        print(f"警告: {clip_config['id']} 缺少视频文件")
+        blank_size = int(540 * scale_factor)  # 原1080p下540px的逻辑
+        video_clip = ImageClip(create_blank_image(blank_size, blank_size))
+        video_clip = video_clip.with_duration(clip_config['duration'])
+    
+    # 4. 文字层
     text_list = get_splited_text(clip_config['text'], text_max_bytes=inline_max_len)
-    txt_clip = TextClip(font=font_path, text="\n".join(text_list),
-                        method = "label",
-                        # size=(text_max_width, text_max_height), 
-                        font_size=text_size,
-                        margin=(20, 20),
-                        interline=6.5,
-                        vertical_align="top",
-                        color="white",
-                        duration=clip_config['duration'])
-
-    # 视频叠放顺序，从下往上：背景底图，谱面预览，图片（带有透明通道），文字
-    composite_clip = CompositeVideoClip([
-            bg_video.with_position((0, 0)),  # 使用一个pure black的视频作为背景（此背景用于避免透明素材的通道的bug问题）
-            jacket_image.with_position((0, -0.5), relative=True),
-            video_clip.with_position((video_pos[0], video_pos[1])),
-            main_image.with_position((0, 0)),
-            txt_clip.with_position((text_pos[0], text_pos[1]))
-        ],
-        size=resolution,
-        use_bgclip=True  # 必须设置为true，否则其上透明素材的通道会失效（疑似为moviepy2.0的bug）
+    txt_clip = TextClip(
+        font=font_path,
+        text="\n".join(text_list),
+        method="label",
+        font_size=text_size,
+        margin=(int(20 * scale_factor), int(20 * scale_factor)),  # 边距缩放
+        interline=6.5 * scale_factor,  # 行距缩放
+        color="white",
+        duration=clip_config['duration']
     )
-
+    
+    # 动态计算位置 (基于比例而非固定像素)
+    video_pos = (
+        int(0.039 * resolution[0]),  # 水平3.9%
+        int(0.069 * resolution[1])   # 垂直6.9%
+    )
+    text_pos = (
+        int(0.748 * resolution[0]),  # 水平74.8%
+        int(0.069 * resolution[1])   # 垂直6.9%
+    )
+    
+    # 合成所有图层
+    composite_clip = CompositeVideoClip([
+        bg_video.with_position((0, 0)),
+        video_clip.with_position(video_pos),
+        main_image.with_position((0, 0)),
+        txt_clip.with_position(text_pos)
+    ], size=resolution, use_bgclip=True)
+    
     return composite_clip.with_duration(clip_config['duration'])
 
 
@@ -314,9 +306,7 @@ def create_full_video(resources, resolution, font_path, auto_add_transition=True
         for clip_config in resources['intro']:
             clip = create_info_segment(clip_config, resolution, font_path)
             clip = normalize_audio_volume(clip)
-            add_clip_with_transition(clips, clip, 
-                                    set_start=True, 
-                                    trans_time=trans_time)
+            add_clip_with_transition(clips, clip, set_start=True, trans_time=trans_time)
 
     combined_start_time = 0
     if not 'main' in resources:
@@ -343,9 +333,7 @@ def create_full_video(resources, resolution, font_path, auto_add_transition=True
             clip = create_video_segment(clip_config, resolution, font_path)  
             clip = normalize_audio_volume(clip)
 
-            add_clip_with_transition(clips, clip, 
-                                    set_start=True, 
-                                    trans_time=trans_time)
+            add_clip_with_transition(clips, clip, set_start=True, trans_time=trans_time)
 
     # 处理结尾片段
     if 'ending' in resources:
@@ -368,22 +356,41 @@ def create_full_video(resources, resolution, font_path, auto_add_transition=True
         return concatenate_videoclips(clips)  # 该方法不会添加转场效果，即使设置了trans_time
 
 
+# def sort_video_files(files):
+#     """
+#     对视频文件按照文件名开头的数字索引进行排序
+#     例如: "0_xxx.mp4", "1_xxx.mp4", "2_xxx.mp4" 等
+#     """
+#     def get_sort_key(filename):
+#         try:
+#             # 获取文件名（不含扩展名）中第一个下划线前的数字
+#             number = int(os.path.splitext(filename)[0].split('_')[0])
+#             return number
+#         except (ValueError, IndexError):
+#             print(f"Error: 无法从文件名解析索引: {filename}")
+#             return float('inf')  # 将无效文件排到最后
+    
+#     # 直接按照数字索引排序
+#     return sorted(files, key=get_sort_key)
+
 def sort_video_files(files):
     """
-    对视频文件按照文件名开头的数字索引进行排序
-    例如: "0_xxx.mp4", "1_xxx.mp4", "2_xxx.mp4" 等
+    对视频文件按照文件名开头的数字索引进行排序，
+    遇到第一个非数字开头的文件时停止（如 final_output.mp4）
     """
-    def get_sort_key(filename):
-        try:
-            # 获取文件名（不含扩展名）中第一个下划线前的数字
-            number = int(os.path.splitext(filename)[0].split('_')[0])
-            return number
-        except (ValueError, IndexError):
-            print(f"Error: 无法从文件名解析索引: {filename}")
-            return float('inf')  # 将无效文件排到最后
+    sorted_files = []
     
-    # 直接按照数字索引排序
-    return sorted(files, key=get_sort_key)
+    for filename in files:
+        try:
+            # 获取文件名中第一个下划线前的数字
+            number = int(os.path.splitext(filename)[0].split('_')[0])
+            sorted_files.append((number, filename))
+        except (ValueError, IndexError):
+            # 遇到非数字开头的文件（如 final_output.mp4），直接停止收集
+            break
+    
+    # 按数字排序后返回文件名（不带数字）
+    return [filename for _, filename in sorted(sorted_files, key=lambda x: x[0])]
 
 
 def combine_full_video_from_existing_clips(video_clip_path, resolution, trans_time=1):
@@ -395,7 +402,7 @@ def combine_full_video_from_existing_clips(video_clip_path, resolution, trans_ti
     print(f"Sorted files: {sorted_files}")
 
     if not sorted_files:
-        raise ValueError("Error: 没有有效的视频片段文件！(NewBest_1-15 or PastBest_1-35)")
+        raise ValueError("Error: 没有有效的视频片段文件！(Best_1-30)")
 
     for file in sorted_files:
         clip = VideoFileClip(os.path.join(video_clip_path, file))
@@ -421,14 +428,14 @@ def gene_pure_black_video(duration, resolution):
     """
     black_frame = create_blank_image(resolution[0], resolution[1], color=(0, 0, 0, 1))
     clip = ImageClip(black_frame).with_duration(duration)
-    clip.write_videofile("./videos/black_bg.mp4", fps=30)
+    clip.write_videofile("./videos/black_bg.mp4", fps=60)
 
 
 def get_combined_ending_clip(ending_clips, combined_start_time, trans_time):
-    """合并B1片段与结尾，使用统一音频"""
+    """合并 Best1 片段与结尾，使用统一音频"""
 
     if len(ending_clips) < 2:
-        print("Warning: 没有足够的结尾片段，将只保留B1片段")
+        print("Warning: 没有足够的结尾片段，将只保留 Best#1")
         return ending_clips[0].with_start(combined_start_time).with_effects([
             vfx.CrossFadeIn(duration=trans_time),
             afx.AudioFadeIn(duration=trans_time),
@@ -449,7 +456,7 @@ def get_combined_ending_clip(ending_clips, combined_start_time, trans_time):
     ending_full_duration = sum([clip.duration for clip in ending_comment_clips])
 
     if ending_full_duration > b1_clip.duration:
-        print(f"Warning: B1片段的长度不足，FULL_LAST_CLIP选项将无效化！")
+        print(f"警告: Best#1 长度不足，FULL_LAST_CLIP 将被忽略。")
         return CompositeVideoClip(ending_clips).with_start(combined_start_time).with_effects([
             vfx.CrossFadeIn(duration=trans_time),
             afx.AudioFadeIn(duration=trans_time),
@@ -472,7 +479,7 @@ def get_combined_ending_clip(ending_clips, combined_start_time, trans_time):
 
     # 将b1片段与ending_clip合并
     combined_clip = CompositeVideoClip(full_list)
-    print(f"Video Generator: b1_clip_audio_len: {combined_clip_audio.duration}, combined_clip_len: {combined_clip.duration}")
+    print(f"[信息]视频生成器: Best#1 音频长度: {combined_clip_audio.duration}, 拼接长度: {combined_clip.duration}")
     # 设置combined_clip的音频为原b1片段的音频（二者长度应该相同）
     combined_clip = combined_clip.with_audio(combined_clip_audio)
     # 设置combined_clip的开始时间
@@ -488,60 +495,205 @@ def get_combined_ending_clip(ending_clips, combined_start_time, trans_time):
     return combined_clip
 
 
-def render_all_video_clips(resources, video_output_path, resolution, v_bitrate_kbps, font_path,
-                           auto_add_transition=True, trans_time=1, force_render=False):
+# def render_all_video_clips(resources, video_output_path, resolution, v_bitrate_kbps, font_path,
+#                            auto_add_transition=True, trans_time=1, force_render=False):
+#     vfile_prefix = 0
+
+#     def modify_and_rend_clip(clip, config, prefix, auto_add_transition, trans_time):
+#         output_file = os.path.join(video_output_path, f"{prefix}_{config['id']}.mp4")
+        
+#         # 检查文件是否已经存在
+#         if os.path.exists(output_file) and not force_render:
+#             print(f"文件 {output_file} 跳过渲染。勾选 “强制覆盖” 以强制渲染")
+#             clip.close()
+#             del clip
+#             return
+        
+#         clip = normalize_audio_volume(clip)
+#         # 如果启用了自动添加转场效果，则在头尾加入淡入淡出
+#         if auto_add_transition:
+#             clip = clip.with_effects([
+#                 vfx.FadeIn(duration=trans_time),
+#                 vfx.FadeOut(duration=trans_time),
+#                 afx.AudioFadeIn(duration=trans_time),
+#                 afx.AudioFadeOut(duration=trans_time)
+#             ])
+#         # 直接渲染clip为视频文件
+#         print(f"正在合成视频片段: {prefix}_{config['id']}.mp4")
+#         clip.write_videofile(output_file, fps=60, threads=8, preset='fast', bitrate=v_bitrate_kbps)
+#         clip.close()
+#         # 强制垃圾回收
+#         del clip
+
+#     if not 'main' in resources:
+#         print("Error: 没有找到主视频片段的配置！请检查配置文件！")
+#         return
+
+#     if 'intro' in resources:
+#         for clip_config in resources['intro']:
+#             clip = create_info_segment(clip_config, resolution, font_path)
+#             clip = modify_and_rend_clip(clip, clip_config, vfile_prefix, auto_add_transition, trans_time)
+#             vfile_prefix += 1
+
+#     for clip_config in resources['main']:
+#         clip = create_video_segment(clip_config, resolution, font_path)
+#         clip = modify_and_rend_clip(clip, clip_config, vfile_prefix, auto_add_transition, trans_time)
+
+#         vfile_prefix += 1
+
+#     if 'ending' in resources:
+#         for clip_config in resources['ending']:
+#             clip = create_info_segment(clip_config, resolution, font_path)
+#             clip = modify_and_rend_clip(clip, clip_config, vfile_prefix, auto_add_transition, trans_time)
+#             vfile_prefix += 1
+
+def check_rendered_clips_multithreaded(
+    video_configs: Dict[str, List[Dict[str, Any]]],
+    output_dir: str,
+    force_render: bool = False,
+    max_workers: int = 4
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    多线程检测已渲染的视频片段
+    
+    Args:
+        video_configs(dict): 视频配置字典(包含intro/main/ending)
+        output_dir(path): 输出目录
+        force_render(bool): 是否强制重新渲染
+        max_workers(int): 最大工作线程数
+        
+    Returns:
+        tuple([List[Dict[str, Any]], List[Dict[str, Any]]]): 需要渲染的配置列表, 已存在的配置列表
+    """
+    # 准备所有需要检查的文件任务
+    task_queue = Queue()
+    result_queue = Queue()
+    
+    # 准备所有待检查的配置
     vfile_prefix = 0
+    all_configs = []
+    
+    if 'intro' in video_configs:
+        for config in video_configs['intro']:
+            task_queue.put((vfile_prefix, config))
+            all_configs.append((vfile_prefix, config))
+            vfile_prefix += 1
 
-    def modify_and_rend_clip(clip, config, prefix, auto_add_transition, trans_time):
-        output_file = os.path.join(video_output_path, f"{prefix}_{config['id']}.mp4")
-        
-        # 检查文件是否已经存在
-        if os.path.exists(output_file) and not force_render:
-            print(f"视频文件{output_file}已存在，跳过渲染。如果需要强制覆盖已存在的文件，请设置勾选force_render")
-            clip.close()
-            del clip
-            return
-        
-        clip = normalize_audio_volume(clip)
-        # 如果启用了自动添加转场效果，则在头尾加入淡入淡出
-        if auto_add_transition:
-            clip = clip.with_effects([
-                vfx.FadeIn(duration=trans_time),
-                vfx.FadeOut(duration=trans_time),
-                afx.AudioFadeIn(duration=trans_time),
-                afx.AudioFadeOut(duration=trans_time)
-            ])
-        # 直接渲染clip为视频文件
-        print(f"正在合成视频片段: {prefix}_{config['id']}.mp4")
-        clip.write_videofile(output_file, fps=30, threads=4, preset='ultrafast', bitrate=v_bitrate_kbps)
-        clip.close()
-        # 强制垃圾回收
-        del clip
+    if 'main' in video_configs:
+        for config in video_configs['main']:
+            task_queue.put((vfile_prefix, config))
+            all_configs.append((vfile_prefix, config))
+            vfile_prefix += 1
 
+    if 'ending' in video_configs:
+        for config in video_configs['ending']:
+            task_queue.put((vfile_prefix, config))
+            all_configs.append((vfile_prefix, config))
+            vfile_prefix += 1
+
+    # 工作线程函数
+    def check_worker():
+        while True:
+            try:
+                prefix, config = task_queue.get_nowait()
+            except:
+                break
+                
+            output_file = os.path.join(output_dir, f"{prefix}_{config['id']}.mp4")
+            exists = os.path.exists(output_file) and not force_render
+            result_queue.put((prefix, config, exists))
+            task_queue.task_done()
+
+    # 创建并启动工作线程
+    threads = []
+    for _ in range(min(max_workers, task_queue.qsize())):
+        t = threading.Thread(target=check_worker)
+        t.start()
+        threads.append(t)
+    
+    # 等待所有检查完成
+    for t in threads:
+        t.join()
+    
+    # 处理结果
+    to_render = []
+    existing = []
+    
+    while not result_queue.empty():
+        prefix, config, exists = result_queue.get()
+        if exists:
+            existing.append(config)
+            print(f"检测到已存在片段: {prefix}_{config['id']}.mp4")
+        else:
+            to_render.append(config)
+    
+    return to_render, existing
+
+def render_all_video_clips(
+    resources, 
+    video_output_path, 
+    resolution: tuple, 
+    v_bitrate_kbps, 
+    font_path,
+    auto_add_transition=True, 
+    trans_time=1, 
+    force_render=False
+):
+    # 第一步: 多线程检测已渲染片段
+    to_render, existing = check_rendered_clips_multithreaded(
+        resources,
+        video_output_path,
+        force_render,
+        max_workers=4
+    )
+    
+    print(f"需要渲染 {len(to_render)} 个新片段，跳过 {len(existing)} 个已存在片段")
+    
+    # 第二步: 只渲染需要的新片段(单线程)
+    vfile_prefix = 0
     if not 'main' in resources:
         print("Error: 没有找到主视频片段的配置！请检查配置文件！")
         return
 
+    # 重构渲染逻辑，只处理to_render中的配置
+    def render_selected_clips(clip_configs, segment_type):
+        nonlocal vfile_prefix
+        for config in clip_configs:
+            if config in to_render:  # 只渲染需要的新片段
+                if segment_type == 'info':
+                    clip = create_info_segment(config, resolution, font_path)
+                else:
+                    clip = create_video_segment(config, resolution, font_path)
+                
+                output_file = os.path.join(video_output_path, f"{vfile_prefix}_{config['id']}.mp4")
+                print(f"正在合成视频片段: {vfile_prefix}_{config['id']}.mp4")
+                
+                clip = normalize_audio_volume(clip)
+                if auto_add_transition:
+                    clip = clip.with_effects([
+                        vfx.FadeIn(duration=trans_time),
+                        vfx.FadeOut(duration=trans_time),
+                        afx.AudioFadeIn(duration=trans_time),
+                        afx.AudioFadeOut(duration=trans_time)
+                    ])
+                
+                clip.write_videofile(output_file, fps=60, threads=2, preset='fast', bitrate=v_bitrate_kbps)
+                clip.close()
+                del clip
+            
+            vfile_prefix += 1  # 无论是否渲染，索引都要增加
+
+    # 渲染各个部分
     if 'intro' in resources:
-        for clip_config in resources['intro']:
-            clip = create_info_segment(clip_config, resolution, font_path)
-            clip = modify_and_rend_clip(clip, clip_config, vfile_prefix, auto_add_transition, trans_time)
-            vfile_prefix += 1
+        render_selected_clips(resources['intro'], 'info')
 
-    for clip_config in resources['main']:
-        clip = create_video_segment(clip_config, resolution, font_path)
-        clip = modify_and_rend_clip(clip, clip_config, vfile_prefix, auto_add_transition, trans_time)
-
-        vfile_prefix += 1
+    render_selected_clips(resources['main'], 'video')
 
     if 'ending' in resources:
-        for clip_config in resources['ending']:
-            clip = create_info_segment(clip_config, resolution, font_path)
-            clip = modify_and_rend_clip(clip, clip_config, vfile_prefix, auto_add_transition, trans_time)
-            vfile_prefix += 1
+        render_selected_clips(resources['ending'], 'info')
 
 
-def combine_full_video_direct(video_clip_path):
+def combine_full_video_direct(video_clip_path, username):
     print("[Info] --------------------开始拼接视频-------------------")
     video_files = [f for f in os.listdir(video_clip_path) if f.endswith(".mp4")]
     sorted_files = sort_video_files(video_files)
@@ -571,38 +723,44 @@ def combine_full_video_direct(video_clip_path):
                 
                 # 转换MP4为TS
                 cmd = [
-                    'ffmpeg', '-y',
+                    'ffmpeg', '-y', '-loglevel', 'warning',
                     '-i', os.path.join(video_clip_path, file),
                     '-c', 'copy',
                     '-bsf:v', 'h264_mp4toannexb',
                     '-f', 'mpegts',
+                    '-threads', '0',
                     ts_path
                 ]
                 subprocess.run(cmd, check=True)
                 
                 # 写入TS文件相对路径，使用正斜杠
-                relative_ts_path = os.path.join('temp_ts', ts_name).replace('\\', '/')
-                f.write(f"file '{relative_ts_path}'\n")
+                # relative_ts_path = os.path.join('temp_ts', ts_name).replace('\\', '/')
+                # f.write(f"file '{relative_ts_path}'\n")
+
+                # 写入TS文件绝对路径，使用正斜杠
+                absolute_ts_path = os.path.abspath(os.path.join(video_clip_path, 'temp_ts', ts_name)) 
+                f.write(f"file '{absolute_ts_path}'\n")
 
         # 3. 拼接TS文件并输出为MP4
         output_path = os.path.join(video_clip_path, "final_output.mp4")
         
-        # 切换到视频目录执行拼接命令
-        current_dir = os.getcwd()
-        os.chdir(video_clip_path)
+        # 执行拼接命令
+        real_path = os.path.abspath(video_clip_path)
+        # current_dir = os.getcwd()
+        # os.chdir(video_clip_path)
         
         cmd = [
-            'ffmpeg', '-y',
+            'ffmpeg', '-y', '-loglevel', 'warning',
             '-f', 'concat',
             '-safe', '0',
-            '-i', 'ts_files.txt',  # 使用相对路径
+            '-i', f'{real_path}\\ts_files.txt',  # 使用绝对路径
             '-c', 'copy',
-            'final_output.mp4'  # 使用相对路径
+            f'{real_path}\\{username}_Best30_fast.mp4',  # 使用绝对路径
+            '-threads', '0',
         ]
         
         subprocess.run(cmd, check=True)
-        os.chdir(current_dir)  # 恢复原始工作目录
-        print("视频拼接完成")
+        print("视频拼接完成，已清理临时转换的 ts 片段文件")
         
     finally:
         # 清理临时文件
@@ -612,7 +770,6 @@ def combine_full_video_direct(video_clip_path):
             os.rmdir(temp_dir)
 
     return output_path
-
 
 def combine_full_video_ffmpeg_concat_gl(video_clip_path, resolution, trans_name="fade", trans_time=1):
     video_files = [f for f in os.listdir(video_clip_path) if f.endswith(".mp4")]

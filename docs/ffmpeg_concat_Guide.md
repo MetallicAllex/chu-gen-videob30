@@ -14,7 +14,7 @@
 
 ## 安装 ffmpeg-concat
 
-首先，确保你已经安装了上述 Node.js 和 npm。然后，你可以通过以下命令安装 `ffmpeg-concat`：
+首先，确保你已经安装了 Node.js 和 npm。然后，你可以通过以下命令安装 `ffmpeg-concat`：
 
 ```sh
 npm install --save ffmpeg-concat

@@ -7,9 +7,9 @@ package.json
 /*.mp3
 cred_datas/
 
-# B50 cache directories
-b50_datas/
-b50_images/
+# B30 cache directories
+b30_datas/
+b30_images/
 videos/  
 
 # Byte-compiled / optimized / DLL files
@@ -64,6 +64,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+runtime/
 
 # Translations
 *.mo
@@ -186,3 +187,10 @@ cython_debug/
 # debug and test resources
 test_html.txt
 test_dxrating.txt
+ffmpeg.exe
+start.bat
+images/LevelBg/屏幕截图 2025-03-25 002315.png
+images/LevelBg/test.py
+images/LevelBg/output_with_background.png
+images/LevelBg/layered_output.png
+utils/bilibili_downloader_partVideo.py

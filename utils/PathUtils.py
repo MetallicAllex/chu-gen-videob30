@@ -3,7 +3,7 @@ from datetime import datetime
 
 def get_user_base_dir(username):
     """Get base directory for user data"""
-    return os.path.join("b50_datas", username)
+    return os.path.join("b30_datas", username)
 
 def get_user_version_dir(username, timestamp=None):
     """Get versioned directory for user data"""
@@ -16,10 +16,10 @@ def get_data_paths(username, timestamp=None):
     """Get all data file paths for a specific version"""
     version_dir = get_user_version_dir(username, timestamp)
     return {
-        'raw_file': os.path.join(version_dir, "b50_raw.json"),
-        'data_file': os.path.join(version_dir, "b50_config.json"),
-        'config_yt': os.path.join(version_dir, "b50_config_youtube.json"),
-        'config_bi': os.path.join(version_dir, "b50_config_bilibili.json"),
+        'raw_file': os.path.join(version_dir, "b30_raw.json"),
+        'data_file': os.path.join(version_dir, "b30_config.json"),
+        'config_yt': os.path.join(version_dir, "b30_config_youtube.json"),
+        'config_bi': os.path.join(version_dir, "b30_config_bilibili.json"),
         'video_config': os.path.join(version_dir, "video_configs.json"),
         'image_dir': os.path.join(version_dir, "images"),
         'output_video_dir': os.path.join(version_dir, "videos"),

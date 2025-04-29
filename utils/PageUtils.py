@@ -11,7 +11,7 @@ LEVEL_LABELS = {
     1: "ADVANCED",
     2: "EXPERT",
     3: "MASTER",
-    4: "RE:MASTER",
+    4: "ULTIMA",
 }
 
 def remove_invalid_chars(text: str) -> str:
@@ -49,7 +49,7 @@ def get_video_duration(video_path):
             return clip.duration
     except Exception as e:
         print(f"Error getting video duration: {e}")
-        return -1
+        return 0
 
 def open_file_explorer(path):
     try:
@@ -66,17 +66,15 @@ def open_file_explorer(path):
     except Exception as e:
         return False
     
-def change_theme(theme_dict):
-    st_config_path = os.path.join(os.getcwd(), ".streamlit", "config.toml")
-    if not os.path.exists(st_config_path):
-        os.makedirs(os.path.dirname(st_config_path), exist_ok=True)
+# def change_theme(theme_dict):
+#     st_config_path = os.path.join(os.getcwd(), ".streamlit", "config.toml")
+#     if not os.path.exists(st_config_path):
+#         os.makedirs(os.path.dirname(st_config_path), exist_ok=True)
     
-    with open(st_config_path, "w", encoding="utf-8") as f:
-        if theme_dict:
-            f.write("[theme]\n")
-            for key, value in theme_dict.items():
-                f.write(f'{key}="{value}"\n')
-        else:
-            f.write("")  # 清空文件以使用默认主题
-
-
+#     with open(st_config_path, "w", encoding="utf-8") as f:
+#         if theme_dict:
+#             f.write("[theme]\n")
+#             for key, value in theme_dict.items():
+#                 f.write(f'{key}="{value}"\n')
+#         else:
+#             f.write("")  # 清空文件以使用默认主题

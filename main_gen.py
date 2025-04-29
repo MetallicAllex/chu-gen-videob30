@@ -11,12 +11,12 @@ def generate_one_video_clip(config, video_output_path, video_res, video_bitrate,
     try:
         clip = create_video_segment(config, resolution=video_res, font_path=font_path)
         clip.write_videofile(os.path.join(video_output_path, f"{config['id']}.mp4"), 
-                             fps=30, threads=4, preset='ultrafast', bitrate=video_bitrate)
+                             fps=60, codec='h264_nvenc', threads=8, preset='fast', bitrate=video_bitrate)
         clip.close()
-        return {"status": "success", "info": f"合成视频片段{config['id']}成功"}
+        return {"status": "success", "info": f"合成 {config['id']} 成功"}
     except Exception as e:
-        print(f"Error: 合成视频片段{config['id']}时发生异常: {traceback.print_exc()}")
-        return {"status": "error", "info": f"合成视频片段{config['id']}时发生异常: {traceback.print_exc()}"}
+        print(f"Error: 合成 {config['id']} 时发生异常: {traceback.print_exc()}")
+        return {"status": "error", "info": f"合成 {config['id']} 时发生异常: {traceback.print_exc()}"}
     
 def generate_complete_video(configs, username,
                             video_output_path, video_res, video_bitrate,
@@ -28,8 +28,8 @@ def generate_complete_video(configs, username,
                                         auto_add_transition=video_trans_enable, 
                                         trans_time=video_trans_time, 
                                         full_last_clip=full_last_clip)
-        final_video.write_videofile(os.path.join(video_output_path, f"{username}_B50.mp4"), 
-                                    fps=30, threads=4, preset='ultrafast', bitrate=video_bitrate)
+        final_video.write_videofile(os.path.join(video_output_path, f"{username}_Best30.mp4"), 
+                                    fps=60, codec='h264_nvenc', threads=8, preset='fast', bitrate=video_bitrate)
         final_video.close()
         return {"status": "success", "info": f"合成完整视频成功"}
     except Exception as e:
@@ -43,7 +43,7 @@ def video_generation_test():
     if not os.path.exists(video_output_path):
         os.makedirs(video_output_path)
 
-    config_output_file = f"./b50_datas/video_configs_{username}.json"
+    config_output_file = f"./b30_datas/video_configs_{username}.json"
     if not os.path.exists(config_output_file) or not config_output_file:
         print(f"Error: 没有找到配置文件{config_output_file}，请检查预处理步骤是否完成")
 
@@ -84,9 +84,9 @@ def video_generation_test():
     # full_video.show()
 
 def combine_video_test(username):
-    print(f"Start: 正在合并{username}的B50视频")
+    print(f"Start: 正在合并 {username} 的 Best30 视频")
     video_clip_path = f"./videos/{username}"
     video_output_path = f"./videos"
     full_video = combine_full_video_from_existing_clips(video_clip_path, resolution=(1920, 1080), trans_time=1.5)
-    full_video.write_videofile(os.path.join(video_output_path, f"{username}_B50.mp4"), fps=30, codec='h264_nvenc', threads=4, preset='fast', bitrate='5000k')
+    full_video.write_videofile(os.path.join(video_output_path, f"{username}_Best30.mp4"), fps=60, codec='h264_nvenc', threads=8, preset='fast', bitrate='5000k')
 
