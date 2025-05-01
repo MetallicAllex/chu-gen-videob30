@@ -4,8 +4,12 @@
 
 Auto search and generate your best 30 videoes of CHUNITHM
 
+此项目是基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 的修改分支
+
 ## 快速开始
+
 <!-- 
+
 - 如果你具有基本的计算机和python知识，可以独立（或者GPT辅助）完成环境配置和脚本操作，请直接clone仓库代码，参考[使用说明](#使用说明（从源代码启动）)部分开始使用! -->
 
 <!-- - 如果你没有上述经验，请**从右侧Release页面下载最新的**打包版本，参考[【教程视频】](https://www.bilibili.com/video/BV1G2kBY5Edq)开始使用。 -->
@@ -94,7 +98,6 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
     - Linux：`sudo apt-get install ffmpeg`
 
-    
 1. 使用下面的命令启动 streamlit 网页应用
 
     ```
@@ -127,7 +130,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
     ```
     OSError: [WinError 2] The system cannot find the file specified
-
+    
     MoviePy error: the file 'ffmpeg.exe' was not found! Please install ffmpeg on your system, and make sure to set the path to the binary in the PATH environment variable
     ```
 
@@ -319,7 +322,6 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
         - `videos`文件夹，存储输出的视频
     
-
 - `./videos/downloads` 可以找到所有已下载的谱面确认视频，命名格式为`{song_id}-{level_index}.mp4`。其中 `song_id` 为曲目ID，`level_index` 为难度，例如 `834-3.mp4`。
 
 `video_config.json` 的详细格式：

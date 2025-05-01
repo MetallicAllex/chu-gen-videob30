@@ -2,7 +2,7 @@ import streamlit as st
 from update_music_data import fetch_music_data
 # from utils.PageUtils import change_theme
 # from utils.themes import THEME_COLORS
-fetch_music_data()
+
 
 
 st.title("Chu-gen Best30视频生成器")
@@ -17,8 +17,15 @@ st.success("使用过程中遇到任何问题，前往 [GitHub 发起 issue](htt
 
 st.write("单击下面的按钮开始")
 
-if st.button("开始使用"):
-    st.switch_page("st_pages/1_Setup_Achivments.py")
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("开始使用"):
+        st.switch_page("st_pages/1_Setup_Achivments.py")
+
+with col2:
+    if st.button("更新乐曲数据"):
+        fetch_music_data()
 
 # st.write("外观选项")
 # with st.container(border=True):
