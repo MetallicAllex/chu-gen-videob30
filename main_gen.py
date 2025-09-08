@@ -15,26 +15,25 @@ def generate_one_video_clip(config, video_output_path, video_res, video_bitrate,
         clip.close()
         return {"status": "success", "info": f"合成 {config['id']} 成功"}
     except Exception as e:
-        print(f"Error: 合成 {config['id']} 时发生异常: {traceback.print_exc()}")
-        return {"status": "error", "info": f"合成 {config['id']} 时发生异常: {traceback.print_exc()}"}
+        print(f"Error: 合成 {config['id']} 时发生错误：{traceback.print_exc()}")
+        return {"status": "error", "info": f"合成 {config['id']} 时发生错误：{traceback.print_exc()}"}
     
-def generate_complete_video(configs, username,
-                            video_output_path, video_res, video_bitrate,
-                            video_trans_enable, video_trans_time, full_last_clip,
-                            font_path=FONT_PATH):
+def generate_complete_video(configs, username, video_output_path, video_res, video_bitrate,
+                            video_trans_enable, video_trans_time, full_last_clip, font_path=FONT_PATH):
     print(f"正在合成完整视频")
     try:
         final_video = create_full_video(configs, resolution=video_res, font_path=font_path, 
                                         auto_add_transition=video_trans_enable, 
                                         trans_time=video_trans_time, 
-                                        full_last_clip=full_last_clip)
+                                        full_last_clip=full_last_clip,
+                                        bitrate=video_bitrate)
         final_video.write_videofile(os.path.join(video_output_path, f"{username}_Best30.mp4"), 
                                     fps=60, codec='h264_nvenc', threads=8, preset='fast', bitrate=video_bitrate)
         final_video.close()
         return {"status": "success", "info": f"合成完整视频成功"}
     except Exception as e:
         print(f"Error: 合成完整视频时发生异常: {traceback.print_exc()}")
-        return {"status": "error", "info": f"合成完整视频时发生异常: {traceback.print_exc()}"}
+        return {"status": "error", "info": f"合成完整视频时发生错误：{traceback.print_exc()}"}
 
 def video_generation_test():
     username = "c1ty"

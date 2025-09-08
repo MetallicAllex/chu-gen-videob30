@@ -34,31 +34,32 @@ def edit_context_widget(name, config, config_file_path):
     items = st.session_state[f"{name}_items"]
     
     with container:
-        # 添加新元素的按钮
-        if st.button(f"添加一页", key=f"add_{name}"):
-            new_item = {
-                "id": f"{name}_{len(items) + 1}",
-                "duration": 10,
-                "text": "【请填写内容】"
-            }
-            items.append(new_item)
-            st.session_state[f"{name}_items"] = items
-            st.rerun(scope="fragment")
         
         # 为每个元素创建编辑组件
         for idx, item in enumerate(items):
             with st.expander(f"{name} 展示：第 {idx + 1} 页", expanded=True):
+                # 添加版本选择器
+                list_versions = G_config.get("AVAILABLE_VERSION", [])
+                sel_version = st.radio(
+                    "选择背景播放的游戏版本",
+                    options=list_versions,
+                    index=list_versions.index(item["version"]) if item["version"] in list_versions else 0,
+                    key=f"{item['id']}_version",
+                    horizontal=True
+                )
                 # 文本编辑框
                 new_text = st.text_area(
                     "文本内容",
                     value=item["text"],
-                    key=f"{item['id']}_text"
+                    key=f"{item['id']}_text",
+                    placeholder="请输入要展示的文本（每页最多 250 字）"
                 )
                 items[idx]["text"] = new_text
-                
+                items[idx]['version'] = sel_version
+
                 scol1, scol2 = st.columns(2, vertical_alignment="bottom")
                 with scol1:
-                    st.subheader("持续(s)")
+                    st.subheader("时长(s)")
                 with scol2:
                     new_duration = st.number_input("秒", min_value=0, max_value=30, value=item["duration"], step=1, key=f"{item['id']}_duration", label_visibility="collapsed")
 
@@ -74,23 +75,39 @@ def edit_context_widget(name, config, config_file_path):
                 
         # 删除按钮（只有当列表长度大于1时才显示）
         if len(items) > 1:
-            if st.button("删除此页", key=f"delete_{name}", icon="🗑️"):
+            if st.button(f"删除第 {idx + 1} 页", key=f"delete_{name}", icon="🗑️", use_container_width=True):
                 items.pop()
                 st.session_state[f"{name}_items"] = items
                 st.rerun(scope="fragment")
 
-        
-        # 保存按钮
-        if st.button("保存", key=f"save_{name}"):
-            try:
-                # 更新配置
-                config[name] = items
-                ## 保存当前配置
-                save_config(config_file_path, config)
-                st.success("配置已保存！", icon="✅")
-            except Exception as e:
-                st.error(f"保存失败：{str(e)}", icon="❌")
-                st.error(traceback.format_exc())
+        st.divider()
+
+        col1, col2 = st.columns(2, vertical_alignment="bottom")
+        with col1:
+            # 添加新元素的按钮
+            if st.button(f"添加一页", key=f"add_{name}", icon="➕", use_container_width=True):
+                new_item = {
+                    "id": f"{name}_{len(items) + 1}",
+                    "duration": 10,
+                    "text": "",
+                    "version": "LUMINOUS"
+                }
+                items.append(new_item)
+                st.session_state[f"{name}_items"] = items
+                st.rerun(scope="fragment")
+
+        with col2:
+            # 保存按钮
+            if st.button("保存", key=f"save_{name}", icon="💾", use_container_width=True):
+                try:
+                    # 更新配置
+                    config[name] = items
+                    ## 保存当前配置
+                    save_config(config_file_path, config)
+                    st.toast("配置已保存！", icon="✅")
+                except Exception as e:
+                    st.toast(f"保存失败：{str(e)}", icon="❌")
+                    st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
 
 if not username:
     st.error("请先获取指定用户名的 B30 存档！", icon="❗")
@@ -126,7 +143,7 @@ with st.expander("更换B30存档"):
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
-            if st.button("使用此存档（只需要点击一次！）"):
+            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()

@@ -1,18 +1,5 @@
-import os
-import re
-import json
-import yaml
-import subprocess
-import platform
+import os, re, json, yaml, subprocess, platform
 from moviepy import VideoFileClip
-
-LEVEL_LABELS = {
-    0: "BASIC",
-    1: "ADVANCED",
-    2: "EXPERT",
-    3: "MASTER",
-    4: "ULTIMA",
-}
 
 def remove_invalid_chars(text: str) -> str:
     # 去除非法字符，使用re.sub

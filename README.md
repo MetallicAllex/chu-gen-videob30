@@ -71,7 +71,8 @@ Auto search and generate your best 30 videoes of CHUNITHM
 - [x] 更好的b30数据存档系统，可以保存多个历史副本
  -->
 
-- [ ] 重构搜索逻辑，使其可通过 ID 或关键字搜索
+~~重构搜索逻辑，使其可通过 ID 或关键字搜索~~
+【因重构后导致搜索功能故障，故已经回退并放弃开发】
 
 ---
 
@@ -122,7 +123,9 @@ Auto search and generate your best 30 videoes of CHUNITHM
     请检查是否配置好python环境且 ≥ 3.10，并安装 `requirements.txt` 的所有依赖。
 
 - `NameError: name 'sys' is not defined`
+
     你可能手动清理了项目里的 `__pycache__` 文件夹（Release 不会打包此文件夹）
+
     - 需要时间进行编译，大概保留控制台 2 ~ 3 分钟左右重启程序即可
     - 默认端口 8501，如果当前端口不是这个值，请检查是否还有未关闭的程序
 

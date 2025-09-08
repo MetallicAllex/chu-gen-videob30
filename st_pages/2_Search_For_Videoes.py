@@ -9,7 +9,7 @@ from datetime import datetime
 from utils.PageUtils import load_config, save_config, read_global_config, write_global_config
 from utils.PathUtils import get_data_paths, get_user_versions
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
-from pre_gen import merge_b30_data, search_one_video
+from pre_gen import search_one_video
 
 G_config = read_global_config()
 _downloader = G_config.get('DOWNLOADER', 'bilibili')
@@ -58,7 +58,7 @@ with st.expander("更换B30存档"):
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
-            if st.button("使用此存档（只需要点击一次！）"):
+            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()
@@ -112,8 +112,9 @@ with extra_setting_container:
             po_token = st.text_input("输入自定义 PO Token", value=_po_token)
             visitor_data = st.text_input("输入自定义 Visitor Data", value=_visitor_data)
 
-search_setting_container = st.container(border=True)
-with search_setting_container:
+    st.divider()
+# search_setting_container = st.container(border=True)
+# with search_setting_container:
     st.write("搜索与下载相关")
     _search_max_results = G_config.get('SEARCH_MAX_RESULTS', 3)
     _search_wait_time = G_config.get('SEARCH_WAIT_TIME', [5, 10])
@@ -125,26 +126,28 @@ with search_setting_container:
         download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res)
     search_wait_time = st.select_slider("搜索间隔时间（随机范围）", options=range(1, 60), value=_search_wait_time)
 
-if st.button("保存配置"):
-    G_config['DOWNLOADER'] = downloader
-    G_config['USE_PROXY'] = use_proxy
-    G_config['PROXY_ADDRESS'] = proxy_address
-    G_config['NO_BILIBILI_CREDENTIAL'] = no_credential
-    G_config['USE_OAUTH'] = use_oauth
-    if not use_oauth:
-        G_config['USE_CUSTOM_PO_TOKEN'] = use_custom_po_token
-        G_config['USE_AUTO_PO_TOKEN'] = use_auto_po_token
-        G_config['CUSTOMER_PO_TOKEN'] = {
-            'po_token': po_token,
-            'visitor_data': visitor_data
-        }
-    G_config['SEARCH_MAX_RESULTS'] = search_max_results
-    G_config['SEARCH_WAIT_TIME'] = search_wait_time
-    G_config['DOWNLOAD_HIGH_RES'] = download_high_res
-    write_global_config(G_config)
-    st.success("配置已保存！", icon="✅")
-    st.session_state.config_saved_step2 = True  # 添加状态标记
-    st.session_state.downloader_type = downloader
+col1, col2 = st.columns([1, 1], gap="small")
+with col1:
+    if st.button("保存配置", use_container_width=True, icon="💾"):
+        G_config['DOWNLOADER'] = downloader
+        G_config['USE_PROXY'] = use_proxy
+        G_config['PROXY_ADDRESS'] = proxy_address
+        G_config['NO_BILIBILI_CREDENTIAL'] = no_credential
+        G_config['USE_OAUTH'] = use_oauth
+        if not use_oauth:
+            G_config['USE_CUSTOM_PO_TOKEN'] = use_custom_po_token
+            G_config['USE_AUTO_PO_TOKEN'] = use_auto_po_token
+            G_config['CUSTOMER_PO_TOKEN'] = {
+                'po_token': po_token,
+                'visitor_data': visitor_data
+            }
+        G_config['SEARCH_MAX_RESULTS'] = search_max_results
+        G_config['SEARCH_WAIT_TIME'] = search_wait_time
+        G_config['DOWNLOAD_HIGH_RES'] = download_high_res
+        write_global_config(G_config)
+        st.toast("配置已保存！", icon="✅")
+        st.session_state.config_saved_step2 = True  # 添加状态标记
+        st.session_state.downloader_type = downloader
 
 def st_init_downloader():
     global downloader, no_credential, use_oauth, use_custom_po_token, use_auto_po_token, po_token, visitor_data
@@ -199,12 +202,12 @@ if not os.path.exists(b30_config_file):
     st.toast(f"已生成 {downloader} 的 Best30 索引文件", icon="ℹ️")
 
 # 对比以及合并b30_data_file和b30_config_file
-b30_data = load_config(b30_data_file)
-b30_config = load_config(b30_config_file)
-merged_b30_config, update_count = merge_b30_data(b30_data, b30_config)
-save_config(b30_config_file, merged_b30_config)
-if update_count > 0:
-    st.toast(f"已加载 {downloader} 的 Best30 索引，共更新 {update_count} 条数据", icon="✅")
+# b30_data = load_config(b30_data_file)
+# b30_config = load_config(b30_config_file)
+# merged_b30_config, update_count = merge_b30_data(b30_data, b30_config)
+# save_config(b30_config_file, merged_b30_config)
+# if update_count > 0:
+#     st.toast(f"已加载 {downloader} 的 Best30 索引，共更新 {update_count} 条数据", icon="✅")
 
 def st_search_b30_videoes(dl_instance, placeholder, search_wait_time):
     # read b30_data
@@ -237,24 +240,27 @@ def st_search_b30_videoes(dl_instance, placeholder, search_wait_time):
 if st.session_state.get('config_saved_step2', False):
     info_placeholder = st.empty()
 
+    # with col2:
     button_label = "开始搜索"
     st.session_state.search_completed = False
-    
-    if st.button(button_label):
+
+    if st.button(button_label, use_container_width=True, icon="🔍"):
         try:
             dl_instance = st_init_downloader()
             # 缓存downloader对象
             st.session_state.downloader = dl_instance
             st_search_b30_videoes(dl_instance, info_placeholder, search_wait_time)
             st.session_state.search_completed = True  # Reset error flag if successful
-            st.success("搜索完成！请前往下一步检查视频信息，以及下载视频。", icon="✅")
-            st.warning("如果站点存在此视频，但下载器未找到，请尝试重新搜索多几次。", icon="⚠️")
+            st.toast("搜索完成！请前往下一步检查视频信息，以及下载视频。", icon="✅")
+            st.toast("如果站点存在此视频，但下载器未找到，请尝试重新搜索多几次。", icon="⚠️")
         except Exception as e:
             st.session_state.search_completed = False
-            st.error(f"搜索过程中出现错误: {e}, 请尝试重新搜索")
-            st.error(f"详细错误信息: {traceback.format_exc()}")
-    if st.button("下一步", disabled=not st.session_state.search_completed):
-        st.switch_page("st_pages/3_Confrim_Videoes.py")
+            st.toast(f"发生错误：{e}, 请尝试重新搜索（详细错误信息显示在页面底部）", icon="❌")
+            st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
+    
+    with col2:
+        if st.button("下一步", disabled=not st.session_state.search_completed, use_container_width=True, icon="➡️"):
+            st.switch_page("st_pages/3_Confrim_Videoes.py")
 else:
     st.warning("请先保存配置！", icon="⚠️")  # 如果未保存配置，给出提示
 

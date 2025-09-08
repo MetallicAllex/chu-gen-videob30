@@ -143,81 +143,36 @@ async def download_url_from_bili(url: str, out: str, info: str):
                 f.write(chunk)
         print("Done.\n")
 
-# async def bilibili_download(bvid, credential, output_name, output_path, high_res=False):
-#     v = video.Video(bvid=bvid, credential=credential)
-#     download_url_data = await v.get_download_url(0)
-#     detecter = video.VideoDownloadURLDataDetecter(data=download_url_data)
+async def bilibili_download(bvid, credential, output_name, output_path, high_res=False):
+    v = video.Video(bvid=bvid, credential=credential)
+    download_url_data = await v.get_download_url(0)
+    detecter = video.VideoDownloadURLDataDetecter(data=download_url_data)
 
-#     # 获取最佳媒体流: 返回列表中0是视频流，1是音频流
-#     if high_res:
-#         streams = detecter.detect_best_streams()
-#     else:
-#         streams = detecter.detect_best_streams(video_max_quality=video.VideoQuality._480P,
-#                                                no_dolby_video=True, no_dolby_audio=True, no_hdr=True)
-
-#     output_file = os.path.join(output_path, f"{output_name}.mp4")
-#     if detecter.check_flv_stream() == True:
-#         # FLV 流下载
-#         await download_url_from_bili(streams[0].url, "flv_temp.flv", "FLV 音视频")
-#         os.system(f'{FFMPEG_PATH} -y -i flv_temp.flv {output_file} {REDIRECT}')
-#         # 删除临时文件
-#         os.remove("flv_temp.flv")
-#         print(f"下载完成，存储为: {output_name}.mp4")
-#     else:
-#         # MP4 流下载
-#         await download_url_from_bili(streams[0].url, "video_temp.m4s", "视频流")
-#         await download_url_from_bili(streams[1].url, "audio_temp.m4s", "音频流")
-#         print(f"下载完成，正在合并视频和音频")
-#         os.system(f'{FFMPEG_PATH} -y -i video_temp.m4s -i audio_temp.m4s -vcodec copy -acodec copy {output_file} {REDIRECT}')
-#         # 删除临时文件
-#         os.remove("video_temp.m4s")
-#         os.remove("audio_temp.m4s")
-#         print(f"合并完成，存储为: {output_name}.mp4")
-
-async def bilibili_download(self, bvid, page=1, output_name=None, output_path="."):
-    """ 哔哩哔哩视频合并
-
-    Args:
-        bvid(str): 视频BV号
-        page(int): 分P序号（从1开始）
-        output_name(str): 输出文件名（不含后缀）
-        output_path(path): 输出目录
-    """
-    try:
-        v = video.Video(bvid=bvid, credential=self.credential)
-        page_list = sync(v.get_page_list())
-        
-        # 检查分P序号是否有效
-        if page < 1 or page > len(page_list):
-            print(f"错误：分P序号 {page} 无效（该视频共有 {len(page_list)} 个分P）")
-            return False
-
-        # 获取目标分P的cid
-        target_cid = page_list[page - 1]['cid']
-        download_url_data = await v.get_download_url(target_cid)  # 关键修改：传入cid
-        detecter = video.VideoDownloadURLDataDetecter(data=download_url_data)
-
-        # 后续下载逻辑（与原代码一致）
+    # 获取最佳媒体流: 返回列表中0是视频流，1是音频流
+    if high_res:
         streams = detecter.detect_best_streams()
-        output_file = os.path.join(output_path, f"{output_name or page_list[page - 1]['part']}.mp4")
-        
-        if detecter.check_flv_stream():
-            await download_url_from_bili(streams[0].url, "flv_temp.flv", "FLV音视频")
-            os.system(f'{FFMPEG_PATH} -y -i flv_temp.flv {output_file} {REDIRECT}')
-            os.remove("flv_temp.flv")
-            print(f"下载完成，存储为: {output_name}.mp4")
-        else:
-            await download_url_from_bili(streams[0].url, "video_temp.m4s", "视频流")
-            await download_url_from_bili(streams[1].url, "audio_temp.m4s", "音频流")
-            print(f"下载完成，正在合并音视频轨道。")
-            os.system(f'{FFMPEG_PATH} -y -i video_temp.m4s -i audio_temp.m4s -vcodec copy -acodec copy {output_file} {REDIRECT}')
-            os.remove("video_temp.m4s")
-            os.remove("audio_temp.m4s")
-            print(f"合并完成（已删除临时文件）：{output_file}")
+    else:
+        streams = detecter.detect_best_streams(video_max_quality=video.VideoQuality._480P,
+                                               no_dolby_video=True, no_dolby_audio=True, no_hdr=True)
 
-    except Exception as e:
-        print(f"下载失败: {e}")
-        return False
+    output_file = os.path.join(output_path, f"{output_name}.mp4")
+    if detecter.check_flv_stream() == True:
+        # FLV 流下载
+        await download_url_from_bili(streams[0].url, "flv_temp.flv", "FLV 音视频")
+        os.system(f'{FFMPEG_PATH} -y -i flv_temp.flv {output_file} {REDIRECT}')
+        # 删除临时文件
+        os.remove("flv_temp.flv")
+        print(f"下载完成，存储为: {output_name}.mp4")
+    else:
+        # MP4 流下载
+        await download_url_from_bili(streams[0].url, "video_temp.m4s", "视频流")
+        await download_url_from_bili(streams[1].url, "audio_temp.m4s", "音频流")
+        print(f"下载完成，正在合并视频和音频")
+        os.system(f'{FFMPEG_PATH} -y -i video_temp.m4s -i audio_temp.m4s -vcodec copy -acodec copy {output_file} {REDIRECT}')
+        # 删除临时文件
+        os.remove("video_temp.m4s")
+        os.remove("audio_temp.m4s")
+        print(f"合并完成，存储为: {output_name}.mp4")
 
 class Downloader(ABC):
     @abstractmethod
@@ -227,84 +182,6 @@ class Downloader(ABC):
     @abstractmethod
     def download_video(self, video_id, output_name, output_path, high_res=False):
         pass
-
-# def parse_video_id(input_str):
-#     """解析用户输入的视频标识（支持BV号、YouTube ID、含分P的URL）
-
-#     Args:
-#         input_str(str): 输入地址
-    
-#     Returns: 
-#       platform: "bilibili" 或 "youtube"
-#       video_id: 纯净的ID（如BV号或YouTube videoId）
-#       page: 分P序号（仅B站有效，默认1）
-#     """
-#     # 处理B站URL（含分P）
-#     if "bilibili.com" in input_str:
-#         match = re.search(r"video/(BV\w+)(?:\?p=(\d+))?", input_str)
-#         if match:
-#             return "bilibili", match.group(1), int(match.group(2)) if match.group(2) else 1
-    
-#     # 处理B站BV号（含分P简写）
-#     if input_str.startswith("BV"):
-#         parts = input_str.split("/?p=")
-#         return "bilibili", parts[0], int(parts[1]) if len(parts) > 1 else 1
-    
-#     # 默认视为YouTube ID（或关键词）
-#     return "youtube", input_str, 1
-
-def parse_video_id(raw_input: str) -> tuple[str, int]:
-    """
-    只负责提取视频 ID 和分 P，不猜测平台。
-    返回: video_id, page
-    """
-    page = 1
-    video_id = raw_input.strip()
-
-    # 提取分 P 信息（/?p=数字）
-    match = re.search(r"/\?p=(\d+)", video_id)
-    if match:
-        page = int(match.group(1))
-        video_id = video_id.split("/?p=")[0]  # 去掉 ?p= 部分
-
-    return video_id, page
-
-
-async def get_bilibili_video_info(bvid_or_aid: str, page: int = 1) -> dict:
-    # 根据输入构造 Video 对象（自动识别 AV 或 BV）
-    if bvid_or_aid.lower().startswith("bv"):
-        video = Video(bvid=bvid_or_aid)
-    elif bvid_or_aid.lower().startswith("av"):
-        video = Video(aid=int(bvid_or_aid[2:]))
-    else:
-        # 纯 ID 时默认用 BV
-        video = Video(bvid=bvid_or_aid)
-
-    info = await video.get_info()
-    pages = info["pages"]
-
-    if page > len(pages):
-        raise ValueError(f"该视频只有 {len(pages)} P，无法获取第 {page} P")
-
-    p_info = pages[page - 1]
-
-    return {
-        "id": bvid_or_aid,
-        "url": f"https://www.bilibili.com/video/{video.get_bvid()}/?p={page}",
-        "title": p_info["part"],
-        "duration": p_info["duration"],
-        "page": page
-    }
-
-def get_youtube_video_info(video_id: str) -> dict:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    yt = YouTube(url)
-    return {
-        "id": video_id,
-        "url": url,
-        "title": yt.title,
-        "duration": yt.length
-    }
 
 class PurePytubefixDownloader(Downloader):
     """使用pytubefix进行搜索和下载的youtube视频下载器"""

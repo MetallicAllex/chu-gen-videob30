@@ -1,4 +1,3 @@
-import asyncio
 import time
 import random
 import traceback
@@ -7,9 +6,8 @@ import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
-from pre_gen import search_one_video, download_one_video
+from pre_gen import download_one_video
 from gene_images import diff_bg_change
-from utils.video_crawler import get_bilibili_video_info, get_youtube_video_info, parse_video_id
 
 G_config = read_global_config()
 
@@ -50,7 +48,7 @@ with st.expander("更换B30存档"):
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
-            if st.button("使用此存档（只需要点击一次！）"):
+            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()
@@ -87,7 +85,7 @@ def st_download_video(placeholder, dl_instance, G_config, b30_config):
                 if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
                     time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
 
-            st.success("下载完成！请点击下一步按钮核对视频素材的详细信息。")
+            st.success("下载完成！请点击下一步按钮核对视频素材的详细信息。", icon="✅")
 
 # 在显示数据框之前，将数据转换为兼容的格式
 def convert_to_compatible_types(data):
@@ -199,111 +197,28 @@ def update_editor(placeholder, config, current_index, dl_instance=None):
             update_match_info(match_info_placeholder, song['video_info_match'])
         
         # 如果搜索结果均不符合，手动输入地址：
-        # with st.container(border=True):
-        #     st.markdown('<p style="color: #ffc107;">以上都不对？手动搜索正确的谱面确认视频：</p>', unsafe_allow_html=True)
-        #     replace_id = st.text_input("输入搜索关键词（建议为 youtube ID 或 BV 号）", key=f"replace_id_{song['clip_id']}", placeholder="（Bilibili若分p输入【<BV 号>/?p=<分p数>，如 BVxxxx/?p=4】）")
-
-        #     # 搜索手动输入的id
-        #     to_replace_video_info = None
-        #     extra_search_button = st.button("搜索并替换", 
-        #                                     key=f"search_replace_id_{song['clip_id']}",
-        #                                     disabled=dl_instance is None or replace_id == "")
-        #     # 在按钮点击事件中替换原有逻辑
-        #     if extra_search_button:
-        #         platform, video_id, page = parse_video_id(replace_id.strip())
-                
-        #         try:
-        #             if platform == "bilibili":
-        #                 # B站搜索（支持分P）
-        #                 videos = dl_instance.search_video(video_id)
-        #                 if not videos:
-        #                     st.error("未找到B站视频，请检查BV号", icon="❌")
-        #                 else:
-        #                     # 标记目标分P
-        #                     target_video = videos[0]
-        #                     target_video["page"] = page  # 记录分P信息
-        #                     to_replace_video_info = target_video
-                            
-        #                     # 显示分P信息（如果有）
-        #                     page_info = f" (p{page})" if page > 1 else ""
-        #                     st.success(f"已找到B站视频 {target_video['id']}{page_info}", icon="✅")
-        #                     if to_replace_video_info:
-        #                         platform_icon = "🅱️" if platform == "bilibili" else "📺"
-        #                         page_info = f"| 分P{page}" if platform == "bilibili" and page > 1 else ""
-        #                         st.markdown(
-        #                             f"{platform_icon} 【{to_replace_video_info['title']}】"
-        #                             f"({to_replace_video_info['duration']}秒{page_info}) "
-        #                             f"[🔗{to_replace_video_info['id']}]({to_replace_video_info['url']})"
-        #                         )
-
-        #             elif platform == "youtube":
-        #                 # YouTube搜索（原有逻辑）
-        #                 videos = dl_instance.search_video(video_id)
-        #                 if not videos:
-        #                     st.error("未找到YouTube视频，请检查ID或关键词")
-        #                 else:
-        #                     to_replace_video_info = videos[0]
-        #                     st.success(f"已找到YouTube视频: {to_replace_video_info['id']}", icon="✅")
-                    
-        #             # 更新配置
-        #             if to_replace_video_info:
-        #                 song['video_info_match'] = to_replace_video_info
-        #                 save_config(b30_config_file, config)
-        #                 st.toast("配置已保存！", icon="✅")
-        #                 update_match_info(match_info_placeholder, song['video_info_match'])
-            
-        #         except Exception as e:
-        #             st.error(f"搜索失败: {str(e)}", icon="❌")
-
         with st.container(border=True):
             st.markdown('<p style="color: #ffc107;">以上都不对？手动搜索正确的谱面确认视频：</p>', unsafe_allow_html=True)
+            replace_id = st.text_input("搜索关键词 (建议为谱面确认视频的 youtube ID 或 BV号)", 
+                                       key=f"replace_id_{song['clip_id']}")
 
-            selected_platform = st.radio(
-                "选择平台", 
-                ("bilibili", "youtube"), 
-                key=f"platform_{song['clip_id']}"
-            )
-
-            replace_id = st.text_input(
-                "输入搜索关键词（建议为 YouTube ID 或 BV 号）",
-                key=f"replace_id_{song['clip_id']}",
-                placeholder="（Bilibili 若分 P 输入【<BV 号>/?p=<分p数>，如 BVxxxx/?p=4】）"
-            )
-
+            # 搜索手动输入的id
             to_replace_video_info = None
-            extra_search_button = st.button(
-                "搜索并替换",
-                key=f"search_replace_id_{song['clip_id']}",
-                disabled=dl_instance is None or replace_id == ""
-            )
-
+            extra_search_button = st.button("搜索并替换", 
+                                            key=f"search_replace_id_{song['clip_id']}",
+                                            disabled=dl_instance is None or replace_id == "")
             if extra_search_button:
-                video_id, page = parse_video_id(replace_id.strip())
-                try:
-                    if selected_platform == "bilibili":
-                        video_info = get_bilibili_video_info(video_id, page)
-                    elif selected_platform == "youtube":
-                        video_info = get_youtube_video_info(video_id)
-
-                    to_replace_video_info = video_info
-                    # 显示
-                    platform_icon = "🅱️" if selected_platform == "bilibili" else "📺"
-                    page_info = f" | 分P{video_info['page']}" if selected_platform == "bilibili" and video_info.get("page", 1) > 1 else ""
-                    st.success(f"已找到视频: {video_info['title']}{page_info}", icon="✅")
-                    st.markdown(
-                        f"{platform_icon} 【{video_info['title']}】"
-                        f"({video_info['duration']}秒{page_info}) "
-                        f"[🔗{video_info['id']}]({video_info['url']})"
-                    )
-
-                    # 更新配置
-                    song["video_info_match"] = to_replace_video_info
+                videos = dl_instance.search_video(replace_id.replace("BV", ""))
+                if len(videos) == 0:
+                    st.error("未找到有效的视频，请重试")
+                else:
+                    to_replace_video_info = videos[0]
+                    st.success(f"已使用视频{to_replace_video_info['id']}替换匹配信息，详情：")
+                    st.markdown(f"【{to_replace_video_info['title']}】({to_replace_video_info['duration']}秒) [🔗{to_replace_video_info['id']}]({to_replace_video_info['url']})")
+                    song['video_info_match'] = to_replace_video_info
                     save_config(b30_config_file, config)
-                    st.toast("配置已保存！", icon="✅")
-                    update_match_info(match_info_placeholder, song["video_info_match"])
-                
-                except Exception as e:
-                    st.error(f"获取失败: {str(e)}", icon="❌")
+                    st.toast("配置已保存！")
+                    update_match_info(match_info_placeholder, song['video_info_match'])
 
 
 
@@ -368,7 +283,7 @@ if b30_config:
     # 上一个和下一个按钮
     col1, col2, col3 = st.columns([0.9, 0.9, 0.9])
     with col1:
-        if st.button("上一片段"):
+        if st.button("上一个"):
             if st.session_state.current_index > 0:
                 # # 保存当前配置
                 # save_config(b30_config_file, b30_config)
@@ -377,9 +292,9 @@ if b30_config:
                 st.session_state.current_index -= 1
                 update_editor(link_editor_placeholder, b30_config, st.session_state.current_index, dl_instance)
             else:
-                st.toast("已经是第一个记录！", icon="ℹ️")
+                st.toast("到顶啦！", icon="❗")
     with col2:
-        if st.button("下一片段"):
+        if st.button("下一个"):
             if st.session_state.current_index < len(record_ids) - 1:
                 # # 保存当前配置
                 # save_config(b30_config_file, b30_config)
@@ -388,12 +303,12 @@ if b30_config:
                 st.session_state.current_index += 1
                 update_editor(link_editor_placeholder, b30_config, st.session_state.current_index, dl_instance)
             else:
-                st.toast("已经是最后一个记录！", icon="ℹ️")
+                st.toast("到底啦！", icon="❗")
     with col3: 
         # 保存配置按钮
         if st.button("保存当前配置"):
             save_config(b30_config_file, b30_config)
-            st.success("已保存！", icon="✅")
+            st.toast("已保存当前配置！", icon="✅")
 
     download_info_placeholder = st.empty()
     st.session_state.download_completed = False
@@ -404,7 +319,7 @@ if b30_config:
         except Exception as e:
             st.session_state.download_completed = False
             st.error(f"下载过程中出现错误: {e}, 请尝试重新下载", icon="⚠️")
-            st.error(f"详细错误信息: {traceback.format_exc()}", icon="❌")
+            st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❌")
 
     if st.button("下一步", disabled=not st.session_state.download_completed):
         st.switch_page("st_pages/4_Edit_Video_Content.py")

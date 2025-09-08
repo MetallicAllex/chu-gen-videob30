@@ -104,10 +104,10 @@ with st.container(border=True):
             value = token if token else "", type="password", placeholder="使用落雪查分（首次）必须提供此项，否则查询将失败"
         )
     with col2:
-        if st.button("不知道在哪？"):
-            st.toast("访问 [落雪查分器【账号详情】页](https://maimai.lxns.net/user/profile)，API 密钥框在本页底部", icon="ℹ️")
+        if st.button("不知道在哪？", use_container_width=True, help="访问 [落雪查分器【账号详情 - 第三方应用】页](https://maimai.lxns.net/user/profile)，API 密钥框在本页底部"):
+            st.toast("访问 [落雪查分器【账号详情 - 第三方应用】页](https://maimai.lxns.net/user/profile?tab=thirdparty)，API 密钥框在本页底部", icon="ℹ️")
 
-    if st.button("确定"):
+    if st.button("确定", use_container_width=True):
         if not input_username:
             st.error("用户名不能为空！", icon="❌")
             st.session_state.config_saved = False
@@ -170,7 +170,7 @@ def update_b30(update_function, secret_identifier, save_paths):
         filtered_msg = error_msg.replace(secret_identifier, "[已过滤]")  # 暴力替换所有可能泄露
         
         st.error(f"获取数据失败: {filtered_msg}")
-        st.expander("原始错误（已脱敏）").write(traceback.format_exc())  # 确保traceback也过滤
+        st.expander("详细错误信息（请将这部分内容拷贝或截图发给开发者）：").write(traceback.format_exc())  # 确保traceback也过滤
         return None
 
 
@@ -196,10 +196,10 @@ def update_b30(update_function, secret_identifier, save_paths):
 @st.dialog("删除存档？", width="medium")
 def delete_save_data(username, save_id):
     version_dir = get_user_version_dir(username, save_id)
-    st.warning(f"要删除存档【{username} - {save_id}】吗？将清除所有已生成 Best30 底图和视频，且不可撤销！", icon="⚠️")
+    st.warning(f"您是要删除存档【{username} - {save_id}】吗？将清除所有已生成 Best30 底图和视频，且不可撤销！", icon="⚠️")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("是的！确定要删除它！", icon="✔️"):
+        if st.button("是的！确定要删除它！", icon="✔️", use_container_width=True):
             # 迭代地删除文件夹version_dir下的所有文件和子文件夹
             for root, dirs, files in os.walk(version_dir, topdown=False):
                 for name in files:
@@ -210,7 +210,7 @@ def delete_save_data(username, save_id):
             st.toast(f"已删除存档【{username} - {save_id}】", icon="✅")
             st.rerun()
     with col2:
-        if st.button("不了，也许哪天会用？", icon="✖️"):
+        if st.button("不了，也许哪天会用？", icon="✖️", use_container_width=True):
             st.rerun()
 
 # 仅在配置已保存时显示"开始预生成"按钮
@@ -248,7 +248,7 @@ if st.session_state.get('config_saved', False):
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
-            col1, col2, col3 = st.columns([2, 2, 1])
+            col1, col2, col3 = st.columns(3, gap="small")
             # with col1:
             #     if st.button("加载此存档数据"):
             #         if selected_save_id:
@@ -260,12 +260,13 @@ if st.session_state.get('config_saved', False):
             #         else:
             #             st.error("未指定有效的存档路径！")
             with col1:
-                if st.button("加载此存档", icon="▶️"):
+                if st.button("加载此存档", icon="▶️", use_container_width=True):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
                         # ✅ 新增：加载用户信息（包括 Token）
                         if load_user_info(username):
-                            st.success(f"已加载，Token 已恢复。", icon="✅")
+                            st.toast("已加载您的存档。", icon="✅")
+                            st.toast("同时您的 Token 已恢复至生成器内，您现在可以获取落雪查分器数据了。", icon="ℹ️")
                         else:
                             st.warning("存档加载成功，但未找到用户信息（可能需要重新输入 Token）。")
                         st.session_state.data_updated_step1 = True
@@ -273,7 +274,7 @@ if st.session_state.get('config_saved', False):
                         st.error("未指定有效的存档路径！")
             with col2:
                 version_dir = get_user_version_dir(username, selected_save_id)
-                if st.button("打开文件夹", icon="📂", help=version_dir):
+                if st.button("打开文件夹", icon="📂", help=version_dir, use_container_width=True):
                     if os.path.exists(version_dir):
                         absolute_path = os.path.abspath(version_dir)
                     else:
@@ -288,7 +289,7 @@ if st.session_state.get('config_saved', False):
             #         else:
             #             st.error("未找到b30数据，请先读取存档，或生成新存档！")
             with col3:
-                if st.button("删除存档", icon="🗑️"):
+                if st.button("删除存档", icon="🗑️", use_container_width=True):
                     delete_save_data(username, selected_save_id)
 
     else:
@@ -300,7 +301,7 @@ if st.session_state.get('config_saved', False):
         st.warning(f"水鱼需关闭【[禁止其他人查询我的成绩](https://www.diving-fish.com/maimaidx/prober/#Profile)】以允许用户名查询", icon="⚠️")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("从落雪查分器获取", help="将使用您的个人 API 密钥作为验证参数", icon="❄️"):
+            if st.button("从落雪查分器获取", help="将使用您的个人 API 密钥作为验证参数", icon="❄️", use_container_width=True):
                 try:
                     current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
                     save_dir = os.path.dirname(current_paths['data_file'])
@@ -321,7 +322,7 @@ if st.session_state.get('config_saved', False):
                     time.sleep(3)
                     st.rerun()
         with col2:
-            if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟"):
+            if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟", use_container_width=True):
                 current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
                 save_dir = os.path.dirname(current_paths['data_file'])
                 save_id = os.path.basename(save_dir)  # 从存档路径得到新存档的时间戳
@@ -335,22 +336,30 @@ if st.session_state.get('config_saved', False):
                             current_paths,
                         )
 
-        st.error("因国际服 LUM+ / 日服 VERSE 缺少测试样本，我们目前无法支持导入数据", icon="❌")
+        st.error("因外服缺少测试样本，且 VERSE [修改了 Best 机制](https://zh.moegirl.org.cn/CHUNITHM#Rating)，我们目前无法支持其导入数据", icon="❌")
 
-        st.markdown("如果您还没有任何存档，可生成空白存档（作为占位使用）")
-        if st.button("新建空白存档", key="dx_int_create_new_save", icon="📄"):
-            current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
-            save_dir = os.path.dirname(current_paths['data_file'])
-            save_id = os.path.basename(save_dir)  # 从存档路径得到新存档的时间戳
-            os.makedirs(save_dir, exist_ok=True) # 新建存档文件夹
-            st.session_state.save_id = save_id
-            st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}")
+        col1, col2 = st.columns(2, gap="small")
+        with col1:
+            st.markdown("如果您目前没有可用于生成存档的数据，可生成空白存档（作为占位使用）")
+        
+        with col2:
+            if st.button("新建空白存档", key="dx_int_create_new_save", icon="📄", use_container_width=True):
+                current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
+                save_dir = os.path.dirname(current_paths['data_file'])
+                save_id = os.path.basename(save_dir)  # 从存档路径得到新存档的时间戳
+                os.makedirs(save_dir, exist_ok=True) # 新建存档文件夹
+                st.session_state.save_id = save_id
+                st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}")
 
 
     if st.session_state.get('data_updated_step1', False):
-        st.write("确认数据无误后，前往下一步准备生成底图。")
-        if st.button("下一步", icon="⏭️"):
-            st.switch_page("st_pages/Generate_Pic_Resources.py")
+        col1, col2 = st.columns(2, gap="small")
+        with col1:
+            st.write("确认数据无误后，前往下一步准备生成底图。")
+        
+        with col2:
+            if st.button("下一步", icon="➡️", use_container_width=True):
+                st.switch_page("st_pages/Generate_Pic_Resources.py")
 
 else:
     st.warning("请先确定用户名！", icon="⚠️")

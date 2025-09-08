@@ -1,10 +1,11 @@
-import json
-import requests
-import threading
+import json, requests, threading
+import streamlit as st
 from PIL import Image
 from update_music_data import music_info_path
 from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Literal, Optional, TypedDict
 
+# ========== 类型定义 ==========
 class Utils:
     def __init__(self, InputUserID: int = 0):
         UserId = InputUserID
@@ -20,7 +21,7 @@ class Utils:
                 return {}
 
 class TextAnchor:
-    """动态锚点定位系统"""
+    """用于文字的动态锚点定位"""
     def __init__(self, x_center, y_center):
         self.base = (x_center, y_center)
     
@@ -55,6 +56,7 @@ def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_f
             "score": "score",
             "rating": "rating",
             "fc": "full_combo",
+            "fchain": "full_chain",
             "data_field": "data"
         },
         "fish": {
@@ -252,6 +254,32 @@ def get_b30_data_from_fish(username):
 
 def get_b30_data_from_lxns(token):
     url = "https://maimai.lxns.net/api/v0/user/chunithm/player/scores"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "X-User-Token": token
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()  # 自动处理 4xx/5xx 错误
+        data = response.json()
+        
+        # 检查业务逻辑错误（如 success=false）
+        if not data.get("success", True):
+            raise Exception(f"落雪 API 返回错误: {data.get('message')}")
+        
+        return data
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            raise Exception("Token 无效或已过期，请检查您的 API 密钥") from e
+        else:
+            raise Exception(f"API 请求失败: {e.response.status_code}") from e
+    except Exception as e:
+        raise Exception(f"获取数据时发生意外错误: {str(e)}") from e
+    
+def get_user_data_from_lxns(token):
+    url = "https://maimai.lxns.net/api/v0/user/chunithm/player"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "X-User-Token": token

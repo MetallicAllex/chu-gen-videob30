@@ -113,10 +113,10 @@ def st_generate_b30_images(placeholder, save_paths):
                         )
                     )
                 time.sleep(0.01)
-
+            
             # 生成完成后清除进度条
             pb.empty()  # 这行让进度条消失
-            st.success(f"✅ 操作成功完成（{elapsed:.1f} 秒）")
+            st.toast(f"操作成功完成（{elapsed:.1f} 秒）", icon="✅")
 
 st.title("Step 1: 生成 Best30 成绩底图")
 
@@ -154,12 +154,12 @@ with st.expander("需要更换存档？"):
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
-            if st.button("使用此存档（只需要点击一次！）"):
+            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()
                 else:
-                    st.error("无效的存档路径！")
+                    st.error("无效的存档路径！", icon="❌")
     else:
         st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
         st.stop()
@@ -167,15 +167,18 @@ with st.expander("需要更换存档？"):
 
 if data_loaded:
     image_path = current_paths['image_dir']
-    st.text("生成成绩图底图")
+    st.text("基础 & 附加设置")
     with st.container(border=True):
-        st.write("确认你的存档数据无误后，点击 “生成” 按钮开始生成。")
-        use_verse = st.checkbox("添加 verse 定数并计算新 Rating", help="定数或 Rating 不变时仅标记后缀【16.15(verse)】")
+        col1, col2 = st.columns([1, 1], vertical_alignment="center")
+        with col1:
+            st.text("确认存档数据无误后，点下面的按钮生成。")
+        with col2:
+            use_verse = st.checkbox("添加 X-VERSE 定数并计算新 Rating", help="定数或 Rating 不变时仅标记后缀【16.15(X-VERSE)】")
         if use_verse:
-            st.info("示例：MASTER 14.3 将显示为 MASTER[14.3 → 14.6(verse)]", icon="ℹ️")
+            st.info("示例：MASTER 14.3 将显示为 MASTER[14.3 → 14.6(X-VERSE)]", icon="ℹ️")
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("生成成绩图底图", help="使用底图分辨率生成"):
+            if st.button("生成成绩图底图", help="使用底图分辨率生成", icon="🔄️", use_container_width=True):
                 generate_info_placeholder = st.empty()
                 try:
                     if not os.path.exists(image_path):
@@ -183,15 +186,21 @@ if data_loaded:
                     st_generate_b30_images(generate_info_placeholder, current_paths)
                     # st.success("操作成功完成。")
                 except Exception as e:
-                    st.error(f"生成时发生错误: {e}")
-                    st.error(traceback.format_exc())
+                    st.toast(f"生成时发生错误: {e}", icon="❌")
+                    st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
             if os.path.exists(image_path):
                 absolute_path = os.path.abspath(image_path)
             else:
                 absolute_path = os.path.abspath(os.path.dirname(image_path))
+
         with col2:
-            if st.button("打开存储文件夹", key=f"open_folder_{username}", help=absolute_path):
+            if st.button("打开存储文件夹", key=f"open_folder_{username}", help=absolute_path, use_container_width=True, icon="📂"):
                 open_file_explorer(absolute_path)
-        st.info("如果已经生成过底图，且无需更新，可以跳过。", icon="ℹ️")
-        if st.button("下一步"):
-            st.switch_page("st_pages/2_Search_For_Videoes.py")
+
+        col1, col2 = st.columns([2, 1], vertical_alignment="center")
+        with col1:
+            st.info("如果已经生成过底图，且无需更新，可以跳过。", icon="ℹ️")
+        
+        with col2:
+            if st.button("下一步", icon="➡️", use_container_width=True):
+                st.switch_page("st_pages/2_Search_For_Videoes.py")

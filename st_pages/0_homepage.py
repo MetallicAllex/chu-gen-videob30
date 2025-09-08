@@ -7,7 +7,7 @@ from update_music_data import fetch_music_data
 
 st.title("Chu-gen Best30视频生成器")
 
-st.write("当前版本: v0.4.0")
+st.write("当前版本: [基于 mai-gen-vb30] v0.4-2025modified5")
 
 st.markdown("请按照下列引导步骤操作，以生成您的B30视频。")
 
@@ -20,11 +20,11 @@ st.write("单击下面的按钮开始")
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("开始使用"):
+    if st.button("开始使用", icon="▶️"):
         st.switch_page("st_pages/1_Setup_Achivments.py")
 
 with col2:
-    if st.button("更新乐曲数据"):
+    if st.button("更新乐曲数据", help="如果你认为曲目数据不正确或已经修改，点击此按钮更新", icon="🔄️"):
         fetch_music_data()
 
 # st.write("外观选项")

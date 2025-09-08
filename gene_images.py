@@ -1,5 +1,4 @@
-import json
-import os
+import json, os
 from PIL import Image, ImageDraw, ImageFont
 from utils.Utils import TextAnchor, diff_bg_change
 
@@ -62,9 +61,9 @@ def generate_single_image(background_path, record_detail, output_path, prefix, i
 
         if verse_mode:
             if new_const == old_const:
-                level_text = f"{difficulty_name}[{old_const}(verse)]"
+                level_text = f"{difficulty_name}[{old_const}(X-VERSE)]"
             else:
-                level_text = f"{difficulty_name}[{old_const} → {new_const}(verse)]"
+                level_text = f"{difficulty_name}[{old_const} → {new_const:.1f}(X-VERSE)]"
         else:
             level_text = f"{difficulty_name} {old_const}"
 

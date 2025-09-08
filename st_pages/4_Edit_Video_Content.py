@@ -7,6 +7,7 @@ from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
 from pre_gen import st_gene_resource_config
+from utils.Utils import diff_bg_change
 
 DEFAULT_VIDEO_MAX_DURATION = 180
 
@@ -53,7 +54,7 @@ with st.expander("更换 Best30 存档"):
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
-            if st.button("使用此存档（只需要点击一次！）"):
+            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()
@@ -135,7 +136,7 @@ def update_preview(preview_placeholder, config, current_index):
         st.subheader(f"正在编写: {item['song_name']}")
         info_col1, info_col2 = st.columns(2)
         with info_col1:
-            st.text(f"谱面与难度：{item['song_name']} [{LEVEL_LABELS[item['level_index']]}]")
+            st.text(f"谱面与难度：{item['song_name']} {[diff_bg_change(item['level_index'])]}")
         with info_col2:
             absolute_path = os.path.abspath(os.path.dirname(item['video']))
             st.text(f"谱面确认视频文件：{os.path.basename(item['video'])}")
@@ -144,9 +145,16 @@ def update_preview(preview_placeholder, config, current_index):
 
         @st.dialog("删除视频确认")
         def delete_video_dialog():
-            st.warning("真的要删除这个视频吗？此操作不可撤销！", icon="⚠️")
-            st.success("删除片段后可在上一步重新搜索新的谱面确认。", icon="💬")
-            if st.button("是的！我确定", key=f"confirm_delete_{item['id']}"):
+            st.warning("""
+                       真的要删除这个视频吗？此操作不可撤销！
+                       - 删除片段后可在上一步重新搜索新的谱面确认。
+                       """, icon="⚠️")
+            st.success(f"""如果您只是替换，请记下它本来的名称（底下的框）
+                       \n - 要与原视频名称相同才可被使用
+                       \n - 必须为 mp4 类型 + 后缀\n
+                       {os.path.basename(item['video'])}
+                       """, icon="💬")
+            if st.button("是的！我确定", key=f"confirm_delete_{item['id']}", use_container_width=True):
                 try:
                     os.remove(item['video'])
                     st.toast("视频已删除！")
@@ -164,7 +172,8 @@ def update_preview(preview_placeholder, config, current_index):
                 with col1:
                     st.info(f"不是想要的？", icon="ℹ️")
                 with col2:
-                    if st.button("删除", key=f"delete_btn_{item['id']}", help="删除此视频"):
+                    if st.button("删除", key=f"delete_btn_{item['id']}", 
+                                 help=f"再考虑考虑？"):
                         delete_video_dialog()
             else:
                 st.warning("谱面确认视频不存在，请检查是否已完成下载！")
@@ -271,19 +280,19 @@ if not video_config or 'main' not in video_config:
         try:
             video_config = st_gene_resource_config(b30_config, 
                                             image_output_path, video_download_path, video_config_output_file,
-                                            G_config['CLIP_START_INTERVAL'], G_config['CLIP_PLAY_TIME'], G_config['DEFAULT_COMMENT_PLACEHOLDERS'],
-                                            username=username, save_id=save_id
+                                            G_config['CLIP_START_INTERVAL'], G_config['CLIP_PLAY_TIME'], G_config['DEFAULT_COMMENT_PLACEHOLDERS']
+                                            # username=username, save_id=save_id
                                             )
             st.success("视频配置已生成！", icon="✅")
             st.rerun()
         except Exception as e:
-            st.error(f"视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
-            st.exception(traceback.format_exc())
+            st.toast(f"视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
+            st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
             video_config = None
 
 if video_config:
     # 获取所有视频片段的ID
-    video_ids = [f"{item['id']}: {item['song_name']} [{LEVEL_LABELS[item['level_index']]}]" \
+    video_ids = [f"{item['id']}: {item['song_name']} {[diff_bg_change(item['level_index'])]}" \
                  for item in video_config['main']]
     # 使用session_state来存储当前选择的视频片段索引
     if 'current_index' not in st.session_state:
@@ -322,9 +331,9 @@ if video_config:
 
     should_skip = video_config['main'][st.session_state.current_index].get("skip", False)
     # 上一个和下一个按钮
-    _, col1, col2, col3, col4 = st.columns([0.8, 2, 2, 2, 1])
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        if st.button("上一片段"):
+        if st.button("上一片段", icon="⏮️", use_container_width=True):
             if st.session_state.current_index > 0:
                 # 保存当前配置
                 save_config(video_config_output_file, video_config)
@@ -334,8 +343,9 @@ if video_config:
                 update_preview(preview_placeholder, video_config, st.session_state.current_index)
             else:
                 st.toast("到顶啦！", icon="❗")
+
     with col2:
-        if st.button("下一片段"):
+        if st.button("下一片段", icon="⏭️", use_container_width=True):
             if st.session_state.current_index < len(video_ids) - 1:
                 # 保存当前配置
                 save_config(video_config_output_file, video_config)
@@ -345,15 +355,17 @@ if video_config:
                 update_preview(preview_placeholder, video_config, st.session_state.current_index)
             else:
                 st.toast("到底啦！", icon="❗")
+
     with col3:
         if should_skip:
-            if st.button("取消跳过该片段"):
+            if st.button("取消跳过", use_container_width=True, icon="⤵️"):
                 video_config['main'][st.session_state.current_index]['skip'] = False
                 # 保存当前配置
                 save_config(video_config_output_file, video_config)
                 st.toast("配置已保存！", icon="✅")
+                st.rerun()
         else:
-            if st.button("跳过该片段"):
+            if st.button("跳过", use_container_width=True, icon="⤴️"):
                 if st.session_state.current_index < len(video_ids) - 1:
                     video_config['main'][st.session_state.current_index]['skip'] = True
                     # 保存当前配置
@@ -362,15 +374,17 @@ if video_config:
                     # 切换到下一个视频片段
                     st.session_state.current_index += 1
                     update_preview(preview_placeholder, video_config, st.session_state.current_index)
+                    st.rerun()
                 else:
                     st.toast("到底啦！", icon="❗")
     # 更新状态
     should_skip = video_config['main'][st.session_state.current_index].get("skip", False)
+
     with col4:
         # 保存配置按钮
-        if st.button("保存"):
+        if st.button("保存", use_container_width=True, icon="💾"):
             save_config(video_config_output_file, video_config)
-            st.success("配置已保存！", icon="✅")
+            st.toast("配置已保存！", icon="✅")
 
 with st.container(border=True):
     video_config_file = current_paths['video_config']
@@ -397,12 +411,12 @@ with st.container(border=True):
         st.error("危险区域 Danger Zone", icon="❗")
         st.write("如果无法正常读取图片、视频或评论，请尝试强制刷新配置文件。")
         st.warning("将清空所有已填写评论和时长数据，如有需要请备份 `video_configs.json`", icon="⚠️")
-        _, col1, col2 = st.columns([0.5, 2, 2])
+        col1, col2 = st.columns(2)
         with col1:
             @st.dialog("删除配置确认")
             def delete_video_config_dialog(file):
-                st.warning("真的要删除配置并强制刷新吗？此操作不可撤销！", icon="⚠️")
-                if st.button("是的！我确认删除并强制刷新", key=f"confirm_delete_video_config"):
+                st.warning("真的要强制刷新吗？此操作需删除您的配置文件，且不可撤销！", icon="⚠️")
+                if st.button("是的！请删掉吧", key=f"confirm_delete_video_config", icon="🗑️"):
                     try:
                         os.remove(file)
                         st.rerun()
@@ -410,7 +424,7 @@ with st.container(border=True):
                         st.error(f"删除当前配置文件失败：{traceback.format_exc()}", icon="❌")
 
             if os.path.exists(video_config_file):
-                if st.button("强制删除并刷新视频配置文件", key=f"delete_btn_video_config"):
+                if st.button("强制刷新视频配置文件", key=f"delete_btn_video_config", icon="↩️", use_container_width=True):
                     delete_video_config_dialog(video_config_file)
             else:
                 st.info("当前还没有视频生成配置文件", icon="ℹ️")
@@ -419,20 +433,20 @@ with st.container(border=True):
             @st.dialog("删除视频确认")
             def delete_videoes_dialog(file_path):
                 st.warning("真的要删除所有视频吗？此操作不可撤销！", icon="⚠️")
-                if st.button("是的！我确定要删除所有视频", key=f"confirm_delete_videoes"):
+                if st.button("是的！我确定要删除所有视频", key=f"confirm_delete_videoes", icon="🗑️"):
                     try:
                         for file in os.listdir(file_path):
                             os.remove(os.path.join(file_path, file))
                         st.toast("所有已下载视频已清空！", icon="✅")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"删除视频失败: 详细错误信息: {traceback.format_exc()}")
+                        st.error(f"删除视频失败：{traceback.format_exc()}", icon="❗")
 
             if os.path.exists(video_download_path):
-                if st.button("删除所有已下载视频", key=f"delete_btn_videoes"):
+                if st.button("删除所有已下载视频", key=f"delete_btn_videoes", icon="🗑️", use_container_width=True):
                     delete_videoes_dialog(video_download_path)
             else:
                 st.info("当前还没有下载任何视频")
 
-if st.button("下一步"):
+if st.button("下一步", icon="➡️"):
     st.switch_page("st_pages/5_Edit_OpEd_Content.py")

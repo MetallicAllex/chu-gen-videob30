@@ -2,10 +2,11 @@ import hashlib
 import requests
 import json
 import os
+import base64
 
 # # API 端点
 url_cn = "https://maimai.lxns.net/api/v0/chunithm/song/list"
-url = "https://reiwa.f5.si/chunirec_all.json"
+url = "aHR0cHM6Ly9yZWl3YS5mNS5zaS9jaHVuaXJlY19hbGwuanNvbg=="
 
 # # 文件路径
 music_info_path = './music_datasets/all_music_infos.json'
@@ -162,7 +163,7 @@ def fetch_music_data():
     
     _fetch_music_data(
         name="日服",
-        url=url,
+        url=base64.b64decode(url),
         filepath=jp_music_info_path,
         transformer=transformer
     )

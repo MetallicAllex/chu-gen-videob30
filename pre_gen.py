@@ -2,50 +2,50 @@ import os
 import time
 import json
 import random
-from utils.Utils import get_b30_data_from_lxns, get_b30_data_from_fish, get_keyword, _process_b30_data
+from utils.Utils import diff_bg_change, get_b30_data_from_lxns, get_b30_data_from_fish, get_keyword, _process_b30_data
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
 
-def merge_b30_data(new_b30_data, old_b30_data):
-    """
-    合并两份b30数据，使用新数据的基本信息但保留旧数据中的视频相关信息
+# def merge_b30_data(new_b30_data, old_b30_data):
+#     """
+#     合并两份b30数据，使用新数据的基本信息但保留旧数据中的视频相关信息
     
-    Args:
-        new_b30_data (list): 新的b30数据（不含video_info_list和video_info_match）
-        old_b30_data (list): 旧的b30数据（youtube版或bilibili版）
+#     Args:
+#         new_b30_data (list): 新的b30数据（不含video_info_list和video_info_match）
+#         old_b30_data (list): 旧的b30数据（youtube版或bilibili版）
     
-    Returns:
-        tuple: (合并后的b30数据列表, 更新计数)
-    """
-    # 检查数据长度是否一致
-    if len(new_b30_data) != len(old_b30_data):
-        print(f"Warning: 新旧b30数据长度不一致，将使用新数据替换旧数据。")
-        return new_b30_data, 0
+#     Returns:
+#         tuple: (合并后的b30数据列表, 更新计数)
+#     """
+#     # 检查数据长度是否一致
+#     if len(new_b30_data) != len(old_b30_data):
+#         print(f"Warning: 新旧b30数据长度不一致，将使用新数据替换旧数据。")
+#         return new_b30_data, 0
     
-    # 创建旧数据的复合键映射表
-    old_song_map = {
-        (song['id'], song['level_index']): song 
-        for song in old_b30_data
-    }
+#     # 创建旧数据的复合键映射表
+#     old_song_map = {
+#         (song['id'], song['level_index']): song 
+#         for song in old_b30_data
+#     }
     
-    # 按新数据的顺序创建合并后的列表
-    merged_b30_data = []
-    keep_count = 0
-    for new_song in new_b30_data:
-        song_key = (new_song['id'], new_song['level_index'])
-        if song_key in old_song_map:
-            # 如果记录已存在，使用新数据但保留原有的视频信息
-            cached_song = old_song_map[song_key]
-            new_song['video_info_list'] = cached_song.get('video_info_list', [])
-            new_song['video_info_match'] = cached_song.get('video_info_match', {})
-            if new_song == cached_song:
-                keep_count += 1
-        else:
-            new_song['video_info_list'] = []
-            new_song['video_info_match'] = {}
-        merged_b30_data.append(new_song)
+#     # 按新数据的顺序创建合并后的列表
+#     merged_b30_data = []
+#     keep_count = 0
+#     for new_song in new_b30_data:
+#         song_key = (new_song['id'], new_song['level_index'])
+#         if song_key in old_song_map:
+#             # 如果记录已存在，使用新数据但保留原有的视频信息
+#             cached_song = old_song_map[song_key]
+#             new_song['video_info_list'] = cached_song.get('video_info_list', [])
+#             new_song['video_info_match'] = cached_song.get('video_info_match', {})
+#             if new_song == cached_song:
+#                 keep_count += 1
+#         else:
+#             new_song['video_info_list'] = []
+#             new_song['video_info_match'] = {}
+#         merged_b30_data.append(new_song)
 
-    update_count = len(new_b30_data) - keep_count
-    return merged_b30_data, update_count
+#     update_count = len(new_b30_data) - keep_count
+#     return merged_b30_data, update_count
 
 def update_b30_data_lxns(b30_raw_file, b30_data_file, token):
     lxns = get_b30_data_from_lxns(token)
@@ -120,7 +120,8 @@ def search_b30_videos(downloader, b30_data, b30_data_file, search_wait_time=(0,0
 
 
 def download_one_video(downloader, song, video_download_path, high_res=False):
-    clip_name = f"{song['id']}-{song['level_index']}"
+    clip_name = f"{song['id']}-{diff_bg_change(song['level_index'])}"
+    # clip_name = f"{song['id']}-{song['song_name']}"
     
     # Check if video already exists
     video_path = os.path.join(video_download_path, f"{clip_name}.mp4")
@@ -369,13 +370,15 @@ def st_gene_resource_config(b30_data, images_path, videoes_path, output_file,
     intro_clip_data = {
         "id": "intro_1",
         "duration": 10,
-        "text": "【请填写前言部分】" if default_comment_placeholders else ""
+        "text": "【请填写前言部分】" if default_comment_placeholders else "",
+        "version": "LUMINOUS"
     }
 
     ending_clip_data = {
         "id": "ending_1",
         "duration": 10,
-        "text": "【请填写后记部分】" if default_comment_placeholders else ""
+        "text": "【请填写后记部分】" if default_comment_placeholders else "",
+        "version": "LUMINOUS"
     }
 
     video_config_data = {
@@ -398,7 +401,8 @@ def st_gene_resource_config(b30_data, images_path, videoes_path, output_file,
             print(f"Error: 没有找到 {song['title']}-{song['level_label']}-{song['type']} 的clip_id，请检查数据格式，跳过该片段。")
             continue
         id = song['clip_id']
-        video_name = f"{song['id']}-{song['song_name']}"
+        # video_name = f"{song['id']}-{song['song_name']}"
+        video_name = f"{song['id']}-{diff_bg_change(song['level_index'])}"
         __image_path = os.path.join(images_path, id + ".png")
         __image_path = os.path.normpath(__image_path)
         if not os.path.exists(__image_path):
@@ -408,7 +412,7 @@ def st_gene_resource_config(b30_data, images_path, videoes_path, output_file,
         __video_path = os.path.join(videoes_path, video_name + ".mp4")
         __video_path = os.path.normpath(__video_path)
         if not os.path.exists(__video_path):
-            print(f"Error: 没有找到 {video_name}.mp4 视频，请检查本地缓存数据。")
+            print(f"Error: 没有找到 {video_name} 视频，请检查本地缓存数据。")
             __video_path = ""
         
         duration = clip_play_time

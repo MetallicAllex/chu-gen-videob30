@@ -10,6 +10,10 @@ img_gen = st.Page("st_pages/Generate_Pic_Resources.py",
                 title="1. 生成 Best30 成绩图",
                 icon=":material/photo_library:")
 
+# custom_save = st.Page("st_pages/Make_Custom_Save.py",
+#                     title="编辑B50数据/创建自定义B50数据",
+#                     icon=":material/leaderboard:")
+
 search = st.Page("st_pages/2_Search_For_Videoes.py",
                 title="2. 搜索谱面确认视频信息",
                 icon=":material/video_search:")
