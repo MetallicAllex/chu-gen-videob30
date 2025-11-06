@@ -4,7 +4,9 @@
 
 Auto search and generate your best 30 videoes of CHUNITHM
 
-此项目是基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 的修改分支
+此项目基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 修改而来
+
+This project was modified on original project [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)
 
 ## 快速开始
 
