@@ -1,3 +1,5 @@
+
+
 import os
 import glob
 import time
@@ -88,25 +90,67 @@ def read_raw_username(username):
             data = json.load(f)
             return data.get("legacy_raw_username", data.get("username", username))
 
+# 初始化会话状态
+if 'use_lxns' not in st.session_state:
+    st.session_state.use_lxns = False
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get('save_id', None)
 token = st.session_state.get("lxns_token", None)
+
 with st.container(border=True):
     input_username = st.text_input(
         "用户名 / 绑定 QQ 号（水鱼查分器所需）",
-        value = username if username else "", placeholder="建议用户名，便于辨认且方便水鱼查分"
+        value=username if username else "", 
+        placeholder="建议用户名，便于辨认且方便水鱼查分"
     )
-    col1, col2 = st.columns([0.75, 0.2], vertical_alignment='bottom')
-    with col1:
-        input_token = st.text_input(
-            "个人 API 密钥（落雪查分器所需）",
-            value = token if token else "", type="password", placeholder="使用落雪查分（首次）必须提供此项，否则查询将失败"
-        )
-    with col2:
-        if st.button("不知道在哪？", use_container_width=True, help="访问 [落雪查分器【账号详情 - 第三方应用】页](https://maimai.lxns.net/user/profile)，API 密钥框在本页底部"):
-            st.toast("访问 [落雪查分器【账号详情 - 第三方应用】页](https://maimai.lxns.net/user/profile?tab=thirdparty)，API 密钥框在本页底部", icon="ℹ️")
-
+    
+    # 添加复选框控制是否显示Token输入框
+    use_lxns = st.checkbox(
+        "我使用落雪查分器", 
+        value=st.session_state.use_lxns,
+        help="如果您使用落雪查分器作为数据源，请勾选此项"
+    )
+    
+    # 根据复选框状态决定是否显示Token输入框
+    if use_lxns:
+        col1, col2 = st.columns([0.75, 0.2], vertical_alignment='bottom')
+        with col1:
+            input_token = st.text_input(
+                "个人 API 密钥（落雪查分器所需）",
+                value=token if token else "", 
+                type="password", 
+                placeholder="使用落雪查分（首次）必须提供此项，否则查询将失败",
+                help="访问 [落雪查分器【账号详情 - 第三方应用】页](https://maimai.lxns.net/user/profile?tab=thirdparty)，API 密钥框在本页底部"
+            )
+        with col2:
+            if st.session_state.get('config_saved', False):
+                # 已保存配置，显示更新Token按钮
+                if st.button("更新 Token", use_container_width=True):
+                    if not input_token.strip():
+                        st.toast("请输入有效的 Token", icon="❌")
+                    else:
+                        username = st.session_state.get("username")
+                        if username:
+                            userinfo_file = os.path.join(get_user_base_dir(username), "user_info.json")
+                            if os.path.exists(userinfo_file):
+                                with open(userinfo_file, 'r', encoding='utf-8') as f:
+                                    user_info = json.load(f)
+                                
+                                # 更新Token
+                                user_info["lxns_token"] = input_token.strip()
+                                
+                                with open(userinfo_file, 'w', encoding='utf-8') as f:
+                                    json.dump(user_info, f, indent=2, ensure_ascii=False)
+                                
+                                st.session_state.lxns_token = input_token.strip()
+                                st.toast("Token 已更新！", icon="✅")
+                            else:
+                                st.toast("未找到用户信息文件", icon="❌")
+                        else:
+                            st.toast("未找到用户名", icon="❌")
+    
+    # 显示"确定"按钮（无论是否勾选落雪查分器）
     if st.button("确定", use_container_width=True):
         if not input_username:
             st.error("用户名不能为空！", icon="❌")
@@ -117,22 +161,41 @@ with st.container(border=True):
             root_save_dir = get_user_base_dir(username)
             if not os.path.exists(root_save_dir):
                 os.makedirs(root_save_dir, exist_ok=True)
-            # 创建 JSON 文件用于保存用户数据和 Token
+            
+            # 创建或更新 JSON 文件用于保存用户数据
             userinfo_file = os.path.join(root_save_dir, "user_info.json")
-            user_info = {
-                "username": username,
-                "lxns_token": input_token.strip(),  # 去除前后空格
-            }
-            if not os.path.exists(userinfo_file):
-                with open(userinfo_file, 'w', encoding='utf-8') as f:
-                    json.dump(user_info, f, indent=2, ensure_ascii=False)
+            user_info = {}
+            
+            # 如果用户信息文件已存在，先加载现有数据
+            if os.path.exists(userinfo_file):
+                with open(userinfo_file, 'r', encoding='utf-8') as f:
+                    user_info = json.load(f)
+            
+            # 更新用户信息
+            user_info["username"] = username
+            
+            # 只有在使用落雪查分器时才保存或更新Token
+            if use_lxns:
+                user_info["lxns_token"] = input_token.strip()
+            # 如果不使用落雪查分器，但之前有Token，保留原有Token
+            elif "lxns_token" in user_info:
+                # 保留原有Token，不做修改
+                pass
+            else:
+                # 既不使用落雪查分器，也没有原有Token，设置为空
+                user_info["lxns_token"] = ""
+            
+            # 保存用户信息
+            with open(userinfo_file, 'w', encoding='utf-8') as f:
+                json.dump(user_info, f, indent=2, ensure_ascii=False)
+            
             st.success("用户信息已保存！", icon="✅")
             st.session_state.update({
                 "username": username,
-                "lxns_token": input_token.strip(),
+                "lxns_token": user_info.get("lxns_token", ""),
+                "use_lxns": use_lxns,
                 "config_saved": True
             })
-            st.session_state.config_saved = True  # 添加状态标记
 
 def update_b30(update_function, secret_identifier, save_paths):
     try:
@@ -173,26 +236,6 @@ def update_b30(update_function, secret_identifier, save_paths):
         st.expander("详细错误信息（请将这部分内容拷贝或截图发给开发者）：").write(traceback.format_exc())  # 确保traceback也过滤
         return None
 
-
-# def update_b30(update_function, username, save_paths):
-#     try:
-#         # 使用指定的方法读取B30数据
-#         b30_data = update_function(save_paths['raw_file'], save_paths['data_file'], username)
-#         st.success(f"已获取 {username} 的 Best30 数据！新的存档时间为：{os.path.dirname(save_paths['data_file'])}")
-#         st.session_state.data_updated_step1 = True
-#         return b30_data
-#     except Exception as e:
-#         st.session_state.data_updated_step1 = False
-#         st.error(f"获取 Best30 数据时发生错误: {e}")
-#         st.expander("错误详情").write(traceback.format_exc())
-#         return None
-
-# def check_save_available(username, save_id):
-#     if not save_id:
-#         return False
-#     save_paths = get_data_paths(username, save_id)
-#     return os.path.exists(save_paths['data_file'])
-
 @st.dialog("删除存档？", width="medium")
 def delete_save_data(username, save_id):
     version_dir = get_user_version_dir(username, save_id)
@@ -213,7 +256,6 @@ def delete_save_data(username, save_id):
         if st.button("不了，也许哪天会用？", icon="✖️", use_container_width=True):
             st.rerun()
 
-# 仅在配置已保存时显示"开始预生成"按钮
 def load_user_info(username):
     """从 user_info.json 加载用户数据到 session_state"""
     user_info_path = os.path.join(get_user_base_dir(username), "user_info.json")
@@ -224,7 +266,8 @@ def load_user_info(username):
                 # 更新 session_state
                 st.session_state.update({
                     "username": user_info.get("username", username),
-                    "token": user_info.get("token", ""),
+                    "lxns_token": user_info.get("lxns_token", ""),
+                    "use_lxns": bool(user_info.get("lxns_token", "")),  # 如果有Token，默认勾选使用落雪查分器
                 })
                 return True
         except Exception as e:
@@ -242,28 +285,16 @@ if st.session_state.get('config_saved', False):
     if versions:
         with st.container(border=True):
             st.write(f"新存档可能无法立刻显示，单击其他存档即可刷新。")
-            st.warning("【落雪查分器】需要您的 API 密钥验证身份，因此您需要先加载存档", icon="⚠️")
             selected_save_id = st.selectbox(
                 "选择一份已保存的存档",
                 versions,
                 format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
             )
             col1, col2, col3 = st.columns(3, gap="small")
-            # with col1:
-            #     if st.button("加载此存档数据"):
-            #         if selected_save_id:
-            #             print(selected_save_id)
-            #             st.session_state.save_id = selected_save_id
-            #             # st.success(f"已加载存档！用户名：{username}，存档时间：{selected_save_id}，可使用上方按钮加载和修改数据。")
-            #             st.success(f"已加载此存档！用户名：{username}，存档时间：{selected_save_id}")
-            #             st.session_state.data_updated_step1 = True                
-            #         else:
-            #             st.error("未指定有效的存档路径！")
             with col1:
                 if st.button("加载此存档", icon="▶️", use_container_width=True):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
-                        # ✅ 新增：加载用户信息（包括 Token）
                         if load_user_info(username):
                             st.toast("已加载您的存档。", icon="✅")
                             st.toast("同时您的 Token 已恢复至生成器内，您现在可以获取落雪查分器数据了。", icon="ℹ️")
@@ -280,14 +311,6 @@ if st.session_state.get('config_saved', False):
                     else:
                         absolute_path = os.path.abspath(os.path.dirname(version_dir))
                     open_file_explorer(absolute_path)
-            # with col3:
-            #     if st.button("查看 / 修改存档", key="edit_b30_data"):
-            #         save_id = st.session_state.get('save_id', None)
-            #         save_available = check_save_available(username, save_id)
-            #         if save_available:
-            #             edit_b30_data(username, save_id)
-            #         else:
-            #             st.error("未找到b30数据，请先读取存档，或生成新存档！")
             with col3:
                 if st.button("删除存档", icon="🗑️", use_container_width=True):
                     delete_save_data(username, selected_save_id)
@@ -299,35 +322,39 @@ if st.session_state.get('config_saved', False):
     with st.container(border=True):
         st.info(f"从下面选择您使用的查分器获取 Best30 数据，系统将为您创建存档。", icon="ℹ️")
         st.warning(f"水鱼需关闭【[禁止其他人查询我的成绩](https://www.diving-fish.com/maimaidx/prober/#Profile)】以允许用户名查询", icon="⚠️")
+        
+        # 显示当前Token状态（如果有）
+        if st.session_state.get("lxns_token"):
+            st.info(f"已保存落雪查分器 Token: {st.session_state.lxns_token[:4]}******")
+        
         col1, col2 = st.columns(2)
         with col1:
             if st.button("从落雪查分器获取", help="将使用您的个人 API 密钥作为验证参数", icon="❄️", use_container_width=True):
-                try:
-                    current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
-                    save_dir = os.path.dirname(current_paths['data_file'])
-                    save_id = os.path.basename(save_dir)  # 从存档路径得到新存档的时间戳
-                    token = st.session_state.token  # 只传递Token
-                    username = st.session_state.username # 仅用于显示
-                    if save_id:
-                        os.makedirs(save_dir, exist_ok=True) # 新建存档文件夹
-                        st.session_state.save_id = save_id
-                        with st.spinner("正在获取 b30 数据..."):
-                            update_b30(
-                                update_b30_data_lxns,
-                                token,
-                                current_paths,
-                            )
-                except AttributeError:
-                    st.error("未提供 Token，是存档还没加载？", icon="❌")
-                    time.sleep(3)
-                    st.rerun()
+                if not st.session_state.get("lxns_token"):
+                    st.error("未设置落雪查分器 Token！请在上方勾选'我使用落雪查分器'并输入您的 API 密钥。", icon="❌")
+                else:
+                    try:
+                        current_paths = get_data_paths(username, timestamp=None)
+                        save_dir = os.path.dirname(current_paths['data_file'])
+                        save_id = os.path.basename(save_dir)
+                        if save_id:
+                            os.makedirs(save_dir, exist_ok=True)
+                            st.session_state.save_id = save_id
+                            with st.spinner("正在获取 b30 数据..."):
+                                update_b30(
+                                    update_b30_data_lxns,
+                                    st.session_state.lxns_token,
+                                    current_paths,
+                                )
+                    except Exception as e:
+                        st.error(f"获取数据时发生错误: {e}")
         with col2:
             if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟", use_container_width=True):
-                current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
+                current_paths = get_data_paths(username, timestamp=None)
                 save_dir = os.path.dirname(current_paths['data_file'])
-                save_id = os.path.basename(save_dir)  # 从存档路径得到新存档的时间戳
+                save_id = os.path.basename(save_dir)
                 if save_id:
-                    os.makedirs(save_dir, exist_ok=True) # 新建存档文件夹
+                    os.makedirs(save_dir, exist_ok=True)
                     st.session_state.save_id = save_id
                     with st.spinner("正在获取 b30 数据..."):
                         update_b30(
@@ -344,22 +371,12 @@ if st.session_state.get('config_saved', False):
         
         with col2:
             if st.button("新建空白存档", key="dx_int_create_new_save", icon="📄", use_container_width=True):
-                current_paths = get_data_paths(username, timestamp=None)  # 获取新的存档路径
+                current_paths = get_data_paths(username, timestamp=None)
                 save_dir = os.path.dirname(current_paths['data_file'])
-                save_id = os.path.basename(save_dir)  # 从存档路径得到新存档的时间戳
-                os.makedirs(save_dir, exist_ok=True) # 新建存档文件夹
+                save_id = os.path.basename(save_dir)
+                os.makedirs(save_dir, exist_ok=True)
                 st.session_state.save_id = save_id
                 st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}")
-
-
-    if st.session_state.get('data_updated_step1', False):
-        col1, col2 = st.columns(2, gap="small")
-        with col1:
-            st.write("确认数据无误后，前往下一步准备生成底图。")
-        
-        with col2:
-            if st.button("下一步", icon="➡️", use_container_width=True):
-                st.switch_page("st_pages/Generate_Pic_Resources.py")
 
 else:
     st.warning("请先确定用户名！", icon="⚠️")
