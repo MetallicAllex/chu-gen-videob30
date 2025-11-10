@@ -49,21 +49,20 @@ else:
     st.warning("未索引到存档，请先加载存档数据！")
 
 with st.expander("更换B30存档"):
-    st.info("如果要更换，请回到存档管理页指定其他用户名。")
+    st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
-        with st.container(border=True):
-            selected_save_id = st.selectbox(
-                "选择存档",
-                versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
-            )
-            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
-                if selected_save_id:
-                    st.session_state.save_id = selected_save_id
-                    st.rerun()
-                else:
-                    st.error("无效的存档路径！")
+        selected_save_id = st.selectbox(
+            "选择存档",
+            versions,
+            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+        )
+        if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
+            if selected_save_id:
+                st.session_state.save_id = selected_save_id
+                st.rerun()
+            else:
+                st.error("无效的存档路径！")
     else:
         st.warning("未找到任何存档，请先在存档管理页面获取存档！")
         st.stop()
@@ -227,6 +226,7 @@ def st_search_b30_videoes(dl_instance, placeholder, search_wait_time):
                 
                 song_data, ouput_info = search_one_video(dl_instance, song)
                 write_container.write(f"【{i}/30】{ouput_info}")
+                # write_container.write(f"{song_data}") # debug
 
                 # 每次搜索后都写入b30_data_file
                 with open(b30_config_file, "w", encoding="utf-8") as f:
@@ -260,7 +260,7 @@ if st.session_state.get('config_saved_step2', False):
     
     with col2:
         if st.button("下一步", disabled=not st.session_state.search_completed, use_container_width=True, icon="➡️"):
-            st.switch_page("st_pages/3_Confrim_Videoes.py")
+            st.switch_page("st_pages/3_Confirm_Videoes.py")
 else:
     st.warning("请先保存配置！", icon="⚠️")  # 如果未保存配置，给出提示
 

@@ -170,8 +170,8 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
         print(f"下载完成，正在合并视频和音频")
         os.system(f'{FFMPEG_PATH} -y -i video_temp.m4s -i audio_temp.m4s -vcodec copy -acodec copy {output_file} {REDIRECT}')
         # 删除临时文件
-        os.remove("video_temp.m4s")
-        os.remove("audio_temp.m4s")
+        # os.remove("video_temp.m4s")
+        # os.remove("audio_temp.m4s")
         print(f"合并完成，存储为: {output_name}.mp4")
 
 class Downloader(ABC):
@@ -324,7 +324,7 @@ class BilibiliDownloader(Downloader):
         return True
     
     def search_video(self, keyword): 
-            # 并发搜索50个视频可能被风控，使用同步方法逐个搜索
+            # 并发搜索视频可能被风控，使用同步方法逐个搜索
             results = sync(
                 search.search_by_type(keyword=keyword, 
                                     search_type=search.SearchObjectType.VIDEO,
@@ -367,3 +367,4 @@ class BilibiliDownloader(Downloader):
 if __name__ == "__main__":
     downloader = BilibiliDownloader()
     downloader.search_video("【(maimai】【谱面确认】 DX谱面 Aegleseeker 紫谱 Master")
+    

@@ -1,9 +1,8 @@
 import json, requests, threading
-import streamlit as st
 from PIL import Image
-from update_music_data import music_info_path
+from update_music_data import music_info_path, jp_music_info_path
+from utils.DataUtils import REVERSE_LEVEL_LABELS
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Literal, Optional, TypedDict
 
 # ========== 类型定义 ==========
 class Utils:
@@ -20,17 +19,6 @@ class Utils:
                 print("错误：JSON 解码失败。")
                 return {}
 
-class TextAnchor:
-    """用于文字的动态锚点定位"""
-    def __init__(self, x_center, y_center):
-        self.base = (x_center, y_center)
-    
-    def get_pos(self, draw, text, font, x_offset=0, y_offset=0):
-        bbox = draw.textbbox((0,0), text, font=font)
-        x = self.base[0] - (bbox[2]-bbox[0])//2 + x_offset
-        y = self.base[1] - (bbox[3]-bbox[1])//2 + y_offset
-        return (x, y)
-
 def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_file):
     """Best30 数据清洗（只要关键的）。
 
@@ -46,6 +34,9 @@ def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_f
     # 1. 加载本地曲目数据库（主线程完成）
     with open(music_info_path, 'r', encoding='utf-8') as f:
         song_db = json.load(f)
+    
+    with open(jp_music_info_path, 'r' ,encoding='utf-8') as j:
+        jp_song_db = json.load(j)
 
     # 2. 根据数据源类型提取字段映射规则
     field_map = {
@@ -66,6 +57,7 @@ def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_f
             "score": "score",
             "rating": "ra",
             "fc": "fc",
+            "fchain": None,
             "data_field": "records.b30"
         }
     }
@@ -93,16 +85,21 @@ def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_f
             processed_song = {
                 "id": song[fields["id"]],
                 "song_name": song[fields["song_name"]],
+                "artist": None,
+                "level": None,
                 "level_index": song[fields["level_index"]],
+                "level_next": None,
                 "score": song[fields["score"]],
                 "rating": song[fields["rating"]],
                 "full_combo": song[fields["fc"]],
+                "full_chain": song[fields["fchain"]] or None,
                 "clip_id": f"Best_{i + 1}"
             }
 
             # 从本地数据库匹配曲目信息
             song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
             if song_info:
+                processed_song["artist"] = song_info["artist"] # 将曲师加入曲目数据内
                 for diff in song_info.get("difficulties", []):
                     if diff.get("difficulty") == processed_song["level_index"]:
                         level_value = diff["level_value"]
@@ -124,6 +121,27 @@ def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_f
                     processed_song["level"] = song.get("level", "N/A")
                 with print_lock:
                     print(f"使用原始 level 值: {processed_song['level']} (曲目ID: {processed_song['id']})")
+            
+            # 从日服数据库匹配日服曲目信息
+            jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
+            if jp_song_info:
+                level_label = REVERSE_LEVEL_LABELS.get(processed_song["level_index"])
+                if level_label and level_label in jp_song_info["data"]:
+                    difficulty_data = jp_song_info["data"][level_label]
+                    processed_song["level_next"] = difficulty_data["const"]
+                else:
+                    with print_lock:
+                        print(f"警告：曲目【{processed_song['song_name']}】未找到 {level_label} 难度")
+            else:
+                with print_lock:
+                    print(f"警告：未找到曲目【{processed_song['song_name']}】的日服信息")
+            
+            # 备用方案 - 日服
+            if "level_next" not in processed_song:
+                # 如果没有找到日服数据，可以使用中服数据作为备用
+                processed_song["level_next"] = processed_song.get("level", "N/A")
+                with print_lock:
+                    print(f"使用国服 level 作为日服备用值: {processed_song['level_next']} (曲目ID: {processed_song['id']})")
             
             return processed_song
         except Exception as e:
@@ -182,19 +200,19 @@ def add_layer(base_image, layer_image, position=(0, 0), opacity=1.0):
 #     else:
 #         return 2
 
-def diff_bg_change(num):
-    """根据谱面难度返回对应的背景图像编号"""
-    return {2: "EXPERT", 3: "MASTER", 4: "ULTIMA"}.get(num, 2)
+# def diff_bg_change(num):
+#     """根据谱面难度返回对应的背景图像编号"""
+#     return {2: "EXPERT", 3: "MASTER", 4: "ULTIMA"}.get(num, 2)
 
 
-def special_mark(mark):
-    """FC | AJ 判定"""
-    if mark == "fullcombo":
-        return "(FC)"
-    elif mark == "alljustice":
-        return "(AJ)"
-    else:
-        return ""
+# def special_mark(mark):
+#     """FC | AJ 判定"""
+#     if mark == "fullcombo":
+#         return "(FC)"
+#     elif mark == "alljustice":
+#         return "(AJ)"
+#     else:
+#         return ""
 
 # def get_keyword(downloader_type, title_name, level_index):
 #     match level_index:
@@ -221,13 +239,12 @@ def special_mark(mark):
 #         return f"{prefix} {title_name} {dif_name}"
 
 def get_keyword(downloader_type, title_name, level_index):
-    dif_name = {0: "BASIC", 1: "ADVANCED", 2: "EXPERT", 3: "MASTER", 4: "ULTIMA"}.get(level_index, "")
-    if not dif_name:
+    if not level_index:
         print(f"Warning: 谱面{title_name}具有未指定的难度！")
     return (
-        f"{title_name} {dif_name} (譜面確認) [CHUNITHM チュウニズム]"
+        f"{title_name} {level_index} (譜面確認) [CHUNITHM チュウニズム]"
         if downloader_type == "youtube"
-        else f"【CHUNITHM/谱面预览】 {title_name} {dif_name}"
+        else f"【CHUNITHM/中二节奏】谱面确认 {title_name} {level_index}"
     )
 
 

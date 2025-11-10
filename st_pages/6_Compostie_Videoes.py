@@ -47,7 +47,7 @@ else:
     st.warning("未索引到存档，请先加载存档数据！")
 
 with st.expander("更换B30存档"):
-    st.info("如果要更换，请回到存档管理页指定其他用户名。", icon="ℹ️")
+    st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
         with st.container(border=True):

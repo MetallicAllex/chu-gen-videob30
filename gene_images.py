@@ -1,388 +1,432 @@
-import json, os
+import os, traceback
 from PIL import Image, ImageDraw, ImageFont
-from utils.Utils import TextAnchor, diff_bg_change
+from PIL.Image import Resampling
 
-VERSE_INFO_PATH = './music_datasets/jp_songs_info.json'
-BASE_FONT_NAME = "msyh"
-CORNER_IMG_PATH = "images/CornerMark.png"
+# 全局配置变量
+asset_paths = {}
+image_root_path = "./static/assets/images/Chunithm"
+ui_font_path = "./static/assets/fonts/SOURCEHANSANSSC-BOLD.OTF"
+title_font_path = "./static/assets/fonts/SweiBellLegCJKsc-Black.ttf"
+level_font_path = "./static/assets/fonts/NimbusSanL-Bol.otf"
 
-# 加载谱面数据 & 扁平化 (曲名, 难度) -> 定数
-with open(VERSE_INFO_PATH, 'r', encoding='utf-8') as f:
-    verse_db_raw = json.load(f)
+def FrameLoader(level_index: int = 0):
+    with Image.open(f"{image_root_path}/Frames/{level_index}.png") as _frame:
+        return _frame.copy()
 
-flat_const_map = {
-    (item['meta']['title'], diff): item['data'][diff]['const']
-    for item in verse_db_raw for diff in item['data']
-}
+def LevelLoader(level: float, level_next: float = 0.0):
+    lv = level if level > 1 else level_next
+    __lv = str(lv)
+    if '.' in __lv:
+        level, decimai = __lv.split('.')
+    else:
+        level, decimai = __lv, '0'
+    level_number_img = Image.new('RGBA', (108, 88), (0, 0, 0, 0))
+    
+    # 绘制数字
+    level_number_img = TextDraw(level_number_img, level, (54, 46), 
+                                font_path=level_font_path,
+                                font_size=60, font_color=(255, 255, 255))
 
-def load_fonts(base_font=BASE_FONT_NAME):
-    config = {
-        'title': ('bd', 32), 'number': ('', 72), 'song_name': ('l', 60),
-        'level': ('l', 36), 'score': ('l', 64), 'rating': ('l', 36)
-    }
-    return {
-        key: ImageFont.truetype(f"{base_font}{suffix}.ttc", size)
-        for key, (suffix, size) in config.items()
-    }
+    if int(decimai) >= 6:
+        # 绘制加号
+        level_number_img = TextDraw(level_number_img, '+', (92, 8),
+                                    font_path=level_font_path,
+                                    font_size=42, font_color=(255, 255, 255))
 
-def render_corner_logo(fonts, prefix, clip_id):
-    corner = Image.open(CORNER_IMG_PATH).resize((125, 125))
-    text_layer = Image.new("RGBA", corner.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(text_layer)
-    anchor = TextAnchor(corner.width // 2, corner.height // 2)
+    return level_number_img
 
-    draw.text(anchor.get_pos(draw, prefix, fonts['title'], -3, -52), prefix, fill=(0, 0, 0), font=fonts['title'])
-    draw.text(anchor.get_pos(draw, clip_id.split("_")[1], fonts['number'], -1, -6), clip_id.split("_")[1], fill=(255, 255, 255), font=fonts['number'])
+def ScoreLoader(score: int = 0):
+    if score < 0 or score > 1010000:
+        raise ValueError("分数无效")
+ 
+    score_str_formatted = f"{score:,}"
+    score_number_img = Image.new('RGBA', (420, 100), (0, 0, 0, 0))
+    
+    # 计算总宽度实现右对齐
+    total_width = 0
+    digit_size = (50, 80)
+    comma_size = (50, 72)
+    for char in score_str_formatted:
+        if char == ',':
+            total_width += comma_size[0] // 2
+        else:
+            total_width += digit_size[0]
 
-    return Image.alpha_composite(corner, text_layer)
+    # 从右侧开始绘制
+    current_x = 420 - total_width
+    for char in score_str_formatted:
+        if char == ',':
+            image_path = f"{image_root_path}/Numbers/AchievementNumber/comma.png"
+            char_width = comma_size[0] // 2
+        else:
+            image_path = f"{image_root_path}/Numbers/AchievementNumber/{char}.png"
+            char_width = digit_size[0]
 
-def generate_single_image(background_path, record_detail, output_path, prefix, index, verse_mode=False):
-    fonts = load_fonts()
-    with Image.open(background_path) as background:
-        bg = background.copy()
+        try:
+            with Image.open(image_path) as char_img:
+                # 确保图像是 RGBA 模式
+                if char_img.mode != 'RGBA':
+                    char_img = char_img.convert('RGBA')
+                
+                # 将图片缩放到指定大小
+                if char == ',':
+                    char_img = char_img.resize(comma_size, Resampling.LANCZOS)
+                else:
+                    char_img = char_img.resize(digit_size, Resampling.LANCZOS)
+                
+                char_y = 28 if char == ',' else 4
+                # 正确使用 paste：第三个参数是蒙版（alpha通道）
+                score_number_img.paste(char_img, (current_x, char_y), char_img)
+                current_x += char_width
+        except Exception as e:
+            print(f"加载字符 '{char}' 失败: {e}")
+            continue
+            
+    return score_number_img
 
-        # 角标
-        combined_logo = render_corner_logo(fonts, prefix, record_detail['clip_id'])
+def RatingLoader(rating: float):
+    if rating < 0:
+        raise ValueError("Rating 无效")
+    
+    # 按数值选择图像样式
+    if rating >= 17:
+        digit_style = "ex_rainbow"
+    elif rating >= 16:
+        digit_style = "rainbow"
+    else:
+        digit_style = "gold"
+    
+    ra_number_formatted = f"{rating:.2f}"
+    ra_number_img = Image.new('RGBA', (160, 50), (0, 0, 0, 0))
+    
+    # 计算总宽度实现居中对齐
+    total_width = 0
+    digit_size = (35, 48)
+    dot_size = (33, 45)
 
-        # 曲名图层
-        name_layer = Image.new("RGBA", (1308, 143))
-        name_draw = ImageDraw.Draw(name_layer)
-        anchor = TextAnchor(name_layer.width // 2, name_layer.height // 2)
-        name_draw.text(anchor.get_pos(name_draw, record_detail['song_name'], fonts['song_name'], y_offset=-10), record_detail['song_name'], fill=(0, 0, 0), font=fonts['song_name'])
+    for char in ra_number_formatted:
+        if char == '.':
+            total_width += dot_size[0] // 2
+        else:
+            total_width += digit_size[0]
+    
+    current_x = (160 - total_width) // 2
+    for char in ra_number_formatted:
+        if char == '.':
+            image_path = f"{image_root_path}/Numbers/RatingNumber/{digit_style}/dot.png"
+            char_width = dot_size[0] // 2
+            char_y = 8
+        else:   
+            image_path = f"{image_root_path}/Numbers/RatingNumber/{digit_style}/{char}.png"
+            char_width = digit_size[0]
+            char_y = 0
+        
+        try:
+            with Image.open(image_path) as char_img:
+                # 确保图像是 RGBA 模式
+                if char_img.mode != 'RGBA':
+                    char_img = char_img.convert('RGBA')
+                
+                if char == '.':
+                    char_img = char_img.resize(dot_size, Resampling.LANCZOS)
+                else:
+                    char_img = char_img.resize(digit_size, Resampling.LANCZOS)
+                
+                # 正确使用 paste
+                ra_number_img.paste(char_img, (current_x, char_y), char_img)
+                current_x += char_width
+        except Exception as e:
+            print(f"加载字符 '{char}' 失败: {e}")
+            continue
 
-        # 等级图层
-        level_layer = Image.new("RGBA", (1308, 83))
-        level_draw = ImageDraw.Draw(level_layer)
-        anchor = TextAnchor(level_layer.width // 2, level_layer.height // 2)
+    return ra_number_img  # 修正：在循环结束后返回
+        
+def ComboStatusLoader(combo_status: str = "", score: int = 0):
+    match combo_status:
+        case _ if combo_status == '' or combo_status is None:
+            return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
+        case _ if combo_status == 'alljustice' and score == 1010000:
+            with Image.open(f"{image_root_path}/ComboStatus/13.png") as _comboStatus:
+                return _comboStatus.copy()
+        case _ if combo_status == 'alljustice':
+            with Image.open(f"{image_root_path}/ComboStatus/12.png") as _comboStatus:
+                return _comboStatus.copy()
+        case _ if combo_status == 'fullcombo' :
+            with Image.open(f"{image_root_path}/ComboStatus/11.png") as _comboStatus:
+                return _comboStatus.copy()
 
-        difficulty_name = diff_bg_change(record_detail['level_index'])
-        old_const = record_detail['level']
-        new_const = flat_const_map.get((record_detail['song_name'], difficulty_name), old_const)
 
-        if verse_mode:
-            if new_const == old_const:
-                level_text = f"{difficulty_name}[{old_const}(X-VERSE)]"
+def ChainStatusLoader(chain_status: str = ""):
+    match chain_status:
+        case _ if chain_status == '' or chain_status is None:
+            return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
+        case _ if chain_status == 'fullchain2':
+            with Image.open(f"{image_root_path}/ComboStatus/22.png") as _chainStatus:
+                return _chainStatus.copy()
+        case _ if chain_status == 'fullchain':
+            with Image.open(f"{image_root_path}/ComboStatus/21.png") as _chainStatus:
+                return _chainStatus.copy()
+
+
+def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
+                 font_path=None, font_size=32, font_color=(255, 255, 255), h_align: str = "center"):
+        """
+        绘制文本，若超出最大宽度则缩小字体直至适配
+
+        Args:
+            image (PIL.Image): 目标图像
+            text (str): 要绘制的文本
+            pos (tuple): 基准位置 (x, y)。水平含义由 h_align 决定:
+                         h_align = 'left'  -> pos 作为文本左边界
+                         h_align = 'center'-> pos 作为文本水平中心
+                         h_align = 'right' -> pos 作为文本右边界
+                         垂直方向始终居中
+            max_width (int): 最大允许宽度
+            font_path (str): 字体文件路径
+            font_size (int): 初始字体大小
+            font_color (tuple): 字体颜色 (R, G, B)
+            h_align (str): 水平对齐方式: 'left' | 'center' | 'right'
+        """
+
+        # 载入文字元素
+        Draw = ImageDraw.Draw(image)
+        if not font_path:
+            font_path = ui_font_path
+
+        # 校验对齐
+        if h_align not in ("left", "center", "right"):
+            raise ValueError(f"h_align 必须为 'left' | 'center' | 'right', 当前: {h_align}")
+
+        # 动态调整字体大小以适配最大宽度
+        Font = ImageFont.truetype(font_path, font_size)
+        Bbox = Draw.textbbox((0, 0), text, font=Font)
+        text_width = Bbox[2] - Bbox[0]
+
+        while text_width > max_width and font_size > 10:
+            font_size -= 1
+            Font = ImageFont.truetype(font_path, font_size)
+            Bbox = Draw.textbbox((0, 0), text, font=Font)
+            text_width = Bbox[2] - Bbox[0]
+        text_height = Bbox[3] - Bbox[1]
+        # 计算水平起点
+        if h_align == "left":
+            x = pos[0]
+        elif h_align == "center":
+            x = pos[0] - text_width // 2
+        else:  # right
+            x = pos[0] - text_width
+        # 垂直始终居中
+        y = pos[1] - text_height // 2
+        text_pos = (x, y)
+        Draw.text(text_pos, text, fill=font_color, font=Font)
+        return image
+
+def generate_single_image(record_detail: dict, output_path, prefix, index):
+    """
+    生成单个Best30成绩记录图片。
+
+    Args:
+        record_detail (dict): 成绩记录详情，包含以下字段：
+            - song_name (str): 乐曲标题
+            - level_index (int): 难度索引
+            - score (int): 分数
+            - rating (float): Rating值
+            - full_combo (str): FC状态，可选值：空、'fullcombo'、'alljustice'
+            - full_chain (str): 连锁状态，可选值：空、'fullchain'、'fullchain2'
+            - clip_id (str): 标识符
+            - level (float): 当前定数
+            - level_next (float): 下版本定数
+        output_path (str): 输出目录
+        prefix (str): 文件名前缀
+        index (int): 索引编号
+        verse_mode (bool): 是否显示定数变化模式
+
+    Returns:
+        None
+    """
+    background = None
+    try:
+        assert record_detail['level_index'] in range(0, 5)
+        image_base_path = os.path.join(os.getcwd(), f"{image_root_path}/content_base_chunithm_verse.png")
+        with Image.open(image_base_path) as background:
+            background = background.convert("RGBA")
+            assert background.size == (1920, 1080)
+            
+            # 载入元素
+            temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
+            
+            # 边框
+            frame = FrameLoader(record_detail['level_index'])
+            # 确保frame是RGBA模式
+            if frame.mode != 'RGBA':
+                frame = frame.convert('RGBA')
+            temp_img.paste(frame, (65, 32), frame)
+            
+            # 等级
+            level = LevelLoader(record_detail['level'], record_detail['level_next'])
+            if level.mode != 'RGBA':
+                level = level.convert('RGBA')
+            temp_img.paste(level, (98, 884), level)
+            
+            # 定数
+            cur_pos = (1562, 1018)
+            next_pos = (1756, 1018)
+            cur_level = record_detail['level']
+            next_level = record_detail['level_next']
+            cur_text = str(cur_level)
+            if cur_level <= 0.0:
+                cur_text = "--"
+            temp_img = TextDraw(temp_img, cur_text, cur_pos,
+                                 font_path=title_font_path,
+                                 font_size=45, font_color=(77, 77, 77), h_align="center")
+            
+            if cur_level <= 0:
+                next_text = str(next_level)
+            elif next_level > cur_level:
+                next_text = str(next_level) + "↑" 
+            elif next_level < cur_level:
+                next_text = str(next_level) + "↓"
             else:
-                level_text = f"{difficulty_name}[{old_const} → {new_const:.1f}(X-VERSE)]"
-        else:
-            level_text = f"{difficulty_name} {old_const}"
+                next_text = str(next_level) + "→"
+            temp_img = TextDraw(temp_img, next_text, next_pos,
+                                 font_path=title_font_path,
+                                 font_size=45, font_color=(77, 77, 77), h_align="center")
+            
+            # 分数
+            score_pos = (706, 958)
+            score = ScoreLoader(record_detail["score"])
+            if score.mode != 'RGBA':
+                score = score.convert('RGBA')
+            temp_img.paste(score, score_pos, score)
 
-        level_draw.text(anchor.get_pos(level_draw, level_text, fonts['level'], y_offset=-20), level_text, fill=(0, 0, 0), font=fonts['level'])
+            # Rating
+            rating_pos = (1216, 980)
+            rating = RatingLoader(record_detail["rating"])
+            if rating.mode != 'RGBA':
+                rating = rating.convert('RGBA')
+            temp_img.paste(rating, rating_pos, rating)
 
-        # 分数图层
-        score_layer = Image.new("RGBA", (437, 143))
-        score_draw = ImageDraw.Draw(score_layer)
-        anchor = TextAnchor(score_layer.width // 2, score_layer.height // 2)
-        # score_text = str(record_detail['score']) + special_mark(record_detail['full_combo'])
-        score_text = f"{record_detail['score']}{dict(fullcombo='(FC)', alljustice='(AJ)').get(record_detail['full_combo'], '')}"
-        score_draw.text(anchor.get_pos(score_draw, score_text, fonts['score'], y_offset=-17), score_text, fill=(0, 0, 0), font=fonts['score'])
+            # Combo
+            combo_pos = (424, 971)
+            combo_status = ComboStatusLoader(record_detail['full_combo'], record_detail['score']).resize([243, 40], Resampling.LANCZOS)
+            if combo_status.mode != 'RGBA':
+                combo_status = combo_status.convert('RGBA')
+            temp_img.paste(combo_status, combo_pos, combo_status)
 
-        # Rating图层
-        rating_layer = Image.new("RGBA", (437, 83))
-        rating_draw = ImageDraw.Draw(rating_layer)
-        anchor = TextAnchor(rating_layer.width // 2, rating_layer.height // 2)
-        base_rating = record_detail["rating"]
-        new_rating = base_rating + (new_const - old_const)
+            # Chain
+            chain_pos = (423, 1015)
+            chain_status = ChainStatusLoader(record_detail['full_chain']).resize([243, 40], Resampling.LANCZOS)
+            if chain_status.mode != 'RGBA':
+                chain_status = chain_status.convert('RGBA')
+            temp_img.paste(chain_status, chain_pos, chain_status)
 
-        if verse_mode:
-            rating_text = f'{base_rating:.2f}(verse)' if new_const == old_const else f'{base_rating:.2f} → {new_rating:.2f}(verse)'
-        else:
-            rating_text = f'{base_rating:.2f}'
+            # 标题
+            title_pos = (234, 876)
+            temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=900,
+                                 font_path=title_font_path, font_size=48,
+                                 font_color=(26, 0, 84), h_align="left")
+            
+            # 曲师
+            artist_pos = (234, 936)
+            temp_img = TextDraw(temp_img, record_detail['artist'], artist_pos, max_width=420,
+                                 font_path=title_font_path, font_size=36,
+                                 font_color=(26, 0, 84), h_align="left")
+            
+            # Best 序号
+            best_number = index + 1 # Best 倒序
+            best_pos = (245, 1017)
+            temp_img = TextDraw(temp_img, f"Best #{best_number}", best_pos, max_width=200,
+                                font_path=title_font_path, font_size=28,
+                                font_color=(255, 255, 255), h_align="center")
+            
+            
+            # 将temp_img合成到background上
+            background = Image.alpha_composite(background, temp_img)
+    except Exception as e:
+            print(f"在生成图像时出现错误：{e}")
+            print(traceback.format_exc())
+            background = Image.new('RGBA', (1520, 500), (0, 0, 0, 255))
+    finally:
+        background.save(os.path.join(output_path, f"{prefix}_{best_number}.png"))
 
-        rating_draw.text(anchor.get_pos(rating_draw, rating_text, fonts['rating'], y_offset=-15), rating_text, fill=(0, 0, 0), font=fonts['rating'])
-
-        # 合成图层
-        layers = [
-            (name_layer, (59, 860)),
-            (level_layer, (59, 1013)),
-            (score_layer, (1420, 864)),
-            (rating_layer, (1420, 1008)),
-            (combined_logo, (60, 875))
-        ]
-
-        for layer, position in layers:
-            bg.paste(layer, position, layer)
-
-        bg.save(os.path.join(output_path, f"{prefix}_{index + 1}.png"))
-
-
-# verse_info_path = './music_datasets/jp_songs_info.json'
-
-# # 加速用缓存：曲名 -> 谱面信息
-# with open(verse_info_path, 'r', encoding='utf-8') as f:
-#     verse_db_raw = json.load(f)
-# verse_db = {item['meta']['title']: item for item in verse_db_raw}
-
-# def generate_single_image(background_path, record_detail, output_path, prefix, index):
-#     """完整锚点定位方案。
-
-#     Args:
-#         background_path(path): 背景图路径
-#         record_detail(list): Best 曲目数据
-#         output_path(path): 输出路径
-#         prefix(str): 前缀（默认 Best）
-#         index(int): Best 曲目序号
-    
-#     Returns:
-#         bg (Image): 生成的成绩底图
-#     """
-#     # 基础字体配置（可扩展）
-#     FONT_CONFIG = {
-#         'title':       ('bd', 32),
-#         'number':      ('',  72),  # 无后缀
-#         'song_name':   ('l', 60),
-#         'level':       ('l', 36),
-#         'score':      ('l', 64),
-#         'rating':     ('l', 36)
-#     }
-
-#     BASE_FONT_NAME = "msyh"
-
-#     fonts = {
-#         key: ImageFont.truetype(
-#             f"{BASE_FONT_NAME}{suffix}.ttc",  # 自动拼接后缀
-#             size
-#         ) for key, (suffix, size) in FONT_CONFIG.items()
-#     }
-
-#     with Image.open(background_path) as background:
-#         # ========== Best角标处理 ==========
-#         best_corner = Image.open("images/CornerMark.png").resize((125, 125))
-#         text_corner_layer = Image.new("RGBA", best_corner.size, (0, 0, 0, 0))
-#         corner_draw = ImageDraw.Draw(text_corner_layer)
-        
-#         # 创建角标锚点（中心点）
-#         corner_anchor = TextAnchor(best_corner.width // 2, best_corner.height // 2)
-        
-#         # 绘制"Best"文字
-#         title_pos = corner_anchor.get_pos(corner_draw, "Best", fonts['title'], -3, -52)
-#         corner_draw.text(title_pos, "Best", fill=(0, 0, 0), font=fonts['title'])
-        
-#         # 绘制数字
-#         num_text = record_detail["clip_id"].split("_")[1]
-#         num_pos = corner_anchor.get_pos(corner_draw, num_text, fonts['number'], -1, -6)
-#         corner_draw.text(num_pos, num_text, fill=(255, 255, 255), font=fonts['number'])
-        
-#         # 合并角标图层
-#         combined_logo = Image.alpha_composite(best_corner, text_corner_layer)
-
-#         # ========== 曲名图层 ==========
-#         name_layer = Image.new("RGBA", (1308, 143))
-#         name_draw = ImageDraw.Draw(name_layer)
-#         name_anchor = TextAnchor(name_layer.width // 2, name_layer.height // 2)
-        
-#         song_name_pos = name_anchor.get_pos(
-#             name_draw, 
-#             record_detail["song_name"], 
-#             fonts['song_name'],
-#             y_offset=-10
-#         )
-#         name_draw.text(song_name_pos, record_detail["song_name"], fill=(0, 0, 0), font=fonts['song_name'])
-
-#         # ========== 等级图层 ==========
-#         level_layer = Image.new("RGBA", (1308, 83))
-#         level_draw = ImageDraw.Draw(level_layer)
-#         level_anchor = TextAnchor(level_layer.width // 2, level_layer.height // 2)
-        
-#         level_text = f"{diff_bg_change(record_detail['level_index'])} {record_detail['level']}"
-#         level_pos = level_anchor.get_pos(
-#             level_draw,
-#             level_text,
-#             fonts['level'],
-#             y_offset=-20
-#         )
-#         level_draw.text(level_pos, level_text, fill=(0, 0, 0), font=fonts['level'])
-
-#         # ========== 分数图层 ==========
-#         score_layer = Image.new("RGBA", (437, 143))
-#         score_draw = ImageDraw.Draw(score_layer)
-#         score_anchor = TextAnchor(score_layer.width // 2, score_layer.height // 2)
-        
-#         score_text = str(record_detail['score']) + special_mark(record_detail['full_combo'])
-#         score_pos = score_anchor.get_pos(
-#             score_draw,
-#             score_text,
-#             fonts['score'],
-#             y_offset=-17
-#         )
-#         score_draw.text(score_pos, score_text, fill=(0, 0, 0), font=fonts['score'])
-
-#         # ========== Rating图层 ==========
-#         rating_layer = Image.new("RGBA", (437, 83))
-#         rating_draw = ImageDraw.Draw(rating_layer)
-#         rating_anchor = TextAnchor(rating_layer.width // 2, rating_layer.height // 2)
-        
-#         rating_text = f'{record_detail["rating"]:.2f}'
-#         rating_pos = rating_anchor.get_pos(
-#             rating_draw,
-#             rating_text,
-#             fonts['rating'],
-#             y_offset=-15
-#         )
-#         rating_draw.text(rating_pos, rating_text, fill=(0, 0, 0), font=fonts['rating'])
-
-#         # ========== 最终合成 ==========
-#         bg = background.copy()
-#         layers = [
-#             (name_layer, (59, 860)),    # 曲名位置
-#             (level_layer, (59, 1013)),  # 等级位置
-#             (score_layer, (1420, 864)), # 分数位置
-#             (rating_layer, (1420, 1008)),# Rating位置
-#             (combined_logo, (60, 875))  # 角标位置
-#         ]
-        
-#         for layer, position in layers:
-#             bg.paste(layer, position, layer)
-        
-#         # 保存结果
-#         bg.save(os.path.join(output_path, f"{prefix}_{index + 1}.png"))
-
-# def generate_single_image_verse(background_path, record_detail, output_path, prefix, index):
-#     """完整锚点定位方案。
-
-#     Args:
-#         background_path(path): 背景图路径
-#         record_detail(list): Best 曲目数据
-#         output_path(path): 输出路径
-#         prefix(str): 前缀（默认 Best）
-#         index(int): Best 曲目序号
-    
-#     Returns:
-#         bg (Image): 生成的成绩底图
-#     """
-#     # 基础字体配置（可扩展）
-#     FONT_CONFIG = {
-#         'title':       ('bd', 32),
-#         'number':      ('',  72),  # 无后缀
-#         'song_name':   ('l', 60),
-#         'level':       ('l', 36),
-#         'score':      ('l', 64),
-#         'rating':     ('l', 36)
-#     }
-
-#     BASE_FONT_NAME = "msyh"
-
-#     fonts = {
-#         key: ImageFont.truetype(
-#             f"{BASE_FONT_NAME}{suffix}.ttc",  # 自动拼接后缀
-#             size
-#         ) for key, (suffix, size) in FONT_CONFIG.items()
-#     }
-
-#     with Image.open(background_path) as background:
-#         # ========== Best角标处理 ==========
-#         best_corner = Image.open("images/CornerMark.png").resize((125, 125))
-#         text_corner_layer = Image.new("RGBA", best_corner.size, (0, 0, 0, 0))
-#         corner_draw = ImageDraw.Draw(text_corner_layer)
-        
-#         # 创建角标锚点（中心点）
-#         corner_anchor = TextAnchor(best_corner.width // 2, best_corner.height // 2)
-        
-#         # 绘制"Best"文字
-#         title_pos = corner_anchor.get_pos(corner_draw, "Best", fonts['title'], -3, -52)
-#         corner_draw.text(title_pos, "Best", fill=(0, 0, 0), font=fonts['title'])
-        
-#         # 绘制数字
-#         num_text = record_detail["clip_id"].split("_")[1]
-#         num_pos = corner_anchor.get_pos(corner_draw, num_text, fonts['number'], -1, -6)
-#         corner_draw.text(num_pos, num_text, fill=(255, 255, 255), font=fonts['number'])
-        
-#         # 合并角标图层
-#         combined_logo = Image.alpha_composite(best_corner, text_corner_layer)
-
-#         # ========== 曲名图层 ==========
-#         name_layer = Image.new("RGBA", (1308, 143))
-#         name_draw = ImageDraw.Draw(name_layer)
-#         name_anchor = TextAnchor(name_layer.width // 2, name_layer.height // 2)
-        
-#         song_name_pos = name_anchor.get_pos(
-#             name_draw, 
-#             record_detail["song_name"], 
-#             fonts['song_name'],
-#             y_offset=-10
-#         )
-#         name_draw.text(song_name_pos, record_detail["song_name"], fill=(0, 0, 0), font=fonts['song_name'])
-
-#         # ========== 等级图层 ==========
-#         level_layer = Image.new("RGBA", (1308, 83))
-#         level_draw = ImageDraw.Draw(level_layer)
-#         level_anchor = TextAnchor(level_layer.width // 2, level_layer.height // 2)
-
-#         # 将 level_index 转为难度名
-#         difficulty_name = diff_bg_change(record_detail['level_index'])  # e.g. "MASTER"
-
-#         # 寻找匹配的谱面信息
-#         matched_chart = verse_db.get(record_detail['song_name'])
-
-#         if matched_chart:
-#             new_const = matched_chart['data'][difficulty_name]['const']
-#             old_const = record_detail['level']
-#             if new_const == old_const:
-#                 level_text = f"{difficulty_name}[{old_const}(verse)]"
+# def generate_single_image(record_detail: dict, output_path, prefix, index):
+#     # 预先初始化背景
+#     background = None
+#     try:
+#         assert record_detail['level_index'] in range(0, 5)
+#         image_base_path = os.path.join(os.getcwd(), f"{image_root_path}/content_base_chunithm_verse.png")
+#         with Image.open(image_base_path) as background:
+#             background = background.convert("RGBA")
+#             assert background.size == (1920, 1080)
+            
+#             # 载入元素
+#             temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
+            
+#             # 边框
+#             frame = FrameLoader(record_detail['level_index'])
+#             temp_img.paste(frame, (65, 32), frame)
+            
+#             # 等级
+#             level = LevelLoader(record_detail['level'], record_detail['level_next'])
+#             temp_img.paste(level, (102, 844), level)
+            
+#             # 定数
+#             cur_pos = (1562, 1018)
+#             next_pos = (1756, 1018)
+#             cur_level = record_detail['level']
+#             next_level = record_detail['level_next']
+#             cur_text = str(cur_level)
+#             if cur_level <= 0.0:  # 非当前版本谱面使用 0 来标记
+#                 cur_level = "--"
+#             temp_img = TextDraw(temp_img, cur_text, cur_pos,
+#                                  font_path=title_font_path,
+#                                  font_size=45, font_color=(77, 77, 77), h_align="center")
+            
+#             if cur_level <= 0:
+#                 next_text = str(next_level)
+#             elif next_level > cur_level:
+#                 next_text = str(next_level) + "↑" 
+#             elif next_level < cur_level:
+#                 next_text = str(next_level) + "↓"
 #             else:
-#                 level_text = f"{difficulty_name}[{old_const} → {new_const}(verse)]"
-#         else:
-#             # 如果没匹配到曲目不处理
-#             level_text = f"{difficulty_name} {record_detail['level']}"
+#                 next_text = str(next_level) + "→"
+#             temp_img = TextDraw(temp_img, next_text, next_pos,
+#                                  font_path=title_font_path,
+#                                  font_size=45, font_color=(77, 77, 77), h_align="center")
+            
+#             # 分数
+#             score_pos = (706, 958)
+#             score = ScoreLoader(record_detail["score"])
+#             temp_img.paste(score, score_pos, score)
 
-#         level_pos = level_anchor.get_pos(
-#             level_draw,
-#             level_text,
-#             fonts['level'],
-#             y_offset=-20
-#         )
-#         level_draw.text(level_pos, level_text, fill=(0, 0, 0), font=fonts['level'])
+#             # Rating
+#             rating_pos = (1216, 980)
+#             rating = RatingLoader(record_detail["rating"])
+#             temp_img.paste(rating, rating_pos, rating)
 
-#         # ========== 分数图层 ==========
-#         score_layer = Image.new("RGBA", (437, 143))
-#         score_draw = ImageDraw.Draw(score_layer)
-#         score_anchor = TextAnchor(score_layer.width // 2, score_layer.height // 2)
-        
-#         score_text = str(record_detail['score']) + special_mark(record_detail['full_combo'])
-#         score_pos = score_anchor.get_pos(
-#             score_draw,
-#             score_text,
-#             fonts['score'],
-#             y_offset=-17
-#         )
-#         score_draw.text(score_pos, score_text, fill=(0, 0, 0), font=fonts['score'])
+#             # Combo
+#             combo_pos = (426, 975)
+#             combo_status = ComboStatusLoader(record_detail['full_combo'], record_detail['score'])
+#             temp_img.paste(combo_status, combo_pos, combo_status)
 
-#         # ========== Rating图层 ==========
-#         rating_layer = Image.new("RGBA", (437, 83))
-#         rating_draw = ImageDraw.Draw(rating_layer)
-#         rating_anchor = TextAnchor(rating_layer.width // 2, rating_layer.height // 2)
-        
-#         new_rating = record_detail["rating"] + (new_const - old_const)
+#             # Chain
+#             chain_pos = (426, 1020)
+#             chain_status = ChainStatusLoader(record_detail['full_chain'])
+#             temp_img.paste(chain_status, chain_pos, chain_status)
 
-#         if record_detail["rating"] == new_rating:
-#             rating_text = f'{record_detail["rating"]:.2f}(verse)'
-#         else:
-#             rating_text = f'{record_detail["rating"]:.2f} → {new_rating:.2f}(verse)'
-#         rating_pos = rating_anchor.get_pos(
-#             rating_draw,
-#             rating_text,
-#             fonts['rating'],
-#             y_offset=-15
-#         )
-#         rating_draw.text(rating_pos, rating_text, fill=(0, 0, 0), font=fonts['rating'])
-
-#         # ========== 最终合成 ==========
-#         bg = background.copy()
-#         layers = [
-#             (name_layer, (59, 860)),    # 曲名位置
-#             (level_layer, (59, 1013)),  # 等级位置
-#             (score_layer, (1420, 864)), # 分数位置
-#             (rating_layer, (1420, 1008)),# Rating位置
-#             (combined_logo, (60, 875))  # 角标位置
-#         ]
-        
-#         for layer, position in layers:
-#             bg.paste(layer, position, layer)
-        
-#         # 保存结果
-#         bg.save(os.path.join(output_path, f"{prefix}_{index + 1}.png"))
+#             # 标题
+#             title_pos = (234, 876)
+#             temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=900,
+#                                  font_path=title_font_path, font_size=48,
+#                                  font_color=(26, 0, 84), h_align="left")
 
 
+#     except Exception as e:
+#             print(f"在生成图像时出现错误：{e}")
+#             print(traceback.format_exc())
+#             background = Image.new('RGBA', (1520, 500), (0, 0, 0, 255))
+#     finally:
+#         background.save(os.path.join(output_path, f"{prefix}_{index + 1}.png"))
 
 def generate_b30_images(UserID, b35_data, output_dir):
     print("生成B30图片中...")

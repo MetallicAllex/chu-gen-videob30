@@ -1,10 +1,4 @@
-
-
-import os
-import glob
-import time
-import json
-import traceback
+import os, glob, json, traceback
 import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
@@ -96,7 +90,7 @@ if 'use_lxns' not in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get('save_id', None)
-token = st.session_state.get("lxns_token", None)
+token = st.session_state.get("token", None)
 
 with st.container(border=True):
     input_username = st.text_input(
@@ -107,13 +101,14 @@ with st.container(border=True):
     
     # 添加复选框控制是否显示Token输入框
     use_lxns = st.checkbox(
-        "我使用落雪查分器", 
+        "我使用落雪查分器（更新后请勿再次勾选，避免因反复更新导致 Token 丢失）", 
         value=st.session_state.use_lxns,
         help="如果您使用落雪查分器作为数据源，请勾选此项"
     )
     
     # 根据复选框状态决定是否显示Token输入框
     if use_lxns:
+        st.toast("若已经更新 Token，请勿再次勾选，避免因反复更新导致 Token 丢失", icon="❗")
         col1, col2 = st.columns([0.75, 0.2], vertical_alignment='bottom')
         with col1:
             input_token = st.text_input(
@@ -138,12 +133,12 @@ with st.container(border=True):
                                     user_info = json.load(f)
                                 
                                 # 更新Token
-                                user_info["lxns_token"] = input_token.strip()
+                                user_info["token"] = input_token.strip()
                                 
                                 with open(userinfo_file, 'w', encoding='utf-8') as f:
                                     json.dump(user_info, f, indent=2, ensure_ascii=False)
                                 
-                                st.session_state.lxns_token = input_token.strip()
+                                st.session_state.token = input_token.strip()
                                 st.toast("Token 已更新！", icon="✅")
                             else:
                                 st.toast("未找到用户信息文件", icon="❌")
@@ -176,14 +171,14 @@ with st.container(border=True):
             
             # 只有在使用落雪查分器时才保存或更新Token
             if use_lxns:
-                user_info["lxns_token"] = input_token.strip()
+                user_info["token"] = input_token.strip()
             # 如果不使用落雪查分器，但之前有Token，保留原有Token
-            elif "lxns_token" in user_info:
+            elif "token" in user_info:
                 # 保留原有Token，不做修改
                 pass
             else:
                 # 既不使用落雪查分器，也没有原有Token，设置为空
-                user_info["lxns_token"] = ""
+                user_info["token"] = ""
             
             # 保存用户信息
             with open(userinfo_file, 'w', encoding='utf-8') as f:
@@ -192,7 +187,7 @@ with st.container(border=True):
             st.success("用户信息已保存！", icon="✅")
             st.session_state.update({
                 "username": username,
-                "lxns_token": user_info.get("lxns_token", ""),
+                "token": user_info.get("token", ""),
                 "use_lxns": use_lxns,
                 "config_saved": True
             })
@@ -266,8 +261,8 @@ def load_user_info(username):
                 # 更新 session_state
                 st.session_state.update({
                     "username": user_info.get("username", username),
-                    "lxns_token": user_info.get("lxns_token", ""),
-                    "use_lxns": bool(user_info.get("lxns_token", "")),  # 如果有Token，默认勾选使用落雪查分器
+                    "token": user_info.get("token", ""),
+                    "use_lxns": bool(user_info.get("token", "")),  # 如果有Token，默认勾选使用落雪查分器
                 })
                 return True
         except Exception as e:
@@ -297,6 +292,7 @@ if st.session_state.get('config_saved', False):
                         st.session_state.save_id = selected_save_id
                         if load_user_info(username):
                             st.toast("已加载您的存档。", icon="✅")
+                            st.session_state.token = token
                             st.toast("同时您的 Token 已恢复至生成器内，您现在可以获取落雪查分器数据了。", icon="ℹ️")
                         else:
                             st.warning("存档加载成功，但未找到用户信息（可能需要重新输入 Token）。")
@@ -319,18 +315,22 @@ if st.session_state.get('config_saved', False):
         st.warning(f"{username} 还没有历史存档，请从下方获取新的 Best30 数据。")
 
     st.write(f"新建 / 获取 b30 数据")
+    st.info("""
+            从下面选择您使用的查分器获取 Best30 数据，系统将为您创建存档。
+            - 水鱼需关闭【[禁止其他人查询我的成绩](https://www.diving-fish.com/maimaidx/prober/#Profile)】以允许用户名查询
+            - 落雪若加载存档后，下方未出现【已保存落雪查分器 Token】，请重新加载
+            """, icon="ℹ️")
     with st.container(border=True):
-        st.info(f"从下面选择您使用的查分器获取 Best30 数据，系统将为您创建存档。", icon="ℹ️")
-        st.warning(f"水鱼需关闭【[禁止其他人查询我的成绩](https://www.diving-fish.com/maimaidx/prober/#Profile)】以允许用户名查询", icon="⚠️")
+        st.warning("""因落雪返回数据未区分新旧曲，目前仅支持生成账号内最高 Rating 的 30 首曲目。""", icon="⚠️")
         
         # 显示当前Token状态（如果有）
-        if st.session_state.get("lxns_token"):
-            st.info(f"已保存落雪查分器 Token: {st.session_state.lxns_token[:4]}******")
-        
+        if st.session_state.get("token"):
+            st.info(f"已保存落雪查分器 Token: {st.session_state.token[:4]}******", icon="ℹ️")
+            
         col1, col2 = st.columns(2)
         with col1:
             if st.button("从落雪查分器获取", help="将使用您的个人 API 密钥作为验证参数", icon="❄️", use_container_width=True):
-                if not st.session_state.get("lxns_token"):
+                if not st.session_state.get("token"):
                     st.error("未设置落雪查分器 Token！请在上方勾选'我使用落雪查分器'并输入您的 API 密钥。", icon="❌")
                 else:
                     try:
@@ -343,7 +343,7 @@ if st.session_state.get('config_saved', False):
                             with st.spinner("正在获取 b30 数据..."):
                                 update_b30(
                                     update_b30_data_lxns,
-                                    st.session_state.lxns_token,
+                                    st.session_state.token,
                                     current_paths,
                                 )
                     except Exception as e:
@@ -363,7 +363,7 @@ if st.session_state.get('config_saved', False):
                             current_paths,
                         )
 
-        st.error("因外服缺少测试样本，且 VERSE [修改了 Best 机制](https://zh.moegirl.org.cn/CHUNITHM#Rating)，我们目前无法支持其导入数据", icon="❌")
+        st.error("因外服缺少测试样本，我们目前无法支持导入其数据，不过您仍可尝试手动编写", icon="❌")
 
         col1, col2 = st.columns(2, gap="small")
         with col1:
@@ -377,6 +377,14 @@ if st.session_state.get('config_saved', False):
                 os.makedirs(save_dir, exist_ok=True)
                 st.session_state.save_id = save_id
                 st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}")
-
+        
+    if st.session_state.get('data_updated_step1', False):
+        col1, col2 = st.columns(2, gap="small")
+        with col1:
+            st.write("确认数据无误后，前往下一步准备生成底图。")
+        
+        with col2:
+            if st.button("下一步", icon="➡️", use_container_width=True):
+                st.switch_page("st_pages/Generate_Pic_Resources.py")
 else:
     st.warning("请先确定用户名！", icon="⚠️")

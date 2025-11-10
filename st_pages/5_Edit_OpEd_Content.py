@@ -40,13 +40,13 @@ def edit_context_widget(name, config, config_file_path):
             with st.expander(f"{name} 展示：第 {idx + 1} 页", expanded=True):
                 # 添加版本选择器
                 list_versions = G_config.get("AVAILABLE_VERSION", [])
-                sel_version = st.radio(
-                    "选择背景播放的游戏版本",
-                    options=list_versions,
-                    index=list_versions.index(item["version"]) if item["version"] in list_versions else 0,
-                    key=f"{item['id']}_version",
-                    horizontal=True
-                )
+                # sel_version = st.radio(
+                #     "选择背景播放的游戏版本",
+                #     options=list_versions,
+                #     index=list_versions.index(item["version"]) if item["version"] in list_versions else 0,
+                #     key=f"{item['id']}_version",
+                #     horizontal=True
+                # )
                 # 文本编辑框
                 new_text = st.text_area(
                     "文本内容",
@@ -55,7 +55,7 @@ def edit_context_widget(name, config, config_file_path):
                     placeholder="请输入要展示的文本（每页最多 250 字）"
                 )
                 items[idx]["text"] = new_text
-                items[idx]['version'] = sel_version
+                # items[idx]['version'] = sel_version
 
                 scol1, scol2 = st.columns(2, vertical_alignment="bottom")
                 with scol1:
@@ -90,7 +90,7 @@ def edit_context_widget(name, config, config_file_path):
                     "id": f"{name}_{len(items) + 1}",
                     "duration": 10,
                     "text": "",
-                    "version": "LUMINOUS"
+                    # "version": "LUMINOUS"
                 }
                 items.append(new_item)
                 st.session_state[f"{name}_items"] = items
@@ -134,7 +134,7 @@ else:
     st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
 
 with st.expander("更换B30存档"):
-    st.info("要更换，请回到存档管理页指定其他用户名。", icon="ℹ️")
+    st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
         with st.container(border=True):
@@ -168,10 +168,13 @@ if config:
     with col2:
         st.subheader("片尾")
         edit_context_widget("ending", config, video_config_file)
-
-    st.write("配置完毕后，即可进入视频生成步骤")
-    if st.button("下一步"):
-        st.switch_page("st_pages/6_Compostie_Videoes.py")
+    
+    col1, col2 = st.columns(2, vertical_alignment="center")
+    with col1:
+        st.write("配置完毕后，即可准备生成您的 Best30 视频")
+    with col2:
+        if st.button("下一步", use_container_width=True, icon="➡️"):
+            st.switch_page("st_pages/6_Compostie_Videoes.py")
 else:
     st.warning("未找到视频生成生成配置！请检查是否完成了4-1！", icon="⚠️")
 

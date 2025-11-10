@@ -1,12 +1,6 @@
-import json
-import os
+import json, requests, base64, hashlib, struct
 from typing import List
-import requests
-import base64
-import hashlib
-import struct
 from PIL import Image
-import re
 
 BUCKET_ENDPOINT = "https://nickbit-maigen-images.oss-cn-shanghai.aliyuncs.com"
 DATA_ENDPOINT = "https://maimai.lxns.net"

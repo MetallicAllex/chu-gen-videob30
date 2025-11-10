@@ -72,15 +72,16 @@ def st_generate_b30_images(placeholder, save_paths):
     b30_data = load_config(save_paths['data_file'])
     image_path = save_paths['image_dir']
     
-    def worker(index, record_detail):
+    def worker(record_detail):
+        prefix, index = record_detail['clip_id'].split('_', 1)
         try:
             generate_single_image(
-                f"./images/LevelBg/{record_detail['level_index']}.png",
-                {"score": str(record_detail['score']), **record_detail},
+                # {"score": str(record_detail['score']), **record_detail},
+                record_detail,
                 image_path,
-                "Best",
-                index,
-                use_verse
+                # "Best",
+                prefix,
+                index
             )
             return True
         except Exception as e:
@@ -144,22 +145,21 @@ if save_id:
 else:
     st.warning("未索引到存档，请先加载存档数据！")
 
-with st.expander("需要更换存档？"):
-    st.info("要更换，请回到存档管理页指定其他用户名。")
+with st.expander("更换 Best30 存档"):
+    st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
-        with st.container(border=True):
-            selected_save_id = st.selectbox(
-                "选择存档",
-                versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
-            )
-            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
-                if selected_save_id:
-                    st.session_state.save_id = selected_save_id
-                    st.rerun()
-                else:
-                    st.error("无效的存档路径！", icon="❌")
+        selected_save_id = st.selectbox(
+            "选择存档",
+            versions,
+            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+        )
+        if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
+            if selected_save_id:
+                st.session_state.save_id = selected_save_id
+                st.rerun()
+            else:
+                st.error("无效的存档路径！", icon="❌")
     else:
         st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
         st.stop()
@@ -167,18 +167,11 @@ with st.expander("需要更换存档？"):
 
 if data_loaded:
     image_path = current_paths['image_dir']
-    st.text("基础 & 附加设置")
+    st.text("确认存档数据无误后，点下面的按钮生成。")
     with st.container(border=True):
-        col1, col2 = st.columns([1, 1], vertical_alignment="center")
-        with col1:
-            st.text("确认存档数据无误后，点下面的按钮生成。")
-        with col2:
-            use_verse = st.checkbox("添加 X-VERSE 定数并计算新 Rating", help="定数或 Rating 不变时仅标记后缀【16.15(X-VERSE)】")
-        if use_verse:
-            st.info("示例：MASTER 14.3 将显示为 MASTER[14.3 → 14.6(X-VERSE)]", icon="ℹ️")
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("生成成绩图底图", help="使用底图分辨率生成", icon="🔄️", use_container_width=True):
+            if st.button("生成成绩图底图", help="使用 1920 × 1080 生成", icon="🔄️", use_container_width=True):
                 generate_info_placeholder = st.empty()
                 try:
                     if not os.path.exists(image_path):

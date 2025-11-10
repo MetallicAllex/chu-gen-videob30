@@ -1,10 +1,7 @@
-import os
-import time
-import json
-import random
-from utils.Utils import diff_bg_change, get_b30_data_from_lxns, get_b30_data_from_fish, get_keyword, _process_b30_data
+import os, time, json, random
+from utils.Utils import get_b30_data_from_lxns, get_b30_data_from_fish, get_keyword, _process_b30_data
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
-
+from utils.DataUtils import REVERSE_LEVEL_LABELS
 # def merge_b30_data(new_b30_data, old_b30_data):
 #     """
 #     合并两份b30数据，使用新数据的基本信息但保留旧数据中的视频相关信息
@@ -66,9 +63,7 @@ def update_b30_data_fish(b30_raw_file, b30_data_file, username):
 
 def search_one_video(downloader, song_data):
     title_name = song_data['song_name']
-    # difficulty_name = song_data['level_label']
-    level_index = song_data['level_index']
-    # type = song_data['type']
+    level_index = REVERSE_LEVEL_LABELS.get(song_data['level_index'])
     dl_type = "youtube" if isinstance(downloader, PurePytubefixDownloader) \
                 else "bilibili" if isinstance(downloader, BilibiliDownloader) \
                 else "None"
@@ -78,7 +73,7 @@ def search_one_video(downloader, song_data):
     videos = downloader.search_video(keyword)
 
     if len(videos) == 0:
-        output_info = f"Error: 没有找到{title_name}-({level_index})-{type}的视频"
+        output_info = f"Error: 没有找到{title_name}-({level_index})的视频"
         # output_info = f"Error: 没有找到{title_name}-{difficulty_name}({level_index})-{type}的视频"
         print(output_info)
         song_data['video_info_list'] = []
@@ -120,7 +115,7 @@ def search_b30_videos(downloader, b30_data, b30_data_file, search_wait_time=(0,0
 
 
 def download_one_video(downloader, song, video_download_path, high_res=False):
-    clip_name = f"{song['id']}-{diff_bg_change(song['level_index'])}"
+    clip_name = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
     # clip_name = f"{song['id']}-{song['song_name']}"
     
     # Check if video already exists
@@ -130,8 +125,8 @@ def download_one_video(downloader, song, video_download_path, high_res=False):
         return {"status": "skip", "info": f"已找到 {song['song_name']} 的缓存: {clip_name}"}
         
     if 'video_info_match' not in song or not song['video_info_match']:
-        print(f"Error: 没有{song['title']}-{song['level_label']}-{song['type']}的视频信息，Skipping………")
-        return {"status": "error", "info": f"Error: 没有{song['title']}-{song['level_label']}-{song['type']}的视频信息，Skipping………"}
+        print(f"错误: 没有{song['title']}-{song['level_label']}的视频信息，Skipping………")
+        return {"status": "error", "info": f"错误: 没有{song['title']}-{song['level_label']}的视频信息，Skipping………"}
     
     video_info = song['video_info_match']
     v_id = video_info['id'] 
@@ -148,7 +143,7 @@ def download_b30_videos(downloader, b30_data, video_download_path, download_wait
     i = 0
     for song in b30_data:
         i += 1
-        # 视频命名为song['song_id']-song['level_index']-song['type']，以便查找复用
+        # 视频命名为song['song_id']-song['level_index']，以便查找复用
         clip_name = f"{song['id']}-{song['level_index']}"
         
         # Check if video already exists
@@ -159,7 +154,7 @@ def download_b30_videos(downloader, b30_data, video_download_path, download_wait
             
         print(f"正在下载视频({i}/30): {clip_name}……")
         if 'video_info_match' not in song or not song['video_info_match']:
-            print(f"Error: 没有{song['title']}-{song['level_label']}-{song['type']}的视频信息，Skipping………")
+            print(f"Error: 没有{song['title']}-{song['level_label']}的视频信息")
             continue
         video_info = song['video_info_match']
         v_id = video_info['id'] 
@@ -371,14 +366,14 @@ def st_gene_resource_config(b30_data, images_path, videoes_path, output_file,
         "id": "intro_1",
         "duration": 10,
         "text": "【请填写前言部分】" if default_comment_placeholders else "",
-        "version": "LUMINOUS"
+        # "version": "LUMINOUS"
     }
 
     ending_clip_data = {
         "id": "ending_1",
         "duration": 10,
         "text": "【请填写后记部分】" if default_comment_placeholders else "",
-        "version": "LUMINOUS"
+        # "version": "LUMINOUS"
     }
 
     video_config_data = {
@@ -402,7 +397,7 @@ def st_gene_resource_config(b30_data, images_path, videoes_path, output_file,
             continue
         id = song['clip_id']
         # video_name = f"{song['id']}-{song['song_name']}"
-        video_name = f"{song['id']}-{diff_bg_change(song['level_index'])}"
+        video_name = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
         __image_path = os.path.join(images_path, id + ".png")
         __image_path = os.path.normpath(__image_path)
         if not os.path.exists(__image_path):
@@ -422,10 +417,14 @@ def st_gene_resource_config(b30_data, images_path, videoes_path, output_file,
         main_clip_data = {
             "id": song["id"],
             "song_name": song["song_name"],
+            "artist": song["artist"],
+            "level": song["level"],
+            "level_next": song["level_next"],
             "level_index": song["level_index"],
             "score": song["score"],
             "rating": song["rating"],
             "full_combo": song["full_combo"],
+            "full_chain": song["full_chain"],
             "main_image": __image_path,
             "video": __video_path,
             "duration": duration,

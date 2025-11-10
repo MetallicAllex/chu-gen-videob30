@@ -20,19 +20,10 @@ Auto search and generate your best 30 videoes of CHUNITHM
 - 不要问为什么我会把有人不喜欢的平台链接放进来，~~因为真有不懂怎么弄的人~~
 
 ## 效果预览
-
-- 生成视频帧效果
-
 <figure>
-  <img src="md_res/image.png" alt="默认">
-  <figcaption style="text-align: center; font-size: large;">默认情况</figcaption>
+  <img src="md_res/image.jpg" alt="默认">
+  <figcaption style="text-align: center; font-size: large;">生成视频帧效果</figcaption>
 </figure>
-
-<figure>
-  <img src="md_res/image2.png" alt="添加 verse 定数">
-  <figcaption style="text-align: center; font-size: large;">添加 verse 定数</figcaption>
-</figure>
-
 
 ## 特性
 
