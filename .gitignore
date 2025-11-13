@@ -8,7 +8,6 @@ package.json
 cred_datas/
 
 # B30 cache directories
-b30_datas/
 b30_images/
 videos/  
 
@@ -198,12 +197,10 @@ music_datasets/all_music_infos.json
 music_datasets/jp_songs_info.json
 ffmpeg2.exe
 images/temp_text.png
-music_datasets/all_music_infos.json
-music_datasets/jp_songs_info.json
 st_pages/3_Confirm_Videoes-original.py
 st_pages/4_Edit_Video_Content-original.py
-music_datasets/all_music_infos.json
-music_datasets/jp_songs_info.json
 2696-MASTER.mp4
 global_config.yaml
 ImageUtils-NEW.py
+b30_datas/
+chu-gen-videob30_v0.4-2026modified2.zip

@@ -110,7 +110,7 @@ def edit_context_widget(name, config, config_file_path):
                     st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
 
 if not username:
-    st.error("请先获取指定用户名的 B30 存档！", icon="❗")
+    st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
 
 if save_id:
@@ -133,7 +133,7 @@ if save_id:
 else:
     st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
 
-with st.expander("更换B30存档"):
+with st.expander("更换 Best50 存档", icon="💾"):
     st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
@@ -141,9 +141,9 @@ with st.expander("更换B30存档"):
             selected_save_id = st.selectbox(
                 "选择存档",
                 versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
             )
-            if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
+            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()

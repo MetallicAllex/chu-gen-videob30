@@ -1,9 +1,10 @@
 import os, re, json, yaml, subprocess, platform
 from moviepy import VideoFileClip
 
-def remove_invalid_chars(text: str) -> str:
-    # 去除非法字符，使用re.sub
-    return re.sub(r'[\\/:*?"<>|]', '', text)
+def escape_markdown_text(text: str) -> str:
+    # 更全面的转义，包括 Streamlit 可能需要的额外字符
+    special_chars = r'\_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(special_chars)}])', r'\\\1', text)
 
 def load_config(config_file):
     if os.path.exists(config_file):

@@ -1,13 +1,13 @@
-import json
-import os, threading, subprocess
+import datetime
+import os, threading, subprocess, time
 from queue import Queue, Empty
-import time
 from typing import Any, Dict, List, Tuple
 import numpy as np
-import streamlit as st
 from PIL import Image, ImageFilter
 from moviepy import ColorClip, VideoFileClip, ImageClip, TextClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
 from moviepy import vfx, afx
+from utils.Utils import format_time_difference
+from utils.chuni_extension import REVERSE_LEVEL_LABELS
 
 def get_splited_text(text, text_max_bytes=70):
     """
@@ -429,231 +429,146 @@ def get_cached_scaling(resolution):
 #         return create_video_segment_classic(clip_config, resolution, font_path)  # 回退到旧方法
 
 def create_video_segment(clip_config, resolution, font_path, bitrate, output_path='./videos/temp_generated'):
-    """使用分离处理流程生成视频片段"""
-    
-    # 基础参数计算
+    start_time_generation = time.time()
+    """修正视频叠加层剪辑时长的FFmpeg命令"""
     scale_factor = resolution[1] / 1080
     video_height = int(0.667 * resolution[1])
     text_size = int(32 * scale_factor)
     
     text = clip_config['text']
-    duration = clip_config['end'] - clip_config['start']
-    
-    # 确保比特率是整数类型
-    try:
-        bitrate_int = int(bitrate)
-    except (ValueError, TypeError):
-        bitrate_int = 5000  # 默认值
-        print(f"警告: 比特率参数无效，使用默认值 {bitrate_int}k")
+    duration = clip_config['duration']
+    start_time = clip_config['start']  # 开始时间
+    # end_time = clip_config['end']      # 结束时间
     
     # 确保所有输入文件存在
     bg_video_path = os.path.abspath("./images/BgClips/bg_xverse.mp4").replace('\\', '/')
     main_image_path = os.path.abspath(clip_config.get('main_image', '')).replace('\\', '/') if clip_config.get('main_image') else ''
     video_path = os.path.abspath(clip_config.get('video', '')).replace('\\', '/') if clip_config.get('video') else ''
     
-    # 创建临时目录
-    temp_dir = output_path
-    os.makedirs(temp_dir, exist_ok=True)
+    # 构建输入参数
+    input_args = [
+        '-i', bg_video_path,
+        '-init_hw_device', 'cuda=cu:0',
+        '-filter_hw_device', 'cu',
+        '-hwaccel', 'cuda',
+    ]
+    filter_complex_parts = []
     
-    # 临时文件路径
-    temp_video_path = os.path.join(temp_dir, f"{clip_config['id']}_overlay.mp4")
-    temp_audio_path = os.path.join(temp_dir, f"{clip_config['id']}_audio.aac")
+    # 确定每个输入的索引
+    input_count = 1  # 背景视频是第一个输入
     
-    cleanup_files = []  # 记录需要清理的临时文件
+    # 主图片处理
+    if main_image_path and os.path.exists(main_image_path):
+        input_args.extend(['-i', main_image_path])
+        input_count += 1
+        filter_complex_parts.append('[1:v]scale=1920:1080[img];')
+        filter_complex_parts.append('[0:v][img]overlay=0:0[bg_img];')
+        base_stream = 'bg_img'
+    else:
+        # 背景视频循环并设置时长
+        filter_complex_parts.append(f'[0:v]loop=loop=-1:size=1000:start=0,trim=duration={duration}[bg_loop];')
+        filter_complex_parts.append('[bg_loop]scale=1920:1080[bg_img];')
+        base_stream = 'bg_img'
     
+    # 视频片段处理 - 关键修正部分
+    audio_stream = None
+    if video_path and os.path.exists(video_path):
+        input_args.extend(['-i', video_path])
+        input_count += 1
+        video_idx = input_count - 1
+        
+        # 修正：确保叠加视频流被正确处理
+        # 先缩放再剪辑
+        filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{video_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
+        filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={int(0.0422*resolution[0])}:{int(0.0583*resolution[1])}[base];')
+        base_stream = 'base'
+        
+        # 音频流单独处理，不合并到滤镜链中
+        audio_stream = f'[{video_idx}:a]atrim=start={start_time}:duration={duration},asetpts=PTS-STARTPTS[a_out]'
+    
+    # 文本处理
+    text_lines = get_splited_text(text, text_max_bytes=18)
+
+    for i, line in enumerate(text_lines):
+        y_offset = int(0.227 * resolution[1]) + i * (text_size + 10)
+        filter_complex_parts.append(
+            f'[{base_stream}]drawtext=text=\'{line}\':fontfile={font_path}:'
+            f'fontsize={text_size}:fontcolor=black:x={int(0.7594*resolution[0])}:'
+            f'y={y_offset}[text{i}];'
+        )
+        base_stream = f'text{i}'
+    
+    # 最终输出流 - 确保总时长
+    filter_complex_parts.append(f'[{base_stream}]trim=duration={duration}[v_out];')
+    
+    # 音频处理 - 修正部分
+    if audio_stream:
+        # 将音频流添加到滤镜链中
+        filter_complex_parts.append(audio_stream)
+    else:
+        # 如果没有音频，创建指定时长的静音音频
+        filter_complex_parts.append(f'aevalsrc=0::d={duration}[a_out]')
+    
+    # 合并滤镜链
+    filter_complex = ''.join(filter_complex_parts)
+    
+    # 确保输出路径是文件而不是目录
+    if os.path.isdir(output_path):
+        output_path = os.path.join(output_path, f"{clip_config['id']}-{REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}.mp4")
+    
+    # 构建FFmpeg命令
+    cmd = [
+        'ffmpeg',
+        '-y',
+        *input_args,
+        '-hide_banner',
+        '-filter_complex', filter_complex,
+        '-map', '[v_out]',
+        '-map', '[a_out]',
+        '-vcodec', 'h264_nvenc',
+        '-preset', 'p6',           # 高压缩率
+        '-cq', '28',
+        '-r', '60',
+        '-threads', '0',
+        '-thread_type', 'frame',
+        '-b:v', f'{bitrate}k',
+        '-maxrate', f'{int(bitrate)*2}k',
+        '-bufsize', f'{int(bitrate)*4}k', # 缓冲区大小设置为四倍码率
+        '-pix_fmt', 'yuv420p',
+        '-acodec', 'aac',
+        '-b:a', '320k',
+        '-max_muxing_queue_size', '4096',
+        # 双重时长保险
+        '-t', str(duration),
+        output_path
+    ]
+    
+    print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
+    # print(f"视频剪辑参数: 从 {start_time}秒 开始，持续 {duration} 秒")
+    print("执行FFmpeg命令:")
+    print(" ".join(cmd))
+
+    # 执行命令
     try:
-        start_time = time.time() # 记录开始时间
-        # ==================== 第一步：预处理叠加层视频 ====================
-        if video_path and os.path.exists(video_path):
-            print("+++++++++++++++ 开始预处理叠加层视频 +++++++++++++++")
-            
-            # 计算预处理比特率
-            overlay_bitrate = max(1000, int(bitrate_int * 0.7))  # 确保至少1000k
-            
-            overlay_cmd = [
-                'ffmpeg', '-y',
-                '-i', video_path,
-                '-ss', str(clip_config['start']),
-                '-t', str(duration),
-                '-vf', f'scale=-1:{video_height}',
-                '-c:v', 'h264_nvenc',
-                '-preset', 'p4',
-                '-r', '60',
-                '-b:v', f'{overlay_bitrate}k',
-                '-an',  # 不处理音频
-                '-max_muxing_queue_size', '1024',
-                temp_video_path
-            ]
-            
-            print("执行叠加层预处理命令：")
-            print(" ".join(overlay_cmd))
-            
-            subprocess.run(overlay_cmd, check=True, capture_output=True)
-            cleanup_files.append(temp_video_path)
-            print("+++++++++++++++ 叠加层视频预处理完成 +++++++++++++++")
-        
-        # ==================== 第二步：预处理音频 ====================
-        if video_path and os.path.exists(video_path):
-            print("+++++++++++++++ 开始预处理音频 +++++++++++++++")
-            audio_cmd = [
-                'ffmpeg', '-y',
-                '-i', video_path,
-                '-ss', str(clip_config['start']),
-                '-t', str(duration),
-                '-c:a', 'aac',
-                '-b:a', '320k',
-                '-vn',  # 不处理视频
-                '-ac', '2',  # 立体声
-                '-ar', '48000',  # 采样率
-                temp_audio_path
-            ]
-            
-            print("执行音频预处理命令：")
-            print(" ".join(audio_cmd))
-            
-            subprocess.run(audio_cmd, check=True, capture_output=True)
-            cleanup_files.append(temp_audio_path)
-            print("+++++++++++++++ 音频预处理完成 +++++++++++++++")
-        
-        # ==================== 第三步：主合成处理 ====================
-        print("+++++++++++++++ 开始处理主合成 +++++++++++++++")
-        
-        # 构建输入参数
-        input_args = [
-            '-stream_loop', '-1',  # 背景视频循环
-            '-i', bg_video_path,
-            '-init_hw_device', 'cuda=cu:0',
-            '-filter_hw_device', 'cu',
-            '-hwaccel', 'cuda',
-        ]
-        
-        filter_complex_parts = []
-        
-        # 主图片处理
-        input_count = 1  # 背景视频是第一个输入
-        
-        if main_image_path and os.path.exists(main_image_path):
-            input_args.extend(['-i', main_image_path])
-            input_count += 1
-            
-            # 背景视频处理（从0开始，裁剪到指定时长）
-            filter_complex_parts.append(f'[0:v]trim=start=0:duration={duration},setpts=PTS-STARTPTS[bg_trimmed];')
-            filter_complex_parts.append('[bg_trimmed]scale=1920:1080[bg_scaled];')
-            filter_complex_parts.append('[1:v]scale=1920:1080[img];')
-            filter_complex_parts.append('[bg_scaled][img]overlay=0:0[bg_img];')
-            base_stream = 'bg_img'
-        else:
-            # 只有背景视频
-            filter_complex_parts.append(f'[0:v]trim=start=0:duration={duration},setpts=PTS-STARTPTS[bg_trimmed];')
-            filter_complex_parts.append('[bg_trimmed]scale=1920:1080[bg_img];')
-            base_stream = 'bg_img'
-        
-        # 叠加预处理后的视频
-        audio_stream = None
-        if os.path.exists(temp_video_path):
-            input_args.extend(['-i', temp_video_path])
-            input_count += 1
-            video_idx = input_count - 1
-            
-            # 直接叠加预处理好的视频
-            filter_complex_parts.append(f'[{base_stream}][{video_idx}:v]overlay={int(0.0422*resolution[0])}:{int(0.0583*resolution[1])}[base];')
-            base_stream = 'base'
-            
-            # 如果有预处理音频，使用它
-            if os.path.exists(temp_audio_path):
-                input_args.extend(['-i', temp_audio_path])
-                input_count += 1
-                audio_idx = input_count - 1
-                audio_stream = f'[{audio_idx}:a]'
-        
-        # 文本处理
-        text_lines = get_splited_text(text, text_max_bytes=18)
-        for i, line in enumerate(text_lines):
-            y_offset = int(0.227 * resolution[1]) + i * (text_size + 10)
-            filter_complex_parts.append(
-                f'[{base_stream}]drawtext=text=\'{line}\':fontfile={font_path}:'
-                f'fontsize={text_size}:fontcolor=black:x={int(0.7594*resolution[0])}:'
-                f'y={y_offset}[text{i}];'
-            )
-            base_stream = f'text{i}'
-        
-        # 最终输出流
-        filter_complex_parts.append(f'[{base_stream}]copy[v_out];')
-        
-        # 音频处理
-        if audio_stream:
-            filter_complex_parts.append(f'{audio_stream}acopy[a_out]')
-        else:
-            # 如果没有音频，创建静音
-            filter_complex_parts.append(f'aevalsrc=0::d={duration},asetpts=PTS-STARTPTS[a_out]')
-        
-        # 合并滤镜链
-        filter_complex = ''.join(filter_complex_parts)
-        
-        # 确保输出路径是文件
-        if os.path.isdir(output_path):
-            output_path = os.path.join(output_path, f"{clip_config['id']}.mp4")
-        
-        # 构建主合成命令
-        cmd = [
-            'ffmpeg',
-            '-y',
-            *input_args,
-            '-filter_complex', filter_complex,
-            '-map', '[v_out]',
-            '-map', '[a_out]',
-            '-preset', 'fast',
-            '-vcodec', 'h264_nvenc',
-            '-r', '60',
-            '-threads', f'{os.cpu_count() / 2}',
-            '-b:v', f'{bitrate_int}k',
-            '-maxrate', f'{bitrate_int * 2}k',
-            '-pix_fmt', 'yuv420p',
-            '-acodec', 'aac',
-            '-b:a', '320k',
-            '-max_muxing_queue_size', '1024',
-            output_path
-        ]
-        
-        print(f"正在为您生成【{clip_config['song_name']}】的片段")
-        print("执行 FFmpeg 主合成命令:")
-        print(" ".join(cmd))
-        
-        # 执行主合成
         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
         print(f"已生成您的视频片段，名称为: {output_path}")
-        print(f"片段生成用时：{time.time() - start_time:.2f} 秒") # 输出用时
+        print(f"片段生成用时 {format_time_difference(time.time() - start_time_generation)}")
         return VideoFileClip(output_path)
-        
     except subprocess.CalledProcessError as e:
-        error_cmd = " ".join(cmd) if 'cmd' in locals() else "命令未执行"
+        error_cmd = " ".join(cmd)
         print("========================== FFmpeg 生成失败！====================================")
-        print("哎呀！生成您的视频片段时出现了问题xwx！")
-        print("如果您不知道如何处理，请将此部分[等于号(=)划定的所有内容]截图发送给 chu-gen 开发者。")
         print(f"视频生成命令：\n{str(error_cmd)}\n")
         print(f"生成输出日志: \n{e.stderr}")
         print("============================ 这里是结尾 ========================================")
         print("因为您的视频片段使用此模式生成时出现了问题，我们将使用快速模式重新生成；")
         print(" -> 生成器不会检查您的视频片段文件完整性，别忘了将您生成失败的片段删除掉；")
         print(" -> 如果您仍要使用极速模式生成，请等待您报告的问题解决后，重新启动生成器。\n")
-        
-        # 回退到经典模式
         return create_video_segment_classic(clip_config, resolution, font_path)
-    
-    finally:
-        # 清理临时文件
-        for temp_file in cleanup_files:
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                    print(f"已清理临时文件: {temp_file}")
-                except Exception as e:
-                    print(f"清理临时文件失败 {temp_file}: {e}")
 
-def create_video_segment_classic(clip_config, resolution, font_path, text_size=None, inline_max_len=21):
+def create_video_segment_classic(clip_config, resolution, font_path, text_size=None):
     """优化后的视频片段创建函数"""
     # print(f"正在合成视频片段: {clip_config['id']}")
-    print(f"正在为您生成【{clip_config['song_name']}】的片段")
+    print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
     # 使用缓存获取缩放和位置信息
     scale_factor, video_height, calculated_text_size = get_cached_scaling(resolution)
     
@@ -675,7 +590,7 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
     
     # 2. 主图片层 - 使用更高效的加载方式
     if 'main_image' in clip_config and os.path.exists(clip_config['main_image']):
-        # 直接使用FFmpeg加载图片，避免PIL开销
+        # 直接使用 FFmpeg 加载图片，避免 PIL 开销
         main_image = ImageClip(clip_config['main_image']).with_duration(clip_config['duration'])
         main_image = main_image.with_effects([vfx.Resize(resolution)])
     else:
@@ -1172,7 +1087,8 @@ def render_all_video_clips(
     font_path,
     auto_add_transition=True, 
     trans_time=1, 
-    force_render=False
+    force_render=False,
+    classic_fast_render=False
 ):
     # 1. 检查已有片段
     to_render, existing = check_rendered_clips_multithreaded(
@@ -1186,7 +1102,7 @@ def render_all_video_clips(
     
     vfile_prefix = 0
     if "main" not in resources:
-        print("Error: 没有找到主视频片段的配置！请检查配置文件！")
+        print("错误: 没有找到主视频片段的配置！请检查配置文件！")
         return
 
     # 2. 渲染函数
@@ -1201,9 +1117,12 @@ def render_all_video_clips(
                     print(f"开始处理头尾: {current_prefix}_{config['id']}.mp4")
                     clip = create_info_segment(config, resolution, font_path)
                 else:
-                    print(f"开始处理: {current_prefix}_{config['id']}({config['song_name']}).mp4")
-                    clip = create_video_segment(config, resolution, font_path, bitrate=v_bitrate_kbps)
-
+                    if classic_fast_render == True:
+                        print(f"开始处理[快速]: {current_prefix}_{config['id']}({config['song_name']}).mp4")
+                        clip = create_video_segment_classic(config, resolution, font_path)
+                    else:
+                        print(f"开始处理[FFmpeg]: {current_prefix}_{config['id']}({config['song_name']}).mp4")
+                        clip = create_video_segment(config, resolution, font_path, bitrate=v_bitrate_kbps)
                 # print(f"正在处理视频片段: {current_prefix}_{config['id']}.mp4")
 
                 clip = normalize_audio_volume(clip)
@@ -1239,8 +1158,13 @@ def render_all_video_clips(
         render_selected_clips(resources['ending'], 'info')
 
 
-def combine_full_video_direct(video_clip_path, username, video_res, video_bitrate, use_overprocess):
-    print("[Info] ====================开始拼接视频==================")
+def combine_full_video_direct(
+    video_clip_path, username,
+    video_res, video_bitrate,
+    use_overprocess=False,
+    classic_fast_render=False
+    ):
+    print("[Info] ==================== 开始拼接视频 ==================")
     video_files = [f for f in os.listdir(video_clip_path) if f.endswith(".mp4")]
     sorted_files = sort_video_files(video_files)
     
@@ -1248,8 +1172,8 @@ def combine_full_video_direct(video_clip_path, username, video_res, video_bitrat
         raise ValueError("Error: 没有有效的视频片段文件！")
 
     # 创建临时目录存放 ts 文件
-    temp_dir = os.path.join(video_clip_path, "temp_ts")
-    os.makedirs(temp_dir, exist_ok=True)
+    # temp_dir = os.path.join(video_clip_path, "temp_ts")
+    # os.makedirs(temp_dir, exist_ok=True)
     
     try:
         # 1. 创建MP4文件列表
@@ -1257,41 +1181,44 @@ def combine_full_video_direct(video_clip_path, username, video_res, video_bitrat
         with open(mp4_list_file, 'w', encoding='utf-8') as f:
             for file in sorted_files:
                 # 使用正斜杠替换反斜杠，并使用相对路径
-                full_path = os.path.join(video_clip_path, file).replace('\\', '/')
+                full_path = os.path.abspath(os.path.join(video_clip_path, file)).replace('\\', '/')
                 f.write(f"file '{full_path}'\n")
 
         # 2. 创建TS文件列表并转换视频
-        ts_list_file = os.path.join(video_clip_path, "ts_files.txt")
-        with open(ts_list_file, 'w', encoding='utf-8') as f:
-            for i, file in enumerate(sorted_files):
-                ts_name = f"{i:04d}.ts"
-                ts_path = os.path.join(temp_dir, ts_name)
+        # ts_list_file = os.path.join(video_clip_path, "ts_files.txt")
+        # with open(ts_list_file, 'w', encoding='utf-8') as f:
+        #     for i, file in enumerate(sorted_files):
+        #         ts_name = f"{i:04d}.ts"
+        #         ts_path = os.path.join(temp_dir, ts_name)
                 
-                # 转换MP4为TS
-                cmd = [
-                    'ffmpeg', '-y', '-loglevel', 'info',
-                    '-init_hw_device', 'cuda=cu:0', # 指定初始化 GPU 设备
-                    '-filter_hw_device', 'cu',  # 指定滤镜渲染 GPU 设备
-                    '-hwaccel', 'cuda',  # 启用硬件加速
-                    '-i', os.path.join(video_clip_path, file),
-                    '-c', 'copy',
-                    '-bsf:v', 'h264_mp4toannexb',
-                    '-f', 'mpegts',
-                    '-threads', '0',
-                    ts_path
-                ]
-                subprocess.run(cmd, check=True)
+        #         # 转换MP4为TS
+        #         cmd = [
+        #             'ffmpeg', '-y', '-loglevel', 'info',
+        #             '-init_hw_device', 'cuda=cu:0', # 指定初始化 GPU 设备
+        #             '-filter_hw_device', 'cu',  # 指定滤镜渲染 GPU 设备
+        #             '-hwaccel', 'cuda',  # 启用硬件加速
+        #             '-i', os.path.join(video_clip_path, file),
+        #             '-c', 'copy',
+        #             '-bsf:v', 'h264_mp4toannexb',
+        #             '-f', 'mpegts',
+        #             '-threads', '0',
+        #             ts_path
+        #         ]
+        #         subprocess.run(cmd, check=True)
                 
-                # 写入TS文件相对路径，使用正斜杠
-                # relative_ts_path = os.path.join('temp_ts', ts_name).replace('\\', '/')
-                # f.write(f"file '{relative_ts_path}'\n")
+        #         # 写入TS文件相对路径，使用正斜杠
+        #         # relative_ts_path = os.path.join('temp_ts', ts_name).replace('\\', '/')
+        #         # f.write(f"file '{relative_ts_path}'\n")
 
-                # 写入TS文件绝对路径，使用正斜杠
-                absolute_ts_path = os.path.abspath(os.path.join(video_clip_path, 'temp_ts', ts_name)) 
-                f.write(f"file '{absolute_ts_path}'\n")
+        #         # 写入TS文件绝对路径，使用正斜杠
+        #         absolute_ts_path = os.path.abspath(os.path.join(video_clip_path, 'temp_ts', ts_name)) 
+        #         f.write(f"file '{absolute_ts_path}'\n")
 
         # 3. 拼接TS文件并输出为MP4
-        output_path = os.path.join(video_clip_path, "final_output.mp4")
+        if classic_fast_render == True:
+            output_path = os.path.join(video_clip_path, f"{username}_Best30_fast.mp4")
+        else:
+            output_path = os.path.join(video_clip_path, f"{username}_Best30_ffmpeg.mp4")
         
         # 执行拼接命令
         real_path = os.path.abspath(video_clip_path)
@@ -1300,13 +1227,22 @@ def combine_full_video_direct(video_clip_path, username, video_res, video_bitrat
         
         cmd = [
             'ffmpeg', '-y',
-            '-loglevel', 'error',
+            '-hide_banner',
+            '-loglevel', 'info',
             '-f', 'concat',
             '-safe', '0',
-            '-i', f'{real_path}\\ts_files.txt',  # 使用绝对路径
+            # '-i', f'{real_path}\\ts_files.txt',  # 使用绝对路径
+            '-i', f'{real_path}\\mp4_files.txt',  # 使用绝对路径
+            # 关键修复：时间戳处理
+            '-fflags', '+genpts',            # 生成时间戳
+            '-avoid_negative_ts', 'make_zero', # 避免负时间戳
+            
+            # 编码参数（确保可seek）
+            '-max_interleave_delta', '0',   # 减少交错延迟
+            
             '-c', 'copy',
-            f'{real_path}\\{username}_Best30_fast.mp4',  # 使用绝对路径
-            '-threads', '4',
+            output_path,  # 使用绝对路径
+            '-threads', '0',
         ]
         subprocess.run(cmd, check=True)
 
@@ -1314,7 +1250,7 @@ def combine_full_video_direct(video_clip_path, username, video_res, video_bitrat
             # 后处理
             cmd2 = [
                 'ffmpeg',
-                '-y',
+                '-y', '-hide_banner',
                 '-loglevel', 'info',
                 '-i', f'{real_path}\\{username}_Best30_fast.mp4',
                 
@@ -1348,14 +1284,16 @@ def combine_full_video_direct(video_clip_path, username, video_res, video_bitrat
             ]
             subprocess.run(cmd2, check=True)
 
-        print("视频拼接完成，已清理临时转换的拼接片段文件")
-        
-    finally:
-        # 清理临时文件
-        if os.path.exists(temp_dir):
-            for file in os.listdir(temp_dir):
-                os.remove(os.path.join(temp_dir, file))
-            os.rmdir(temp_dir)
+        print("[Info] ==================== 视频拼接完成 ==================")
+    
+    except Exception as e:
+        print(f"拼接失败：{str(e)}")
+    # finally:
+    #     # 清理临时文件
+    #     if os.path.exists(temp_dir):
+    #         for file in os.listdir(temp_dir):
+    #             os.remove(os.path.join(temp_dir, file))
+    #         os.rmdir(temp_dir)
 
     return output_path
 

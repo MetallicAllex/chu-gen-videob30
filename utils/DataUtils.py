@@ -1,248 +1,376 @@
-import json, requests, base64, hashlib, struct
-from typing import List
-from PIL import Image
+import json, threading, random, os
+from update_music_data import music_info_path, jp_music_info_path
+from utils.chuni_extension import REVERSE_LEVEL_LABELS
+from concurrent.futures import ThreadPoolExecutor
 
 BUCKET_ENDPOINT = "https://nickbit-maigen-images.oss-cn-shanghai.aliyuncs.com"
 DATA_ENDPOINT = "https://maimai.lxns.net"
 FC_PROXY_ENDPOINT = "https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run"
 
-DATA_CONFIG_VERSION = "0.5"
-REVERSE_LEVEL_LABELS = {
-    0: "BASIC",
-    1: "ADVANCED",
-    2: "EXPERT",
-    3: "MASTER",
-    4: "ULTIMA",
-}
-
-LEVEL_LABELS = {
-    "BASIC": 0,
-    "ADVANCED": 1,
-    "EXPERT": 2,
-    "MASTER": 3,
-    "ULTIMA": 4,
-}
-
-def download_metadata(data_type):
-    url = f"{DATA_ENDPOINT}/api/v0/{data_type}/song/list"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise FileNotFoundError(f"从 {url} 下载元数据时出错. 状态码: {response.status_code}")
+# def download_metadata(data_type):
+#     url = f"{DATA_ENDPOINT}/api/v0/{data_type}/song/list"
+#     response = requests.get(url)
+#     if response.status_code == 200:
+#         return response.json()
+#     else:
+#         raise FileNotFoundError(f"从 {url} 下载元数据时出错. 状态码: {response.status_code}")
 
 
-def download_image_data(image_path):
-    url = f"{BUCKET_ENDPOINT}/{image_path}"
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        img = Image.open(response.raw)
-        return img
-    else:
-        print(f"Failed to download image from {url}. Status code: {response.status_code}")
-        raise FileNotFoundError
+# def download_image_data(image_path):
+#     url = f"{BUCKET_ENDPOINT}/{image_path}"
+#     response = requests.get(url, stream=True)
+#     if response.status_code == 200:
+#         img = Image.open(response.raw)
+#         return img
+#     else:
+#         print(f"Failed to download image from {url}. Status code: {response.status_code}")
+#         raise FileNotFoundError
 
+def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
+    """Best50 数据清洗"""
+    
+    # 调试：打印原始数据结构
+    print(f"=== 数据调试信息 ===")
+    print(f"原始数据类型: {type(raw_data)}")
+    if isinstance(raw_data, dict):
+        print(f"原始数据顶层键: {list(raw_data.keys())}")
+        if "records" in raw_data:
+            print(f"records 键: {list(raw_data['records'].keys())}")
+            print(f"b30 数据长度: {len(raw_data['records'].get('b30', []))}")
+            print(f"n20 数据长度: {len(raw_data['records'].get('n20', []))}")
+            print(f"r10 数据长度: {len(raw_data['records'].get('r10', []))}")
 
-def encode_song_id(name, song_type):
-    """
-    Args:
-        name (str): 歌曲名称
-        song_type (int): 歌曲类型 (0, 1, 10, 11) = (SD, DX, 宴, 协)
+    # 1. 加载本地曲目数据库
+    with open(music_info_path, 'r', encoding='utf-8') as f:
+        song_db = json.load(f)
+    
+    with open(jp_music_info_path, 'r', encoding='utf-8') as j:
+        jp_song_db = json.load(j)
+
+    # 2. 根据数据源类型提取字段映射规则
+    field_map = {
+        "lxns": {
+            "id": "id",
+            "song_name": "song_name",
+            "level": "level",
+            "level_index": "level_index",
+            "score": "score",
+            "rating": "rating",
+            "fc": "full_combo",
+            "fchain": "full_chain",
+            "data_field": ["data.bests", "data.new_bests"]
+        },
+        "fish": {
+            "id": "mid",
+            "song_name": "title", 
+            "level": "ds",
+            "level_index": "level_index",
+            "score": "score",
+            "rating": "ra",
+            "fc": "fc",
+            "fchain": None,
+            "data_field": ["records.b30", "records.n20"]  # 使用 b30 和 n20
+        }
+    }
+    
+    if source_type not in field_map:
+        print(f"错误：不支持的源类型 '{source_type}'")
+        return []
         
-    Returns:
-        str: 紧凑的ID字符串
-    """
-    # 将类型转换为字节序列 (固定长度)
-    type_bytes = struct.pack('<I', song_type)
-    
-    # 将名称转换为字节序列
-    name_bytes = name.encode('utf-8')
-    
-    # 名称长度转为字节序列 (固定长度)
-    name_len_bytes = struct.pack('<I', len(name_bytes))
-    
-    # 按照固定格式拼接字节序列: [类型][名称长度][名称]
-    combined_bytes = type_bytes + name_len_bytes + name_bytes
-    
-    # 对组合后的字节序列进行哈希计算
-    hash_object = hashlib.md5(combined_bytes)
-    hash_hex = hash_object.hexdigest()
-    
-    # 只取前12位哈希值作为唯一标识符
-    short_hash = hash_hex[:12]
+    fields = field_map[source_type]
 
-    print("Encoded song id for ", name, song_type, ". Result:", short_hash)
-    
-    # 创建编码类型前缀
-    type_prefix = f"t{song_type}"
-    
-    # 组合前缀和哈希
-    combined_id = f"{type_prefix}_{short_hash}"
-    
-    # 使用Base64编码使其更紧凑
-    encoded_id = base64.urlsafe_b64encode(combined_id.encode('utf-8')).decode('utf-8').rstrip('=')
-    
-    return encoded_id
-
-
-def decode_song_id(encoded_id):
-    """
-    解码歌曲ID以提取类型和哈希值。
-    
-    Args:
-        encoded_id (str): 编码后的ID字符串
+    def get_nested_field(data, field_paths):
+        """从嵌套字典中获取字段值"""
+        if isinstance(field_paths, str):
+            field_paths = [field_paths]
         
-    Returns:
-        tuple: (song_type, hash_value)
-    """
-    # 添加回Base64填充字符
-    padding = 4 - (len(encoded_id) % 4)
-    if padding < 4:
-        encoded_id += '=' * padding
-    
-    # 解码Base64字符串
-    decoded = base64.urlsafe_b64decode(encoded_id).decode('utf-8')
-    
-    # 提取类型和哈希值
-    parts = decoded.split('_')
-    if len(parts) != 2 or not parts[0].startswith('t'):
-        raise ValueError("无效的编码ID格式")
-    
-    song_type = int(parts[0][1:])
-    hash_value = parts[1]
-    
-    return song_type, hash_value
-
-
-def find_song_by_id(encoded_id, songs_data):
-    """
-    通过编码ID在歌曲数据中查找歌曲。
-    
-    Args:
-        encoded_id (str): 要查找的编码ID
-        songs_data (list): 歌曲对象列表
+        result = []
         
-    Returns:
-        dict or None: 找到的歌曲或None（如果未找到）
-    """
-    try:
-        song_type, hash_value = decode_song_id(encoded_id)
-        
-        # 搜索匹配类型的歌曲
-        for song in songs_data:
-            if song.get('type') != song_type:
+        for field_path in field_paths:
+            try:
+                keys = field_path.split('.')
+                current = data
+                for key in keys:
+                    current = current[key]
+                
+                print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
+                
+                if current is not None:
+                    if isinstance(current, list):
+                        if current:  # 只添加非空列表
+                            result.extend(current)
+                    else:
+                        result.append(current)
+            except (KeyError, TypeError, AttributeError) as e:
+                print(f"提取字段 '{field_path}' 时出错: {e}")
                 continue
-                
-            # 为此歌曲计算哈希
-            name = song.get('name', '')
-            
-            # 将类型转换为字节序列
-            type_bytes = struct.pack('<I', song_type)
-            
-            # 将名称转换为字节序列
-            name_bytes = name.encode('utf-8')
-            
-            # 名称长度转为字节序列
-            name_len_bytes = struct.pack('<I', len(name_bytes))
-            
-            # 按照固定格式拼接字节序列
-            combined_bytes = type_bytes + name_len_bytes + name_bytes
-            
-            # 对组合后的字节序列进行哈希计算
-            hash_object = hashlib.md5(combined_bytes)
-            hash_hex = hash_object.hexdigest()
-            
-            # 只取前12位哈希值
-            short_hash = hash_hex[:12]
-            
-            # 检查哈希是否匹配
-            if short_hash == hash_value:
-                return song
-                
-        return None
-    except Exception as e:
-        print(f"查找歌曲时出错: {e}")
-        return None
-
-
-def get_data_from_fish(username, params=None):
-    """从水鱼获取数据"""
-    if params is None:
-        params = {}
-    type = params.get("type", "maimai")
-    query = params.get("query", "best")
-    # MAIMAI DX 的请求
-    if type == "maimai":
-        if query == "best":
-            url = "https://www.diving-fish.com/api/maimaidxprober/query/player"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "username": username,
-                "b50": "1"
-            }
-            response = requests.post(url, headers=headers, json=payload)
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 400 or response.status_code == 403:
-                msg = response.json().get("message", None)
-                if not msg:
-                    msg = response.json().get("msg", "水鱼端未知错误")
-                return {"error": f"用户校验失败，返回消息：{msg}"}
-            else:
-                return {"error": f"请求水鱼数据失败，状态码: {response.status_code}，返回消息：{response.json()}"}
-            
-        elif query == "all":
-            # get all data from thrid party function call
-            response = requests.get(FC_PROXY_ENDPOINT, params={"username": username}, timeout=60)
-            response.raise_for_status()
-
-            return json.loads(response.text)
-        elif query == "test_all":
-            url = "https://www.diving-fish.com/api/maimaidxprober/player/test_data"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                "Content-Type": "application/json"
-            }
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-
-            return response.json()
-        else:
-            raise ValueError("Invalid filter type for MAIMAI DX")
         
-    elif type == "chuni":
-        raise NotImplementedError("Only MAIMAI DX is supported for now")
-    else:
-        raise ValueError("Invalid game data type for diving-fish.com")
+        return result
 
+    # 3. 提取原始 B50 数据
+    print(f"=== 开始提取数据 ===")
+    b50_data = get_nested_field(raw_data, fields["data_field"])
+    print(f"提取到的 b50_data 总长度: {len(b50_data)}")
+    
+    # 备用方案：如果嵌套提取失败，尝试直接提取
+    if len(b50_data) == 0:
+        print("=== 尝试备用提取方案 ===")
+        if isinstance(raw_data, dict) and "records" in raw_data:
+            records = raw_data["records"]
+            b30_data = records.get("b30", [])
+            n20_data = records.get("n20", [])
+            print(f"直接提取 b30: {len(b30_data)} 条")
+            print(f"直接提取 n20: {len(n20_data)} 条")
+            b50_data = b30_data + n20_data
+            print(f"合并后 b50_data 长度: {len(b50_data)}")
 
-def search_songs(query, songs_data) -> List[tuple[str, dict]]:
-    """
-    在歌曲数据中搜索匹配的歌曲。
+    # 如果还是没有数据，直接返回空列表
+    if len(b50_data) == 0:
+        print("错误：无法提取到任何有效数据")
+        # 保存原始数据用于调试
+        with open(b50_raw_file, 'w', encoding='utf-8') as f:
+            json.dump(raw_data, f, ensure_ascii=False, indent=4)
+        return []
+
+    # 4. 缓存原始数据
+    with open(b50_raw_file, 'w', encoding='utf-8') as f:
+        json.dump(raw_data, f, ensure_ascii=False, indent=4)
+
+    # 5. 多线程处理每条曲目数据
+    processed_data = []
+    print_lock = threading.Lock()
+    
+    def process_song(song, i):
+        try:
+            print(f"处理第 {i} 首曲目: {song.get(fields['song_name'], 'Unknown')}")
+            print(f"曲目数据: {song}")  # 打印完整曲目数据
+            
+            # 检查必要字段是否存在
+            required_fields = ['id', 'song_name', 'level', 'level_index', 'score', 'rating', 'fc']
+            for field in required_fields:
+                field_name = fields[field]
+                if field_name not in song:
+                    print(f"错误：字段 '{field_name}' 不存在于曲目数据中")
+                    return None
+                print(f"  {field}: {song[field_name]}")
+            
+            processed_song = {
+                "id": song[fields["id"]],
+                "song_name": song[fields["song_name"]],
+                "artist": None,
+                "level": song[fields["level"]],
+                "level_index": song[fields["level_index"]],
+                "level_next": None,
+                "score": song[fields["score"]],
+                "rating": song[fields["rating"]],
+                "full_combo": song.get(fields["fc"]) if fields["fc"] is not None else None,
+                "full_chain": song.get(fields["fchain"]) if fields["fchain"] is not None else None,
+                "clip_id": f"Best_{i + 1}" if i < 30 else f"New_{i - 29}"
+            }
+
+            print(f"处理后的曲目基础信息: {processed_song['song_name']} - ID: {processed_song['id']}")
+
+            # 从本地数据库匹配曲目信息
+            song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
+            if song_info:
+                print(f"找到本地数据库匹配: {song_info['title']}")
+                processed_song["artist"] = song_info["artist"]
+                for diff in song_info.get("difficulties", []):
+                    if diff.get("difficulty") == processed_song["level_index"]:
+                        level_value = diff["level_value"]
+                        processed_song["level"] = float(level_value) if isinstance(level_value, (int, float, str)) and str(level_value).replace('.', '').isdigit() else level_value
+                        print(f"更新难度等级: {processed_song['level']}")
+                        break
+                else:
+                    print(f"警告：曲目【{processed_song['song_name']}】未找到 {processed_song['level_index']} 难度")
+            else:
+                print(f"警告：未找到曲目【{processed_song['song_name']}】的信息")
+
+            # 从日服数据库匹配日服曲目信息
+            jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
+            if jp_song_info:
+                print(f"检索到日服曲库的相同匹配: {jp_song_info['meta']['title']}")
+                level_label = REVERSE_LEVEL_LABELS.get(processed_song["level_index"])
+                print(f"难度索引: {processed_song['level_index']} -> 标签: {level_label}")
+                if level_label and level_label in jp_song_info["data"]:
+                    difficulty_data = jp_song_info["data"][level_label]
+                    processed_song["level_next"] = difficulty_data["const"]
+                    print(f"国服 - [{processed_song['level']}], 日服 - [{processed_song['level_next']}]")
+                else:
+                    print(f"警告：曲目【{processed_song['song_name']}】未找到 {level_label} 难度")
+            else:
+                print(f"警告：未找到曲目【{processed_song['song_name']}】的信息")
+            
+            # 备用方案
+            if processed_song["level_next"] is None:
+                processed_song["level_next"] = processed_song.get("level", "N/A")
+                print(f"使用备用定数: {processed_song['level_next']}")
+            
+            print(f"曲目处理完成: {processed_song['song_name']}")
+            return processed_song
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"处理曲目 {i} 时出错: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
+            return None
+
+    print(f"=== 开始处理 {len(b50_data)} 首曲目 ===")
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_song, song, i) for i, song in enumerate(b50_data)]
+        for future in futures:
+            if result := future.result():
+                processed_data.append(result)
+
+    print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===")
+
+    # 6. 保存处理后的数据
+    with open(b50_data_file, 'w', encoding='utf-8') as f:
+        json.dump(processed_data, f, ensure_ascii=False, indent=4)
+    return processed_data
+
+def get_nested_field(data, field_paths):
+    """从嵌套字典中获取字段值"""
+    if isinstance(field_paths, str):
+        field_paths = [field_paths]
+    
+    result = []
+    
+    for field_path in field_paths:
+        try:
+            keys = field_path.split('.')
+            current = data
+            for key in keys:
+                current = current[key]
+            
+            print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
+            
+            if current is not None:
+                if isinstance(current, list):
+                    if current:  # 只添加非空列表
+                        result.extend(current)
+                else:
+                    result.append(current)
+        except (KeyError, TypeError, AttributeError) as e:
+            print(f"提取字段 '{field_path}' 时出错: {e}")
+            continue
+    
+    return result
+
+def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
+                            clip_start_interval, clip_play_time, default_comment_placeholders):
+    """生成视频配置文件，合并了 `st_gen_resource_config` 和 `gene_resource_config`
     
     Args:
-        query (str): 要搜索的查询字符串
-        songs_data (dict): 歌曲元数据的json对象
-        
+        b50_data: b30 数据列表
+        images_path: 图片路径
+        videoes_path: 视频路径
+        output_file: 输出配置文件路径
+        clip_start_interval: 视频开始时间的区间（可选，默认为 None，使用全局变量）
+        clip_play_time: 每个视频片段的时长（可选，默认为 None，使用全局变量）
+        default_comment_placeholders: 是否使用默认的评论占位符（可选，默认为 None，使用全局变量）
+    
     Returns:
-        list: 匹配的歌曲列表
+        video_config_data: 生成的视频配置数据字典
     """
-    results = []
-    for song in songs_data:
-        if query.lower() in song.get('name', '').lower() \
-           or query.lower() in song.get('artist', '').lower() \
-           or query.lower() in str(song.get('id', '')):
-            song_type = LEVEL_LABELS.get(song.get('type'), '-')
-            index = songs_data.index(song)
-            result_string = f"{song.get('name', '')} [{song_type}]"
-            results.append((result_string, song))
-    return results
+
+    # 如果参数没有传入，则使用全局变量或默认值
+    if clip_start_interval is None:
+        clip_start_interval = (clip_start_interval[0], clip_start_interval[1])
+    
+    if clip_play_time is None:
+        clip_play_time = 10  # 默认值
+    
+    if default_comment_placeholders is None:
+        default_comment_placeholders = False  # 默认值
+
+    intro_clip_data = {
+        "id": "intro_1",
+        "duration": 10,
+        "text": "【请填写前言部分】" if default_comment_placeholders else "",
+        # "version": "LUMINOUS"
+    }
+
+    ending_clip_data = {
+        "id": "ending_1",
+        "duration": 10,
+        "text": "【请填写后记部分】" if default_comment_placeholders else "",
+        # "version": "LUMINOUS"
+    }
+
+    video_config_data = {
+        "enable_re_modify": False,
+        "intro": [intro_clip_data],
+        "ending": [ending_clip_data],
+        "main": [],
+    }
+
+    main_clips = []
+
+    # 检查视频开始时间区间
+    if clip_start_interval[0] > clip_start_interval[1]:
+        print(f"Error: 视频开始时间区间设置错误，请检查global_config.yaml文件中的CLIP_START_INTERVAL配置。")
+        clip_start_interval = (clip_start_interval[1], clip_start_interval[1])
+
+    # 遍历 b50_data 来构建视频配置数据
+    for song in b50_data:
+        if not song['clip_id']:
+            print(f"Error: 没有找到 {song['title']}-{song['level_label']}-{song['type']} 的clip_id，请检查数据格式，跳过该片段。")
+            continue
+        id = song['clip_id']
+        # video_name = f"{song['id']}-{song['song_name']}"
+        video_name = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
+        __image_path = os.path.join(images_path, id + ".png")
+        __image_path = os.path.normpath(__image_path)
+        if not os.path.exists(__image_path):
+            print(f"Error: 没有找到 {id}.png 图片，请检查本地缓存数据。")
+            __image_path = ""
+
+        __video_path = os.path.join(videoes_path, video_name + ".mp4")
+        __video_path = os.path.normpath(__video_path)
+        if not os.path.exists(__video_path):
+            print(f"Error: 没有找到 {video_name} 视频，请检查本地缓存数据。")
+            __video_path = ""
+        
+        duration = clip_play_time
+        start = random.randint(clip_start_interval[0], clip_start_interval[1])
+        end = start + duration
+
+        main_clip_data = {
+            "id": song["id"],
+            "clip_id": song["clip_id"],
+            "song_name": song["song_name"],
+            "artist": song["artist"],
+            "level": song["level"],
+            "level_next": song["level_next"],
+            "level_index": song["level_index"],
+            "score": song["score"],
+            "rating": song["rating"],
+            "full_combo": song["full_combo"],
+            "full_chain": song["full_chain"],
+            "main_image": __image_path,
+            "video": __video_path,
+            "duration": duration,
+            "start": start,
+            "end": end,
+            "text": "【请填写 Best50 评价】" if default_comment_placeholders else "",
+        }
+        main_clips.append(main_clip_data)
+
+    # 倒序排列（b30在前，b1在后）
+    main_clips.reverse()
+
+    video_config_data["main"] = main_clips
+
+    # 写入到输出文件
+    with open(output_file, 'w', encoding="utf-8") as file:
+        json.dump(video_config_data, file, ensure_ascii=False, indent=4)
+
+    return video_config_data
 
 
-if __name__ == "__main__":
-    img_path = "jackets/maimaidx/Jacket_1103.jpg"
-    img = download_image_data(img_path)
-    img.show()
+
+# if __name__ == "__main__":
+#     img_path = "jackets/maimaidx/Jacket_1103.jpg"
+#     img = download_image_data(img_path)
+#     img.show()

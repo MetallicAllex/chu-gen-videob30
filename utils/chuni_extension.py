@@ -4,17 +4,25 @@ CHUNITHM 扩展工具模块
 """
 
 # 难度等级映射关系
-CHUNI_LEVELS = {
+REVERSE_LEVEL_LABELS = {
     0: "BASIC",
     1: "ADVANCED",
-    2: "EXPERT", 
+    2: "EXPERT",
     3: "MASTER",
-    4: "ULTIMA"  # 仅部分曲目存在
+    4: "ULTIMA",
+}
+
+LEVEL_LABELS = {
+    "BASIC": 0,
+    "ADVANCED": 1,
+    "EXPERT": 2,
+    "MASTER": 3,
+    "ULTIMA": 4,
 }
 
 # 连击达成类型
 CHUNI_COMBO_TYPES = [
-    "none",        # 未达成
+    None,        # 未达成
     "fullcombo",   # FC
     "alljustice"   # AJ
 ]
@@ -23,7 +31,7 @@ CHUNI_COMBO_TYPES = [
 CHUNI_CHAIN_TYPES = [
     None,
     "fullchain",   # FC
-    "fullchain+"   # FC+
+    "fullchain2"   # FC+
 ]
 
 # 旧版本兼容（部分旧存档可能使用的字段名）

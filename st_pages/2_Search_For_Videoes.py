@@ -1,15 +1,11 @@
-import os
-import json
-import time
-import shutil
-import random
-import traceback
+import os, json, time, shutil, random, traceback
 import streamlit as st
 from datetime import datetime
-from utils.PageUtils import load_config, save_config, read_global_config, write_global_config
+from utils.PageUtils import load_config, read_global_config, save_config, write_global_config
 from utils.PathUtils import get_data_paths, get_user_versions
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
-from pre_gen import search_one_video
+from utils.chuni_extension import REVERSE_LEVEL_LABELS
+from pre_gen import search_one_video, merge_b50_data
 
 G_config = read_global_config()
 _downloader = G_config.get('DOWNLOADER', 'bilibili')
@@ -36,7 +32,7 @@ current_paths = None
 data_loaded = False
 
 if not username:
-    st.error("请先获取指定用户名的B30存档！")
+    st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
 
 if save_id:
@@ -48,16 +44,16 @@ if save_id:
 else:
     st.warning("未索引到存档，请先加载存档数据！")
 
-with st.expander("更换B30存档"):
+with st.expander("更换 Best50 存档", icon="💾"):
     st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
         selected_save_id = st.selectbox(
             "选择存档",
             versions,
-            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
         )
-        if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
+        if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
             if selected_save_id:
                 st.session_state.save_id = selected_save_id
                 st.rerun()
@@ -183,58 +179,64 @@ def st_init_downloader():
     
     return dl_instance
 
-# b30 config文件位置
-b30_data_file = current_paths['data_file']
+# b50 config文件位置
+b50_data_file = current_paths['data_file']
 # 根据下载器类型的b30_config副本
 if downloader == "youtube":
-    b30_config_file = current_paths['config_yt']
+    b50_config_file = current_paths['config_yt']
 elif downloader == "bilibili":
-    b30_config_file = current_paths['config_bi']
+    b50_config_file = current_paths['config_bi']
 
-if not os.path.exists(b30_data_file):
-    st.error("未找到b30数据文件，请检查B30存档的数据完整性！", icon="❌")
+if not os.path.exists(b50_data_file):
+    st.error("未找到 b50 数据文件，请检查 Best50 存档的数据完整性！", icon="❌")
     st.stop()
 
-if not os.path.exists(b30_config_file):
+if not os.path.exists(b50_config_file):
     # 复制b30_data_file到b30_config_file
-    shutil.copy(b30_data_file, b30_config_file)
-    st.toast(f"已生成 {downloader} 的 Best30 索引文件", icon="ℹ️")
+    shutil.copy(b50_data_file, b50_config_file)
+    st.toast(f"已生成 {downloader} 的 Best50 索引文件", icon="ℹ️")
 
-# 对比以及合并b30_data_file和b30_config_file
-# b30_data = load_config(b30_data_file)
-# b30_config = load_config(b30_config_file)
-# merged_b30_config, update_count = merge_b30_data(b30_data, b30_config)
-# save_config(b30_config_file, merged_b30_config)
-# if update_count > 0:
-#     st.toast(f"已加载 {downloader} 的 Best30 索引，共更新 {update_count} 条数据", icon="✅")
+# 对比以及合并 b30_data_file 和 b30_config_file
+b50_data = load_config(b50_data_file)
+b50_config = load_config(b50_config_file)
+merged_b50_config, update_count = merge_b50_data(b50_data, b50_config)
+save_config(b50_config_file, merged_b50_config)
+if update_count > 0:
+    st.toast(f"已加载 {downloader} 的 Best50 索引，共更新 {update_count} 条数据", icon="✅")
 
-def st_search_b30_videoes(dl_instance, placeholder, search_wait_time):
-    # read b30_data
-    b30_config = load_config(b30_config_file)
+def st_search_b50_videoes(dl_instance, placeholder, search_wait_time):
+    # read b50_data
+    b50_config = load_config(b50_config_file)
+    total_songs = len(b50_config)  # 获取实际歌曲数量
 
     with placeholder.container(border=True):
-        with st.spinner("正在搜索b30视频信息..."):
+        with st.spinner(f"正在搜索 b{total_songs} 视频信息..."):
             progress_bar = st.progress(0)
             write_container = st.container(border=True, height=400)
-            i = 0
-            for song in b30_config:
-                i += 1
-                progress_bar.progress(i / 30, text=f"正在搜索({i}/30): {song['song_name']}")
+            
+            for i, song in enumerate(b50_config, 1):  # 从1开始计数
+                # 使用 min() 确保进度值不超过 1.0
+                progress_value = min(i / total_songs, 1.0)
+                progress_bar.progress(progress_value, text=f"正在搜索({i}/{total_songs}): {song['song_name']} - [{REVERSE_LEVEL_LABELS.get(song['level_index'])}]")
+                
                 if 'video_info_match' in song and song['video_info_match']:
-                    write_container.write(f"跳过({i}/30): {song['song_name']} ，已储存有相关视频信息")
+                    write_container.write(f"({i}/{total_songs}[跳过]): {song['song_name']} （已储存有相关视频信息）")
                     continue
                 
                 song_data, ouput_info = search_one_video(dl_instance, song)
-                write_container.write(f"【{i}/30】{ouput_info}")
+                write_container.write(f"【{i}/{total_songs}】{ouput_info}")
                 # write_container.write(f"{song_data}") # debug
 
-                # 每次搜索后都写入b30_data_file
-                with open(b30_config_file, "w", encoding="utf-8") as f:
-                    json.dump(b30_config, f, ensure_ascii=False, indent=4)
+                # 每次搜索后都写入b50_data_file
+                with open(b50_config_file, "w", encoding="utf-8") as f:
+                    json.dump(b50_config, f, ensure_ascii=False, indent=4)
                 
                 # 等待几秒，以减少被检测为bot的风险
                 if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
                     time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
+            
+            # 搜索完成后显示100%
+            progress_bar.progress(1.0, text="搜索完成！")
 
 # 仅在配置已保存时显示"开始预生成"按钮
 if st.session_state.get('config_saved_step2', False):
@@ -249,7 +251,7 @@ if st.session_state.get('config_saved_step2', False):
             dl_instance = st_init_downloader()
             # 缓存downloader对象
             st.session_state.downloader = dl_instance
-            st_search_b30_videoes(dl_instance, info_placeholder, search_wait_time)
+            st_search_b50_videoes(dl_instance, info_placeholder, search_wait_time)
             st.session_state.search_completed = True  # Reset error flag if successful
             st.toast("搜索完成！请前往下一步检查视频信息，以及下载视频。", icon="✅")
             st.toast("如果站点存在此视频，但下载器未找到，请尝试重新搜索多几次。", icon="⚠️")

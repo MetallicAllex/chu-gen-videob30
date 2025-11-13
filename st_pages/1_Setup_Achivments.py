@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import *
-from pre_gen import update_b30_data_lxns, update_b30_data_fish, st_init_cache_pathes
+from pre_gen import update_b50_data_lxns, update_b50_data_fish, st_init_cache_pathes
 
 def convert_old_files(folder, username, save_paths):
     """
@@ -67,12 +67,12 @@ def convert_old_files(folder, username, save_paths):
     except Exception as e:
         st.error(f"转换video_config文件时发生错误: {e}", icon="⚠️")
 
-st.header("获取 / 管理 Best30 成绩与存档")
+st.header("获取 / 管理 Best50 成绩与存档")
 
 def check_username(input_username):
     # 检查用户名是否包含非法字符
     if any(char in input_username for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']):
-        return remove_invalid_chars(input_username), input_username
+        return escape_markdown_text(input_username), input_username
     else:
         return input_username, input_username
     
@@ -90,7 +90,7 @@ if 'use_lxns' not in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get('save_id', None)
-token = st.session_state.get("token", None)
+friend_code = st.session_state.get("friend_code", None)
 
 with st.container(border=True):
     input_username = st.text_input(
@@ -99,31 +99,32 @@ with st.container(border=True):
         placeholder="建议用户名，便于辨认且方便水鱼查分"
     )
     
-    # 添加复选框控制是否显示Token输入框
+    # 添加复选框控制是否显示好友码输入框
     use_lxns = st.checkbox(
-        "我使用落雪查分器（更新后请勿再次勾选，避免因反复更新导致 Token 丢失）", 
+        "我使用落雪查分器（更新后请勿再次勾选，避免因反复更新导致好友码丢失）", 
         value=st.session_state.use_lxns,
         help="如果您使用落雪查分器作为数据源，请勾选此项"
     )
     
-    # 根据复选框状态决定是否显示Token输入框
+    # 根据复选框状态决定是否显示好友码输入框
     if use_lxns:
-        st.toast("若已经更新 Token，请勿再次勾选，避免因反复更新导致 Token 丢失", icon="❗")
+        # st.toast("若已经更新好友码，请勿再次勾选，避免因反复更新导致好友码丢失", icon="❗")
         col1, col2 = st.columns([0.75, 0.2], vertical_alignment='bottom')
         with col1:
-            input_token = st.text_input(
-                "个人 API 密钥（落雪查分器所需）",
-                value=token if token else "", 
-                type="password", 
+            friend_code = st.text_input(
+                "好友码（落雪查分器所需）",
+                value=friend_code if friend_code else "",
                 placeholder="使用落雪查分（首次）必须提供此项，否则查询将失败",
-                help="访问 [落雪查分器【账号详情 - 第三方应用】页](https://maimai.lxns.net/user/profile?tab=thirdparty)，API 密钥框在本页底部"
+                help="访问 [【账号详情】页](https://maimai.lxns.net/user/profile) 查看"
             )
         with col2:
             if st.session_state.get('config_saved', False):
-                # 已保存配置，显示更新Token按钮
-                if st.button("更新 Token", use_container_width=True):
-                    if not input_token.strip():
-                        st.toast("请输入有效的 Token", icon="❌")
+                # 已保存配置，显示更新按钮
+                if st.button("更新好友码", use_container_width=True):
+                    if not friend_code.strip():
+                        st.toast("请输入好友码", icon="❌")
+                    elif int(friend_code[:2]) == 99 or int(friend_code[:2]) != 10:
+                        st.toast("请输入对应游戏的好友码", icon="❌")
                     else:
                         username = st.session_state.get("username")
                         if username:
@@ -132,14 +133,14 @@ with st.container(border=True):
                                 with open(userinfo_file, 'r', encoding='utf-8') as f:
                                     user_info = json.load(f)
                                 
-                                # 更新Token
-                                user_info["token"] = input_token.strip()
+                                # 更新好友码
+                                user_info["friend_code"] = friend_code.strip()
                                 
                                 with open(userinfo_file, 'w', encoding='utf-8') as f:
                                     json.dump(user_info, f, indent=2, ensure_ascii=False)
                                 
-                                st.session_state.token = input_token.strip()
-                                st.toast("Token 已更新！", icon="✅")
+                                st.session_state.friend_code = friend_code.strip()
+                                st.toast("好友码已更新！", icon="✅")
                             else:
                                 st.toast("未找到用户信息文件", icon="❌")
                         else:
@@ -169,16 +170,16 @@ with st.container(border=True):
             # 更新用户信息
             user_info["username"] = username
             
-            # 只有在使用落雪查分器时才保存或更新Token
-            if use_lxns:
-                user_info["token"] = input_token.strip()
-            # 如果不使用落雪查分器，但之前有Token，保留原有Token
-            elif "token" in user_info:
-                # 保留原有Token，不做修改
+            # 只有在使用落雪查分器时才保存或更新好友码
+            if use_lxns and friend_code[:2] == 10:
+                user_info["friend_code"] = friend_code.strip()
+            # 如果不使用落雪查分器，但之前有好友码，保留原有好友码
+            elif "friend_code" in user_info:
+                # 保留原有好友码，不做修改
                 pass
             else:
-                # 既不使用落雪查分器，也没有原有Token，设置为空
-                user_info["token"] = ""
+                # 既不使用落雪查分器，也没有原有好友码，设置为空
+                user_info["friend_code"] = ""
             
             # 保存用户信息
             with open(userinfo_file, 'w', encoding='utf-8') as f:
@@ -187,14 +188,14 @@ with st.container(border=True):
             st.success("用户信息已保存！", icon="✅")
             st.session_state.update({
                 "username": username,
-                "token": user_info.get("token", ""),
+                "friend_code": user_info.get("friend_code", ""),
                 "use_lxns": use_lxns,
                 "config_saved": True
             })
 
-def update_b30(update_function, secret_identifier, save_paths):
+def update_b50(update_function, secret_identifier, save_paths):
     try:
-        # 1. 强制加载用户名（完全隔离Token）
+        # 1. 强制加载用户名（完全隔离好友码）
         def get_safe_display_name():
             """从session_state或文件获取真实用户名，绝不使用传入的secret_identifier"""
             # 优先从session获取
@@ -213,12 +214,12 @@ def update_b30(update_function, secret_identifier, save_paths):
         safe_name = get_safe_display_name()
 
         # 2. 执行数据获取（原逻辑不变）
-        b30_data = update_function(save_paths['raw_file'], save_paths['data_file'], secret_identifier)
+        b50_data = update_function(save_paths['raw_file'], save_paths['data_file'], secret_identifier)
         
         # 3. 绝对安全显示
-        st.success(f"已获取 {safe_name} 的 Best30 数据：{os.path.dirname(save_paths['data_file'])}")
+        st.success(f"已获取 {safe_name} 的 Best50 数据：{os.path.dirname(save_paths['data_file'])}")
         st.session_state.data_updated_step1 = True
-        return b30_data
+        return b50_data
 
     except Exception as e:
         st.session_state.data_updated_step1 = False
@@ -234,7 +235,7 @@ def update_b30(update_function, secret_identifier, save_paths):
 @st.dialog("删除存档？", width="medium")
 def delete_save_data(username, save_id):
     version_dir = get_user_version_dir(username, save_id)
-    st.warning(f"您是要删除存档【{username} - {save_id}】吗？将清除所有已生成 Best30 底图和视频，且不可撤销！", icon="⚠️")
+    st.warning(f"您是要删除存档【{username} - {save_id}】吗？将清除所有已生成 Best50 底图和视频，且不可撤销！", icon="⚠️")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("是的！确定要删除它！", icon="✔️", use_container_width=True):
@@ -261,8 +262,8 @@ def load_user_info(username):
                 # 更新 session_state
                 st.session_state.update({
                     "username": user_info.get("username", username),
-                    "token": user_info.get("token", ""),
-                    "use_lxns": bool(user_info.get("token", "")),  # 如果有Token，默认勾选使用落雪查分器
+                    "friend_code": user_info.get("friend_code", ""),
+                    "use_lxns": bool(user_info.get("friend_code", "")),  # 如果有好友码，默认勾选使用落雪查分器
                 })
                 return True
         except Exception as e:
@@ -279,11 +280,11 @@ if st.session_state.get('config_saved', False):
     versions = get_user_versions(username)
     if versions:
         with st.container(border=True):
-            st.write(f"新存档可能无法立刻显示，单击其他存档即可刷新。")
+            st.info(f"新存档可能无法立刻显示，单击其他存档即可刷新。", icon="ℹ️")
             selected_save_id = st.selectbox(
                 "选择一份已保存的存档",
                 versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
             )
             col1, col2, col3 = st.columns(3, gap="small")
             with col1:
@@ -292,10 +293,10 @@ if st.session_state.get('config_saved', False):
                         st.session_state.save_id = selected_save_id
                         if load_user_info(username):
                             st.toast("已加载您的存档。", icon="✅")
-                            st.session_state.token = token
-                            st.toast("同时您的 Token 已恢复至生成器内，您现在可以获取落雪查分器数据了。", icon="ℹ️")
+                            st.session_state.friend_code = friend_code
+                            st.toast("同时您的好友码已恢复至生成器内，您现在可以获取落雪查分器数据了。", icon="ℹ️")
                         else:
-                            st.warning("存档加载成功，但未找到用户信息（可能需要重新输入 Token）。")
+                            st.warning("存档加载成功，但未找到用户信息（可能需要重新输入好友码）。")
                         st.session_state.data_updated_step1 = True
                     else:
                         st.error("未指定有效的存档路径！")
@@ -314,24 +315,24 @@ if st.session_state.get('config_saved', False):
     else:
         st.warning(f"{username} 还没有历史存档，请从下方获取新的 Best30 数据。")
 
-    st.write(f"新建 / 获取 b30 数据")
+    st.write(f"新建 / 获取 b50 数据")
     st.info("""
-            从下面选择您使用的查分器获取 Best30 数据，系统将为您创建存档。
-            - 水鱼需关闭【[禁止其他人查询我的成绩](https://www.diving-fish.com/maimaidx/prober/#Profile)】以允许用户名查询
-            - 落雪若加载存档后，下方未出现【已保存落雪查分器 Token】，请重新加载
+            从下面选择您使用的查分器获取 Best50 数据，系统将为您创建存档。
+            - 【水鱼】需关闭 [（禁止其他人查询我的成绩）](https://www.diving-fish.com/maimaidx/prober/#Profile)以允许用户名查询
+            - 【落雪】加载存档后若下方未出现【已保存好友码】提示，请重新加载
             """, icon="ℹ️")
     with st.container(border=True):
-        st.warning("""因落雪返回数据未区分新旧曲，目前仅支持生成账号内最高 Rating 的 30 首曲目。""", icon="⚠️")
+        st.warning("因当前开发分支限制，水鱼查分器数据源获取被禁用。", icon="⚠️")
         
-        # 显示当前Token状态（如果有）
-        if st.session_state.get("token"):
-            st.info(f"已保存落雪查分器 Token: {st.session_state.token[:4]}******", icon="ℹ️")
+        # 显示当前好友码状态（如果有）
+        if st.session_state.get("friend_code"):
+            st.info(f"【落雪】已保存好友码: ******{st.session_state.friend_code[11:]}", icon="ℹ️")
             
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("从落雪查分器获取", help="将使用您的个人 API 密钥作为验证参数", icon="❄️", use_container_width=True):
-                if not st.session_state.get("token"):
-                    st.error("未设置落雪查分器 Token！请在上方勾选'我使用落雪查分器'并输入您的 API 密钥。", icon="❌")
+            if st.button("从落雪查分器获取", help="将使用您的好友码作为验证参数向代理请求游戏数据", icon="❄️", use_container_width=True):
+                if not st.session_state.get("friend_code"):
+                    st.error("未设置好友码！请在上方勾选'我使用落雪查分器'并输入您的好友码。", icon="❌")
                 else:
                     try:
                         current_paths = get_data_paths(username, timestamp=None)
@@ -340,10 +341,10 @@ if st.session_state.get('config_saved', False):
                         if save_id:
                             os.makedirs(save_dir, exist_ok=True)
                             st.session_state.save_id = save_id
-                            with st.spinner("正在获取 b30 数据..."):
-                                update_b30(
-                                    update_b30_data_lxns,
-                                    st.session_state.token,
+                            with st.spinner("正在获取 Best50 数据..."):
+                                update_b50(
+                                    update_b50_data_lxns,
+                                    st.session_state.friend_code,
                                     current_paths,
                                 )
                     except Exception as e:
@@ -356,9 +357,9 @@ if st.session_state.get('config_saved', False):
                 if save_id:
                     os.makedirs(save_dir, exist_ok=True)
                     st.session_state.save_id = save_id
-                    with st.spinner("正在获取 b30 数据..."):
-                        update_b30(
-                            update_b30_data_fish,
+                    with st.spinner("正在获取 Best50 数据..."):
+                        update_b50(
+                            update_b50_data_fish,
                             raw_username,
                             current_paths,
                         )

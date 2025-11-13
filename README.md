@@ -29,7 +29,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 本工具的原理是：
 
-- 从查分器获取你的 Best30 数据并保存在本地。
+- 从查分器获取你的 Best50 数据并保存在本地。
 
 - 从流媒体上搜索并下载谱面确认视频并保存在本地。
 
@@ -39,9 +39,9 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 数据源支持情况：
 
-- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取你的 B30 数据
+- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取你的 Best50 数据
 
-- [x] [落雪查分器](https://maimai.lxns.net/)：您需要提供个人 API 密钥用于获取 B30 数据
+- [x] [落雪查分器](https://maimai.lxns.net/)：您需要提供好友码用于获取 Best50 数据
 
 - [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：因缺少测试样本，我们目前无法支持此数据源
 
@@ -62,8 +62,8 @@ Auto search and generate your best 30 videoes of CHUNITHM
 - [x] 更好的b30数据存档系统，可以保存多个历史副本
  -->
 
-~~重构搜索逻辑，使其可通过 ID 或关键字搜索~~
-【因重构后导致搜索功能故障，故已经回退并放弃开发】
+- [x] 实现存档配置文件剪辑数据迁移
+- [x] 极速模式下更快的生成速度（GPU 调用）
 
 ---
 
@@ -296,7 +296,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 ### 本地存档文件结构
 
-- `./b30_datas` 是所有的用户b30存档，以及与其配对的视频搜索和生成配置文件
+- `./b30_datas` 是所有的用户b50存档，以及与其配对的视频搜索和生成配置文件
 
     - 用户存档以时间戳命名，作为子文件夹， `./b30_datas/{user}/20250101_080011` 是用户在2025.1.1 08:00:11创建的存档
 
@@ -364,7 +364,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
           "score": 1004306,
           "rating": 15.8306,
           "full_combo": null,
-          "main_image": "b30_datas\\test\\20250327_162029\\images\\Best_30.png",
+          "main_image": "b50_datas\\test\\20250327_162029\\images\\Best_30.png",
           "video": "videos\\downloads\\678-3.mp4",
           "duration": 24,
           "start": 36,
@@ -378,8 +378,6 @@ Auto search and generate your best 30 videoes of CHUNITHM
 ## 鸣谢
 
 - [舞萌 DX 查分器](https://github.com/Diving-Fish/maimaidx-prober) 和 [落雪查分器](https://maimai.lxns.net/docs/api/chunithm) 提供数据库及查询接口
-
-- [in1t_](https://space.bilibili.com/628413859) 提供生成模板
 
 - [bilibili-api](https://github.com/Nemo2011/bilibili-api) 
 

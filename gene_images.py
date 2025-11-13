@@ -333,9 +333,8 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
                                  font_color=(26, 0, 84), h_align="left")
             
             # Best 序号
-            best_number = index + 1 # Best 倒序
             best_pos = (245, 1017)
-            temp_img = TextDraw(temp_img, f"Best #{best_number}", best_pos, max_width=200,
+            temp_img = TextDraw(temp_img, f"{prefix} #{index}", best_pos, max_width=200,
                                 font_path=title_font_path, font_size=28,
                                 font_color=(255, 255, 255), h_align="center")
             
@@ -347,7 +346,7 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
             print(traceback.format_exc())
             background = Image.new('RGBA', (1520, 500), (0, 0, 0, 255))
     finally:
-        background.save(os.path.join(output_path, f"{prefix}_{best_number}.png"))
+        background.save(os.path.join(output_path, f"{prefix}_{index}.png"))
 
 # def generate_single_image(record_detail: dict, output_path, prefix, index):
 #     # 预先初始化背景

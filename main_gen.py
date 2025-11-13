@@ -1,7 +1,6 @@
 from gene_video import create_video_segment, create_info_segment, create_full_video, combine_full_video_from_existing_clips
 import json
 import os
-import yaml
 import traceback
 
 FONT_PATH = "./font/SOURCEHANSANSSC-BOLD.OTF"
@@ -42,7 +41,7 @@ def video_generation_test():
     if not os.path.exists(video_output_path):
         os.makedirs(video_output_path)
 
-    config_output_file = f"./b30_datas/video_configs_{username}.json"
+    config_output_file = f"./b50_datas/video_configs_{username}.json"
     if not os.path.exists(config_output_file) or not config_output_file:
         print(f"Error: 没有找到配置文件{config_output_file}，请检查预处理步骤是否完成")
 

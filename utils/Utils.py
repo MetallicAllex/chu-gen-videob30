@@ -1,8 +1,5 @@
-import json, requests, threading
+import json, requests
 from PIL import Image
-from update_music_data import music_info_path, jp_music_info_path
-from utils.DataUtils import REVERSE_LEVEL_LABELS
-from concurrent.futures import ThreadPoolExecutor
 
 # ========== 类型定义 ==========
 class Utils:
@@ -19,146 +16,31 @@ class Utils:
                 print("错误：JSON 解码失败。")
                 return {}
 
-def _process_b30_data(raw_data: list, source_type: str, b30_raw_file, b30_data_file):
-    """Best30 数据清洗（只要关键的）。
-
-    Args:
-        raw_data(list): API 请求的原始数据
-        source_type(str): Best30 数据来源（水鱼 / 落雪）
-        b30_raw_file(JSON): Best30 原始数据存储文件
-        b30_data_file(JSON): Best30 处理数据存储文件
-    
-    Returns:
-        processed_data(list): 经过处理后的数据（使用落雪格式）
+def format_time_difference(seconds):
     """
-    # 1. 加载本地曲目数据库（主线程完成）
-    with open(music_info_path, 'r', encoding='utf-8') as f:
-        song_db = json.load(f)
+    格式化时间差，隐藏为0的单位
+    """
+    if seconds < 1:
+        return f"{seconds*1000:.1f}ms"
     
-    with open(jp_music_info_path, 'r' ,encoding='utf-8') as j:
-        jp_song_db = json.load(j)
-
-    # 2. 根据数据源类型提取字段映射规则
-    field_map = {
-        "lxns": {
-            "id": "id",
-            "song_name": "song_name",
-            "level_index": "level_index",
-            "score": "score",
-            "rating": "rating",
-            "fc": "full_combo",
-            "fchain": "full_chain",
-            "data_field": "data"
-        },
-        "fish": {
-            "id": "mid",
-            "song_name": "title",
-            "level_index": "level_index",
-            "score": "score",
-            "rating": "ra",
-            "fc": "fc",
-            "fchain": None,
-            "data_field": "records.b30"
-        }
-    }
-    fields = field_map[source_type]
-
-    # 3. 提取原始 B30 数据（支持嵌套字段如 'records.b30'）
-    def get_nested_field(data, field_path):
-        keys = field_path.split('.')
-        for key in keys:
-            data = data[key]
-        return data
-    b30_data = get_nested_field(raw_data, fields["data_field"])[:30]
-
-    # 4. 缓存原始数据（主线程完成）
-    with open(b30_raw_file, 'w', encoding='utf-8') as f:
-        json.dump(raw_data, f, ensure_ascii=False, indent=4)
-
-    # 5. 多线程处理每条曲目数据
-    processed_data = []
-    print_lock = threading.Lock()  # 用于保护打印输出
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds_remaining = seconds % 60
     
-    def process_song(song, i):
-        nonlocal song_db
-        try:
-            processed_song = {
-                "id": song[fields["id"]],
-                "song_name": song[fields["song_name"]],
-                "artist": None,
-                "level": None,
-                "level_index": song[fields["level_index"]],
-                "level_next": None,
-                "score": song[fields["score"]],
-                "rating": song[fields["rating"]],
-                "full_combo": song[fields["fc"]],
-                "full_chain": song[fields["fchain"]] or None,
-                "clip_id": f"Best_{i + 1}"
-            }
-
-            # 从本地数据库匹配曲目信息
-            song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
-            if song_info:
-                processed_song["artist"] = song_info["artist"] # 将曲师加入曲目数据内
-                for diff in song_info.get("difficulties", []):
-                    if diff.get("difficulty") == processed_song["level_index"]:
-                        level_value = diff["level_value"]
-                        processed_song["level"] = float(level_value) if isinstance(level_value, int) else level_value
-                        break
-                else:
-                    with print_lock:
-                        print(f"警告：曲目【{processed_song['song_name']}】未找到 {processed_song['level_index']} 难度")
-            else:
-                with print_lock:
-                    print(f"警告：未找到曲目【{processed_song['song_name']}】的信息")
-
-            # 备用方案
-            if "level" not in processed_song:
-                try:
-                    raw_level = str(song.get("level", "")).rstrip('+')
-                    processed_song["level"] = float(raw_level) if raw_level.replace('.', '').isdigit() else song.get("level", "N/A")
-                except (ValueError, AttributeError):
-                    processed_song["level"] = song.get("level", "N/A")
-                with print_lock:
-                    print(f"使用原始 level 值: {processed_song['level']} (曲目ID: {processed_song['id']})")
-            
-            # 从日服数据库匹配日服曲目信息
-            jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
-            if jp_song_info:
-                level_label = REVERSE_LEVEL_LABELS.get(processed_song["level_index"])
-                if level_label and level_label in jp_song_info["data"]:
-                    difficulty_data = jp_song_info["data"][level_label]
-                    processed_song["level_next"] = difficulty_data["const"]
-                else:
-                    with print_lock:
-                        print(f"警告：曲目【{processed_song['song_name']}】未找到 {level_label} 难度")
-            else:
-                with print_lock:
-                    print(f"警告：未找到曲目【{processed_song['song_name']}】的日服信息")
-            
-            # 备用方案 - 日服
-            if "level_next" not in processed_song:
-                # 如果没有找到日服数据，可以使用中服数据作为备用
-                processed_song["level_next"] = processed_song.get("level", "N/A")
-                with print_lock:
-                    print(f"使用国服 level 作为日服备用值: {processed_song['level_next']} (曲目ID: {processed_song['id']})")
-            
-            return processed_song
-        except Exception as e:
-            with print_lock:
-                print(f"处理曲目 {i} 时出错: {str(e)}")
-            return None
-
-    with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_song, song, i) for i, song in enumerate(b30_data)]
-        for future in futures:
-            if result := future.result():
-                processed_data.append(result)
-
-    # 6. 保存处理后的数据（主线程完成）
-    with open(b30_data_file, 'w', encoding='utf-8') as f:
-        json.dump(processed_data, f, ensure_ascii=False, indent=4)
-    return processed_data
+    parts = []
+    
+    if hours > 0:
+        parts.append(f"{hours} 小时")
+    if minutes > 0:
+        parts.append(f" {minutes} 分")
+    if seconds_remaining > 0 or not parts:  # 如果没有其他单位，至少显示秒
+        # 如果有更高级单位，秒取整；否则显示小数
+        if parts:
+            parts.append(f" {int(seconds_remaining)} 秒")
+        else:
+            parts.append(f" {seconds_remaining:.2f} 秒")
+    
+    return "".join(parts)
 
 def add_layer(base_image, layer_image, position=(0, 0), opacity=1.0):
     """将图层叠加到基础图像上，支持透明度控制。
@@ -189,66 +71,43 @@ def add_layer(base_image, layer_image, position=(0, 0), opacity=1.0):
     canvas.paste(layer_image, position, mask=layer_image)
     return canvas
 
-# def diff_bg_change(num):
-#     """ 根据谱面难度返回对应的背景图像编号 """
-#     if num == 2:
-#         return "EXPERT"
-#     elif num == 3:
-#         return "MASTER"
-#     elif num == 4:
-#         return "ULTIMA"
-#     else:
-#         return 2
-
-# def diff_bg_change(num):
-#     """根据谱面难度返回对应的背景图像编号"""
-#     return {2: "EXPERT", 3: "MASTER", 4: "ULTIMA"}.get(num, 2)
-
-
-# def special_mark(mark):
-#     """FC | AJ 判定"""
-#     if mark == "fullcombo":
-#         return "(FC)"
-#     elif mark == "alljustice":
-#         return "(AJ)"
-#     else:
-#         return ""
-
-# def get_keyword(downloader_type, title_name, level_index):
-#     match level_index:
-#         case 0:
-#             dif_name = "BASIC"
-#         case 1:
-#             dif_name = "ADVANCED"
-#         case 2:
-#             dif_name = "EXPERT"
-#         case 3:
-#             dif_name = "MASTER"
-#         case 4:
-#             dif_name = "ULTIMA"
-#         # case 5:
-#             # dif_name = "World's End" # 不包含在内
-#         case _:
-#             dif_name = ""
-#             print(f"Warning: 谱面{title_name}具有未指定的难度！")
-#     if downloader_type == "youtube":
-#         suffix = "(譜面確認) [CHUNITHM チュウニズム]"
-#         return f"{title_name} {dif_name} {suffix}"
-#     elif downloader_type == "bilibili":
-#         prefix = "【CHUNITHM/谱面预览】"
-#         return f"{prefix} {title_name} {dif_name}"
-
 def get_keyword(downloader_type, title_name, level_index):
     if not level_index:
-        print(f"Warning: 谱面{title_name}具有未指定的难度！")
+        print(f"警告: 谱面{title_name}具有未指定的难度！")
     return (
         f"{title_name} {level_index} (譜面確認) [CHUNITHM チュウニズム]"
         if downloader_type == "youtube"
         else f"【CHUNITHM/中二节奏】谱面确认 {title_name} {level_index}"
     )
 
+import subprocess
+import re
 
-def get_b30_data_from_fish(username):
+def get_ffmpeg_version():
+    try:
+        # 调用 ffmpeg -version 命令
+        result = subprocess.run(['ffmpeg', '-version'], 
+                              capture_output=True, 
+                              text=True, 
+                              check=True)
+        
+        # 从输出中提取版本号
+        version_match = re.search(r'ffmpeg version (\S+)', result.stdout)
+        if version_match:
+            return version_match.group(1)
+        else:
+            return "未找到版本信息"
+            
+    except FileNotFoundError:
+        return "FFmpeg 未安装或不在 PATH 中"
+    except subprocess.CalledProcessError as e:
+        return f"命令执行错误: {e}"
+
+# # 使用示例
+# version = get_ffmpeg_version()
+# print(f"FFmpeg 版本: {version}")
+
+def get_b50_data_from_fish(username):
     url = "https://www.diving-fish.com/api/chunithmprober/query/player"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -269,53 +128,27 @@ def get_b30_data_from_fish(username):
     else:
         return {"error": f"获取数据失败：{response.status_code}"}
 
-def get_b30_data_from_lxns(token):
-    url = "https://maimai.lxns.net/api/v0/user/chunithm/player/scores"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "X-User-Token": token
-    }
+def get_b50_data_from_lxns(friend_code):
+    url = f"https://1315228137-5e9bxr0gaf.ap-guangzhou.tencentscf.com?game=chunithm&player_id={friend_code}"
+    # headers = {
+    #     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    #     "X-User-Token": friend_code
+    # }
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()  # 自动处理 4xx/5xx 错误
         data = response.json()
         
         # 检查业务逻辑错误（如 success=false）
         if not data.get("success", True):
-            raise Exception(f"落雪 API 返回错误: {data.get('message')}")
+            raise Exception(f"落雪 API 返回错误: {data.get('error')}")
         
         return data
         
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 401:
-            raise Exception("Token 无效或已过期，请检查您的 API 密钥") from e
-        else:
-            raise Exception(f"API 请求失败: {e.response.status_code}") from e
-    except Exception as e:
-        raise Exception(f"获取数据时发生意外错误: {str(e)}") from e
-    
-def get_user_data_from_lxns(token):
-    url = "https://maimai.lxns.net/api/v0/user/chunithm/player"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "X-User-Token": token
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()  # 自动处理 4xx/5xx 错误
-        data = response.json()
-        
-        # 检查业务逻辑错误（如 success=false）
-        if not data.get("success", True):
-            raise Exception(f"落雪 API 返回错误: {data.get('message')}")
-        
-        return data
-        
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 401:
-            raise Exception("Token 无效或已过期，请检查您的 API 密钥") from e
+            raise Exception("好友码无效，请检查您的好友码是否输入正确") from e
         else:
             raise Exception(f"API 请求失败: {e.response.status_code}") from e
     except Exception as e:

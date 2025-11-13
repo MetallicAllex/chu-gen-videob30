@@ -10,13 +10,13 @@ from gene_images import generate_single_image
 from concurrent.futures import ThreadPoolExecutor
 
 # def st_generate_b30_images(placeholder, save_paths):
-#     # read b30_data
-#     b30_data = load_config(save_paths['data_file'])
+#     # read b50_data
+#     b50_data = load_config(save_paths['data_file'])
 #     image_path = save_paths['image_dir']
 #     with placeholder.container(border=True):
-#         pb = st.progress(0, text="正在生成 Best30 成绩底图...")
-#         for index, record_detail in enumerate(b30_data):
-#             pb.progress((index + 1) / len(b30_data), text=f"正在生成 Best30 成绩底图({index + 1}/{len(b30_data)})")
+#         pb = st.progress(0, text="正在生成 Best50 成绩底图...")
+#         for index, record_detail in enumerate(b50_data):
+#             pb.progress((index + 1) / len(b50_data), text=f"正在生成 Best50 成绩底图({index + 1}/{len(b50_data)})")
 #             acc_string = f"{record_detail['score']}"
 #             record_for_gene_image = deepcopy(record_detail)
 #             record_for_gene_image['score'] = acc_string
@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 #             )
 
 # def st_generate_b30_images(placeholder, save_paths):
-#     b30_data = load_config(save_paths['data_file'])
+#     b50_data = load_config(save_paths['data_file'])
 #     image_path = save_paths['image_dir']
         
 #     def worker(index, record_detail):
@@ -50,29 +50,29 @@ from concurrent.futures import ThreadPoolExecutor
 #             return False
     
 #     with placeholder.container(border=True):
-#         pb = st.progress(0, text="正在生成 Best30 成绩底图...")
+#         pb = st.progress(0, text="正在生成 Best50 成绩底图...")
         
 #         with ThreadPoolExecutor(max_workers=8) as executor:  # 限制线程数
 #             futures = []
-#             for index, record_detail in enumerate(b30_data):
+#             for index, record_detail in enumerate(b50_data):
 #                 futures.append(
 #                     executor.submit(worker, index, deepcopy(record_detail))
 #                 )
             
 #             # 实时更新进度条
 #             completed = 0
-#             while completed < len(b30_data):
+#             while completed < len(b50_data):
 #                 for future in futures:
 #                     if future.done() and future.result():
-#                         progress_value = max(completed / len(b30_data), 1.0)  # 确保不超过1.0
+#                         progress_value = max(completed / len(b50_data), 1.0)  # 确保不超过1.0
 #                         pb.progress(progress_value)
 #                 time.sleep(0.1)  # 避免CPU空转
 
 def st_generate_b30_images(placeholder, save_paths):
-    b30_data = load_config(save_paths['data_file'])
+    b50_data = load_config(save_paths['data_file'])
     image_path = save_paths['image_dir']
     
-    def worker(record_detail):
+    def worker(index, record_detail):
         prefix, index = record_detail['clip_id'].split('_', 1)
         try:
             generate_single_image(
@@ -81,7 +81,7 @@ def st_generate_b30_images(placeholder, save_paths):
                 image_path,
                 # "Best",
                 prefix,
-                index
+                int(index)
             )
             return True
         except Exception as e:
@@ -94,21 +94,21 @@ def st_generate_b30_images(placeholder, save_paths):
         
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [executor.submit(worker, i, deepcopy(d)) 
-                    for i, d in enumerate(b30_data)]
+                    for i, d in enumerate(b50_data)]
             
             completed = 0
-            while completed < len(b30_data):
+            while completed < len(b50_data):
                 new_completed = sum(1 for f in futures if f.done() and f.result())
                 if new_completed > completed:
                     completed = new_completed
                     elapsed = (datetime.now() - start_time).total_seconds()
                     speed = completed / max(elapsed, 1e-3)  # 防止除零
-                    remaining = (len(b30_data) - completed) / speed
+                    remaining = (len(b50_data) - completed) / max(speed, 1e-3)
                     
                     pb.progress(
-                        min(completed / len(b30_data), 1.0),
+                        min(completed / len(b50_data), 1.0),
                         text=(
-                            f"进度: {completed}/{len(b30_data)} | "
+                            f"进度: {completed}/{len(b50_data)} | "
                             # f"速度: {speed:.1f} 张/秒 | "
                             f"剩余: {remaining:.1f}秒"
                         )
@@ -117,9 +117,9 @@ def st_generate_b30_images(placeholder, save_paths):
             
             # 生成完成后清除进度条
             pb.empty()  # 这行让进度条消失
-            st.toast(f"操作成功完成（{elapsed:.1f} 秒）", icon="✅")
+            st.toast(f"操作成功完成", icon="✅")
 
-st.title("Step 1: 生成 Best30 成绩底图")
+st.title("Step 1: 生成 Best50 成绩底图")
 
 ### Savefile Management - Start ###
 if "username" in st.session_state:
@@ -134,7 +134,7 @@ current_paths = None
 data_loaded = False
 
 if not username:
-    st.error("请先获取 Best30 存档！")
+    st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
 
 if save_id:
@@ -145,16 +145,16 @@ if save_id:
 else:
     st.warning("未索引到存档，请先加载存档数据！")
 
-with st.expander("更换 Best30 存档"):
+with st.expander("更换 Best50 存档", icon="💾"):
     st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
         selected_save_id = st.selectbox(
             "选择存档",
             versions,
-            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
         )
-        if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
+        if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
             if selected_save_id:
                 st.session_state.save_id = selected_save_id
                 st.rerun()

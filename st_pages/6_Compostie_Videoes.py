@@ -1,17 +1,16 @@
-import shutil
-import time
+import shutil, traceback, time
 import streamlit as st
-import traceback
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
 from main_gen import generate_complete_video
 from gene_video import render_all_video_clips, combine_full_video_direct
+from utils.Utils import format_time_difference, get_ffmpeg_version
 
 st.header("Step 5: 视频渲染")
 
 st.info("渲染视频前，请确保已完成 4-1 和 4-2，并且所有配置无误。", icon="ℹ️")
-st.error("渲染时请勿修改任何参数，这可能会导致渲染过程发生意外！", icon="❗")
+st.error("请勿在渲染过程中修改任何参数，这可能会导致渲染过程意外中断或素材损坏！", icon="❗")
 
 G_config = read_global_config()
 FONT_PATH = "./font/SOURCEHANSANSSC-BOLD.OTF"
@@ -35,7 +34,7 @@ current_paths = None
 data_loaded = False
 
 if not username:
-    st.error("请先获取指定用户名的B30存档！")
+    st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
 
 if save_id:
@@ -46,7 +45,7 @@ if save_id:
 else:
     st.warning("未索引到存档，请先加载存档数据！")
 
-with st.expander("更换B30存档"):
+with st.expander("更换 Best50 存档", icon="💾"):
     st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
@@ -54,9 +53,10 @@ with st.expander("更换B30存档"):
             selected_save_id = st.selectbox(
                 "选择存档",
                 versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+                # label_visibility="collapsed",
+                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
             )
-            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True):
+            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
                 if selected_save_id:
                     st.session_state.save_id = selected_save_id
                     st.rerun()
@@ -126,7 +126,7 @@ with st.container(border=True):
     # 码率设置部分（关键优化）
     bitrate_col1, bitrate_col2 = st.columns([1, 3])
     with bitrate_col1:
-        preset_bitrate = st.checkbox("使用预设的码率", value=True, help="均为常用值")
+        preset_bitrate = st.checkbox("使用预设的码率", value=True, help="均为常用值，如自定义可删除填入的数值查看范围")
 
     with bitrate_col2:
         if preset_bitrate:
@@ -150,23 +150,25 @@ with st.container(border=True):
             bitrate_display = selected_bitrate  # 直接使用预设的完整字符串
         else:
             if 'prev_preset_bitrate' not in st.session_state or st.session_state.prev_preset_bitrate:
-                st.toast("高码率可使您的视频更清晰，但视频的生成时间可能会变得更长，且输出的文件大小也会变的更大", icon="⚠️")
+                st.toast("高码率可使您的视频更清晰，但视频生成时间会变得更长，且输出文件大小也会变的更大", icon="⚠️")
             v_bitrate = st.number_input(
                 "输入自定义码率 (kbps)",
+                help="若使用极速模式将添加上限【两倍码率】和缓冲区【四倍码率】，防止因超限导致生成时间变长",
                 min_value=1000,
-                max_value=10000,
-                value=_video_bitrate,
+                max_value=20000,
+                value=None,
                 step=100,
-                placeholder="1000 ≤ 码率 ≤ 10000"
+                placeholder="1000 ≤ 码率 ≤ 20000"
             )
             bitrate_display = f"自定义（{v_bitrate}kbps）"  # 自定义码率的显示格式
         
         st.session_state.prev_preset_bitrate = preset_bitrate
         
-trans_config_placeholder = st.empty()
+# trans_config_placeholder = st.empty()
 # 仅当选择 "完整视频" 时才显示过渡选项
-if mode_str == "完整视频":
-    with trans_config_placeholder.container(border=True):
+    if mode_str == "完整视频":
+        st.divider()
+        # with trans_config_placeholder.container(border=True):
         st.write("片段过渡（仅渲染完整视频时有效）")
         col1, col2 = st.columns([1, 2])
         with col1:    
@@ -182,9 +184,6 @@ if mode_str == "完整视频":
                 disabled=not trans_enable,
                 label_visibility="collapsed"
             )
-else:
-    # 否则清空占位符（隐藏过渡选项）
-    trans_config_placeholder.empty()
     
 # with st.container(border=True):
 #     st.write("画面设置")
@@ -219,7 +218,7 @@ def save_video_render_config():
 
 col1, col2 = st.columns(2)
 with col1:
-    if st.button("开始渲染", help="输出为 60fps 视频", disabled=button_disable_stat):
+    if st.button("开始渲染", help="输出为 60fps 视频（如果你使用了下面的渲染按钮，这里不要点！）", disabled=button_disable_stat, use_container_width=True, icon="▶️"):
         save_video_render_config()
         video_res = (v_res_width, v_res_height)
         st.session_state.global_rendering = True
@@ -263,245 +262,495 @@ with col1:
                 st.rerun()
 with col2:
     abs_path = os.path.abspath(video_output_path)
-    if st.button("打开视频输出文件夹", help=abs_path):
+    if st.button("打开视频输出文件夹", help=abs_path, use_container_width=True, icon="📂"):
         open_file_explorer(abs_path)
         st.toast(f"若没有跳转，请手动访问输出文件夹【鼠标指着“打开”就会显示】", icon="ℹ️")
     # st.write(f"已渲染视频存储在【{abs_path}】")
 
-# if mode_str == "完整视频":
-#     st.divider()
-#     st.write("其他方案")
-#     st.warning("功能未经任何充分测试，我们无法保证输出视频的效果。", icon="⚠️")
-#     with st.container(border=True):
-#         st.write("【快速模式】先渲染所有视频片段，再拼接为完整视频")
-#         st.info("可有效降低渲染内存占用与所需时间，但片段之间将只有黑屏过渡。", icon="ℹ️")
-#         st.error("所有片段总大小 ≠ 成品大小（仅相差很大）时，请重新渲染", icon="⚠️")
-#         if st.button("开始渲染", help="输出为 60fps 视频", key="请确保所有文件都没问题的情况下再选择此项"):
-#             save_video_render_config()
-#             video_res = (v_res_width, v_res_height)
-#             with st.spinner("正在批量渲染视频片段，请在控制台查看进度。"):
-#                 render_all_video_clips(video_configs, video_output_path, video_res, v_bitrate_kbps, 
-#                                     font_path=FONT_PATH, auto_add_transition=trans_enable, trans_time=trans_time,
-#                                     force_render=force_render_clip)
-#             with st.spinner("正在拼接视频，请稍候。"):
-#                 combine_full_video_direct(video_output_path)
-#             st.success("""
-#                 ✅ 视频生成完成！  
-#                 - 输出位置: `{video_output_path}`  
-#                 - 分辨率: {v_res_width} × {v_res_height}  
-#                 - 码率: {v_bitrate_kbps}bps
-#                 """.format(**locals()))
-            # st.success("拼接完成，若报告【`OSError: [WinError 6] 句柄无效。`】可忽略", icon="✅")
-
 if mode_str == "完整视频":
     st.divider()
     st.write("其他方案")
-    st.warning("功能未经非常充分的测试，我们无法保证实际输出视频的效果如何。", icon="⚠️")
+    st.warning("功能未经非常充分的测试，我们无法保证实际输出视频的效果，请酌情选择。", icon="⚠️")
     
     with st.container(border=True):
-        st.write("【快速模式】先渲染所有视频片段，再拼接为完整视频")
-        st.info("可有效降低渲染内存占用与所需时间，但片段之间将只有黑屏过渡", icon="ℹ️")
-        st.warning("""
-        **快速模式生成需要注意的几个情况：**  
-        - 尽可能保证所有片段分辨率一致，否则会出现部分片段无法播放的问题。
-            - 这是因为片段间分辨率不同导致播放器解码异常导致的
-        - 成片大小 ≠ 所有片段总大小（相差很大）时请重新渲染，这是重复拼接导致的。
-        - 如果您的机器性能不足，使用快速模式可能也无法降低渲染时间。
-        """, icon="⚠️")
-        # 初始化状态（使用唯一键避免多组件冲突）
-        render_key = f"render_state_{video_output_path}"
+        # 方案选择
+        scheme_option = st.radio(
+            "选择渲染方案",
+            ["快速模式（时间换稳定性）", "极速模式（稳定性换时间）"],
+            captions=["只使用 MoviePy 渲染，再使用 FFmpeg 拼接", " FFmpeg + MoviePy 混合渲染，再使用 FFmpeg 拼接"],
+            horizontal=True,
+            help="选择不同的视频渲染方案",
+            label_visibility="collapsed"
+        )
+        
+        # 初始化状态（使用方案特定的键）
+        render_key = f"render_state_{video_output_path}_{scheme_option}"
         if render_key not in st.session_state:
             st.session_state[render_key] = {
                 'is_rendering': False,
                 'show_button': True,
                 'message': None
             }
-        # - 您需要先使用一次【快速模式】渲染所有片段，才能进行二次处理。
+        
         # 状态管理器
         state = st.session_state[render_key]
-
-        # 条件显示按钮或结果
-        col1, col2 = st.columns([.65, 1], gap="small", vertical_alignment="center")
-        with col1:
-            use_over_process = st.checkbox(
-                "对拼接视频进行二次处理",
-                value=False,
-                help="对拼接后视频重新渲染调整其分辨率和码率",
-                disabled=not state['is_rendering']
-            )
         
-        if state['show_button']:
-            with col2:
-                if st.button("开始渲染", key="render_full_video", use_container_width=True):
-                    state.update({
-                        'is_rendering': True,
-                        'show_button': False,
-                        'message': None
-                    })
-                    st.rerun()
+        # 根据方案显示不同内容
+        if scheme_option == "快速模式（时间换稳定性）":
+                # st.write("【快速模式】先渲染所有视频片段，再拼接为完整视频")
+                st.info("""
+                        **相较于完整渲染：**  
+                        - 有效降低渲染时内存占用，减少渲染所需时间
+                        - 全部片段分离，可单独提取用于二次制作
+                        - 不会因机器断电等问题，丢失已生成进度
+                            - 如果已有文件占位符，需手动检查后删除
+                        """, icon="ℹ️")
+                st.warning("""
+                **注意事项：**
+                - 无论是哪种选项，片段之间都将只有黑屏过渡，且无法更改
+                    - 【实验性】考虑使用 FFmpeg 的 chromakey 做绿幕抠像过渡
+                - 尽可能保证所有片段分辨率一致，否则会出现部分片段无法播放的问题
+                - 成片大小 ≠ 所有片段总大小（相差很大）时请重新渲染，这是重复拼接导致的
+                - 如果您的机器性能不足，使用快速模式可能也无法降低渲染时间
+                """, icon="⚠️")
+                
+                col1, col2 = st.columns([.65, 1], gap="small", vertical_alignment="center")
+                with col1:
+                    # 快速模式特有的选项
+                    use_over_process = st.checkbox(
+                        "对拼接视频进行二次处理",
+                        value=False,
+                        help="""
+                        对拼接后视频重新渲染调整其分辨率和码率
+                        - 将沿用上方的 **基础设置** 参数
+                        """,
+                        disabled=state['is_rendering']
+                    )
+                
+                with col2:
+                    # 渲染按钮
+                    if state['show_button']:
+                        if st.button("开始渲染", key="render_fast_mode",
+                                     use_container_width=True, icon="▶️",
+                                     help=f"""
+                                 您已选择的参数（除路径和文件名外，其他参数请于上方调整）：
+                                - 输出路径: `{video_output_path}`
+                                - 文件名：{username}_Best30_fast.mp4
+                                - 分辨率: {res_display}
+                                - 码率: {bitrate_display}
+                                """):
+                            state.update({
+                                'is_rendering': True,
+                                'show_button': False,
+                                'message': None
+                            })
+                            st.rerun()
+                    else:
+                        if state['is_rendering']:
+                            # 渲染任务区
+                            with st.spinner("开始渲染视频，请在控制台窗口查看进度。"):
+                                try:
+                                    start_time = time.time()
+                                    print("开始计算总生成时间，将在完成后输出。")
+                                    # 保存配置
+                                    save_video_render_config()
+                                    video_res = (v_res_width, v_res_height)
+                                    
+                                    # 阶段1：渲染片段
+                                    render_all_video_clips(
+                                        video_configs, 
+                                        video_output_path,
+                                        video_res,
+                                        v_bitrate_kbps,
+                                        font_path=FONT_PATH,
+                                        auto_add_transition=trans_enable,
+                                        trans_time=trans_time,
+                                        force_render=force_render_clip,
+                                        classic_fast_render=True
+                                    )
+                                    
+                                    # 阶段2：视频拼接
+                                    combine_full_video_direct(
+                                        video_output_path,
+                                        username=username,
+                                        video_res=video_res,
+                                        video_bitrate=v_bitrate_kbps,
+                                        use_overprocess=use_over_process,
+                                    )
+                                    
+                                    # 显示完成信息
+                                    st.success(f"""
+                                    视频生成完成！  
+                                    - 输出路径: `{video_output_path}`  
+                                    - 分辨率: {res_display}
+                                    - 码率: {bitrate_display}
+                                    """, icon="✅")
+                                    duration = time.time() - start_time
+                                    formatted_total_time = format_time_difference(duration)
+                                    print(f"操作完成，总耗时{formatted_total_time}")
 
-        else:
-            if state['is_rendering']:
-                # 渲染任务区
-                with st.spinner("开始渲染视频，请在控制台窗口查看进度。"):
-                    try:
-                        # 保存配置
-                        save_video_render_config()
-                        video_res = (v_res_width, v_res_height)
-                        
-                        # 阶段1：渲染片段
-                        render_all_video_clips(
-                            video_configs, 
-                            video_output_path,
-                            video_res,
-                            v_bitrate_kbps,
-                            font_path=FONT_PATH,
-                            auto_add_transition=trans_enable,
-                            trans_time=trans_time,
-                            force_render=force_render_clip
-                        )
-                        
-                        # 阶段2：视频拼接
-                        combine_full_video_direct(
-                            video_output_path,
-                            username=username,
-                            video_res=video_res,
-                            video_bitrate=v_bitrate_kbps,
-                            use_overprocess=use_over_process,
-                        )
-                        
-                        # 显示完成信息
-                        st.success(f"""
-                        视频生成完成！  
-                        - 输出路径: `{video_output_path}`  
-                        - 分辨率: {res_display}
-                        - 码率: {bitrate_display}
-                        """, icon="✅")
+                                except Exception as e:
+                                    st.error(f"""
+                                        生成失败：{str(e)}\n请查看控制台获取详细错误报告（如果有）
+                                    """, icon="❌")
+                                    raise
+                                finally:
+                                    # 无论执行成功与否，都清理生成缓存文件夹
+                                    shutil.rmtree('./videos/temp_generated')
+                                    os.makedirs('./videos/temp_generated')
+                                    print("[提示] 已清理 FFmpeg 视频生成缓存。")
+                                    # 5 秒后重新显示按钮
+                                    time.sleep(5)
+                                    state['show_button'] = True
+                                    st.rerun()
 
-                        # 
-                    except Exception as e:
-                        st.error(f"""
-                            生成失败：{str(e)}\n请查看控制台获取详细错误报告（如果有）
-                        """, icon="❌")
-                        raise
-                    finally:
-                        # 无论执行成功与否，都清理生成缓存文件夹
-                        shutil.rmtree('./videos/temp_generated')
-                        os.makedirs('./videos/temp_generated')
-                        print("[提示] 已清理 FFmpeg 视频生成缓存。")
-                        # 5 秒后重新显示按钮
-                        time.sleep(5)
-                        state['show_button'] = True
+                        # 显示结果/错误信息
+                        if state['message']:
+                            if state['message']['type'] == 'success':
+                                st.success(state['message']['content'])
+                            else:
+                                st.error(state['message']['content'])
+        
+        else:  # 极速模式
+                # st.write("【极速模式】将所有谱面确认片段传输给 FFmpeg 渲染，再拼接为完整视频")
+                st.info("""
+                    **相较于快速模式：**
+                    - 减少 70% 片段渲染时间【2 ~ 3min/片段 → 30s ~ 1min/片段】
+                        - 和完整渲染相比，极速模式渲染时间减少 80%（已在 3060 笔本测试）
+                        - 将 `MoviePy` 谱面确认主体 *（不含头尾）* 分离处理
+                        - 生成平均时间会因片段长度之间不同分辨率和码率而变化
+                            - 如果您单个片段很长，渲染时间也会变久，这是不会改变的事实
+                    - 设置上限码率【两倍】和缓冲区【三倍】，提升渲染效率
+                """, icon="ℹ️")
+                st.warning(f"""
+                        **注意事项：**
+                        - 无论是哪种选项，片段之间都将只有黑屏过渡，且无法更改
+                            - 【实验性】考虑使用 `FFmpeg `的` chromakey` 做绿幕抠像过渡
+                        - 此模式生成的叠加层（谱面确认）有概率掉帧
+                        - GPU （驱动）若不支持当前 FFmpeg 版本将无法使用此模式
+                            - 当前 FFmpeg 版本 = `{get_ffmpeg_version()}`
+                            - 生成器会自动降为快速模式继续为您生成
+                        """, icon="⚠️")
+                st.error("""
+                **一些警告和 Bug 修复日志：**  
+                - 如果您发现有以下情况，请立即终止生成并检查素材（或反馈问题）：
+                    - 某个片段生成时间过长（超过其本身长度或不显示进度）
+                    - 生成时（由非机器本身性能原因所引起的）异常卡顿
+                        - 包括 GPU, GPU 生成时不会持续高占用，它只会跳这么一小会。
+                - 渲染依赖 CPU 和 GPU 性能（主要为 GPU），建议您使用较好的设备进行
+                    - AMD 因无设备无法测试，目前仅适配 NVIDIA 显卡的 GPU 加速
+                - 【已修复】~~叠加层视频帧率被强行锁定（不是掉帧就是锁）~~
+                """, icon="❌")
+
+                # 渲染按钮
+                if state['show_button']:
+                    if st.button("开始渲染", key="render_ffmpeg_mode",
+                                 use_container_width=True, icon="▶️",
+                                 help=f"""
+                                 您已选择的参数（除路径和文件名外，其他参数请于上方调整）：
+                                - 输出路径: `{video_output_path}`
+                                - 文件名：{username}_Best30_ffmpeg.mp4
+                                - 分辨率: {res_display}
+                                - 码率: {bitrate_display}
+                                """):
+                        state.update({
+                            'is_rendering': True,
+                            'show_button': False,
+                            'message': None
+                        })
                         st.rerun()
-
-            # 显示结果/错误信息
-            if state['message']:
-                if state['message']['type'] == 'success':
-                    st.success(state['message']['content'])
                 else:
-                    st.error(state['message']['content'])
+                    if state['is_rendering']:
+                        # 渲染任务区
+                        with st.spinner("开始渲染视频，请在控制台窗口查看进度。"):
+                            try:
+                                start_time = time.time()
+                                print("开始计算总生成时间，将在完成后输出。")
+                                # 保存配置
+                                save_video_render_config()
+                                video_res = (v_res_width, v_res_height)
+                                
+                                # 阶段1：渲染片段
+                                render_all_video_clips(
+                                    video_configs, 
+                                    video_output_path,
+                                    video_res,
+                                    v_bitrate_kbps,
+                                    font_path=FONT_PATH,
+                                    auto_add_transition=trans_enable,
+                                    trans_time=trans_time,
+                                    force_render=force_render_clip,
+                                    classic_fast_render=False
+                                )
+                                
+                                # 阶段2：视频拼接
+                                combine_full_video_direct(
+                                    video_output_path,
+                                    username=username,
+                                    video_res=video_res,
+                                    video_bitrate=v_bitrate_kbps,
+                                    use_overprocess=False,
+                                )
+                                
+                                # 显示完成信息
+                                st.success(f"""
+                                视频生成完成！
+                                - 输出路径: `{video_output_path}`  
+                                - 分辨率: {res_display}
+                                - 码率: {bitrate_display}
+                                """, icon="✅")
+                                duration = time.time() - start_time
+                                total_time = format_time_difference(duration)
+                                print(f"总耗时{total_time}")
+                                
+                            except Exception as e:
+                                st.error(f"""
+                                    生成失败：{str(e)}
+                                """, icon="❌")
+                                raise
+                            finally:
+                                # 无论执行成功与否，都清理生成缓存文件夹
+                                shutil.rmtree('./videos/temp_generated')
+                                os.makedirs('./videos/temp_generated')
+                                # 5 秒后重新显示按钮
+                                time.sleep(5)
+                                state['show_button'] = True
+                                st.rerun()
+
+                    # 显示结果/错误信息
+                    if state['message']:
+                        if state['message']['type'] == 'success':
+                            st.success(state['message']['content'])
+                        else:
+                            st.error(state['message']['content'])
+
+# if mode_str == "完整视频":
+#     st.divider()
+#     st.write("其他方案")
+#     st.warning("功能未经非常充分的测试，我们无法保证实际输出视频的效果如何。", icon="⚠️")
+    
+#     with st.container(border=True):
+#         st.write("【快速模式】先渲染所有视频片段，再拼接为完整视频")
+#         st.info("可有效降低渲染内存占用与所需时间，但片段之间将只有黑屏过渡", icon="ℹ️")
+#         st.warning("""
+#         **快速模式生成需要注意的几个情况：**  
+#         - 尽可能保证所有片段分辨率一致，否则会出现部分片段无法播放的问题。
+#             - 这是因为片段间分辨率不同导致播放器解码异常导致的
+#         - 成片大小 ≠ 所有片段总大小（相差很大）时请重新渲染，这是重复拼接导致的。
+#         - 如果您的机器性能不足，使用快速模式可能也无法降低渲染时间。
+#         """, icon="⚠️")
+#         # 初始化状态（使用唯一键避免多组件冲突）
+#         render_key = f"render_state_{video_output_path}"
+#         if render_key not in st.session_state:
+#             st.session_state[render_key] = {
+#                 'classic_fast_mode': False,
+#                 'is_rendering': False,
+#                 'show_button': True,
+#                 'message': None
+#             }
+#         # - 您需要先使用一次【快速模式】渲染所有片段，才能进行二次处理。
+#         # 状态管理器
+#         state = st.session_state[render_key]
+
+#         # 条件显示按钮或结果
+#         col1, col2 = st.columns([.65, 1], gap="small", vertical_alignment="center")
+#         with col1:
+#             use_over_process = st.checkbox(
+#                 "对拼接视频进行二次处理",
+#                 value=False,
+#                 help="对拼接后视频重新渲染调整其分辨率和码率",
+#                 disabled=not state['is_rendering']
+#             )
+        
+#         if state['show_button']:
+#             with col2:
+#                 if st.button("开始渲染", key="render_full_video", use_container_width=True):
+#                     state.update({
+#                         'classic_fast_mode': True,
+#                         'is_rendering': True,
+#                         'show_button': False,
+#                         'message': None
+#                     })
+#                     st.rerun()
+
+#         else:
+#             if state['is_rendering']:
+#                 # 渲染任务区
+#                 with st.spinner("开始渲染视频，请在控制台窗口查看进度。"):
+#                     try:
+#                         start_time = time.time()
+#                         print("开始计算总生成时间，将在完成后输出。")
+#                         # 保存配置
+#                         save_video_render_config()
+#                         video_res = (v_res_width, v_res_height)
+                        
+#                         # 阶段1：渲染片段
+#                         render_all_video_clips(
+#                             video_configs, 
+#                             video_output_path,
+#                             video_res,
+#                             v_bitrate_kbps,
+#                             font_path=FONT_PATH,
+#                             auto_add_transition=trans_enable,
+#                             trans_time=trans_time,
+#                             force_render=force_render_clip,
+#                             classic_fast_render=state['classic_fast_mode']
+#                         )
+                        
+#                         # 阶段2：视频拼接
+#                         combine_full_video_direct(
+#                             video_output_path,
+#                             username=username,
+#                             video_res=video_res,
+#                             video_bitrate=v_bitrate_kbps,
+#                             use_overprocess=use_over_process,
+#                         )
+                        
+#                         duration = time.time() - start_time
+#                         formatted_total_time = format_time_difference(duration)
+#                         # 显示完成信息
+#                         st.success(f"""
+#                         视频生成完成！  
+#                         - 输出路径: `{video_output_path}`  
+#                         - 分辨率: {res_display}
+#                         - 码率: {bitrate_display}
+#                         - 耗时：{formatted_total_time}
+#                         """, icon="✅")
+#                         print(f"操作完成，总耗时 {formatted_total_time}")
+
+#                         # 
+#                     except Exception as e:
+#                         st.error(f"""
+#                             生成失败：{str(e)}\n请查看控制台获取详细错误报告（如果有）
+#                         """, icon="❌")
+#                         raise
+#                     finally:
+#                         # 无论执行成功与否，都清理生成缓存文件夹
+#                         shutil.rmtree('./videos/temp_generated')
+#                         os.makedirs('./videos/temp_generated')
+#                         print("[提示] 已清理 FFmpeg 视频生成缓存。")
+#                         # 5 秒后重新显示按钮
+#                         time.sleep(5)
+#                         state['show_button'] = True
+#                         st.rerun()
+
+#             # 显示结果/错误信息
+#             if state['message']:
+#                 if state['message']['type'] == 'success':
+#                     st.success(state['message']['content'])
+#                 else:
+#                     st.error(state['message']['content'])
                     
 
-    with st.container(border=True):
-        st.write("【极速模式】使用 Pipe 管线传输所有视频片段给 FFmpeg 渲染，再拼接为完整视频")
-        st.info("""
-            显著降低渲染时间【2 ~ 3min/片段 → 20 ~ 30s/片段】
-            - *仅指快速模式下 MoviePy 二次处理*
-                - 也就是有 `MoviePy` 字段开头的部分
-            - 平均时间因片段长度而不同，这里仅供参考
-                - 如果您的单个片段很长（t ≥ 45s），渲染时间也会变久
-        """, icon="ℹ️")
-        st.warning("片段之间将只有黑屏过渡，无法选择其他过渡效果应用", icon="⚠️")
-        st.error("""
-        **极速模式的一些警告和 Bug 修复日志：**  
-        - 我们仍在修复视频画面右侧说明文字偏移的问题。
-        - 除开头结尾外，仅曲目片段使用了 FFmpeg 渲染
-        - 渲染强依赖 CPU 和 GPU 性能，我们建议您使用较好的设备进行渲染
-            - 目前仅适配 NVIDIA 显卡的 GPU 加速，AMD 因无设备无法测试
-                - ~~（或许后面合并了可以试试看）~~
-        """, icon="❌")
-        # 初始化状态（使用唯一键避免多组件冲突）
-        render_key = f"render_state_{video_output_path}"
-        if render_key not in st.session_state:
-            st.session_state[render_key] = {
-                'is_rendering': False,
-                'show_button': True,
-                'message': None
-            }
+#     with st.container(border=True):
+#         st.write("【极速模式】将所有谱面确认片段传输给 FFmpeg 渲染，再拼接为完整视频")
+#         st.info("""
+#             显著降低渲染时间【2 ~ 3min/片段 → 20 ~ 30s/片段】
+#             - *仅指快速模式下 MoviePy 二次处理*
+#                 - 也就是有 `MoviePy` 字段开头的部分
+#             - 平均时间因片段长度而不同，这里仅供参考
+#                 - 如果您的单个片段很长（t ≥ 45s），渲染时间也会变久
+#         """, icon="ℹ️")
+#         st.warning("""
+#                    片段之间只有黑屏过渡，无法选择其他过渡效果应用
+#                    - 【实验性】考虑使用 `FFmpeg `的` chromakey` 做绿幕抠像过渡
+#                    """, icon="⚠️")
+#         st.error("""
+#         **极速模式的一些警告和 Bug 修复日志：**  
+#         - ~~【更换视频帧后已修复】我们仍在修复视频画面右侧说明文字偏移的问题。~~
+#         - 除开头结尾外，仅曲目片段使用了 FFmpeg 渲染
+#         - 渲染依赖 CPU 和 GPU 性能（主要为 GPU），建议您使用较好的设备进行
+#             - AMD 因无设备无法测试，目前仅适配 NVIDIA 显卡的 GPU 加速
+#         """, icon="❌")
+#         # 初始化状态（使用唯一键避免多组件冲突）
+#         render_key = f"render_state_{video_output_path}"
+#         if render_key not in st.session_state:
+#             st.session_state[render_key] = {
+#                 'classic_fast_mode': False,
+#                 'is_rendering': False,
+#                 'show_button': True,
+#                 'message': None
+#             }
 
-        # 状态管理器
-        state = st.session_state[render_key]
+#         # 状态管理器
+#         state = st.session_state[render_key]
 
-        # 条件显示按钮或结果
+#         # 条件显示按钮或结果
         
-        if state['show_button']:
-                if st.button("开始渲染", key="render_full_video_ffmpeg", use_container_width=True):
-                    state.update({
-                        'is_rendering': True,
-                        'show_button': False,
-                        'message': None
-                    })
-                    st.rerun()
+#         if state['show_button']:
+#                 if st.button("开始渲染", key="render_full_video_ffmpeg", use_container_width=True):
+#                     state.update({
+#                         'is_rendering': True,
+#                         'show_button': False,
+#                         'message': None
+#                     })
+#                     st.rerun()
 
-        else:
-            if state['is_rendering']:
-                # 渲染任务区
-                with st.spinner("开始渲染视频，请在控制台窗口查看进度。"):
-                    try:
-                        # 保存配置
-                        save_video_render_config()
-                        video_res = (v_res_width, v_res_height)
+#         else:
+#             if state['is_rendering']:
+#                 # 渲染任务区
+#                 with st.spinner("开始渲染视频，请在控制台窗口查看进度。"):
+#                     try:
+#                         start_time = time.time()
+#                         print("开始计算总生成时间，将在完成后输出。")
+#                         # 保存配置
+#                         save_video_render_config()
+#                         video_res = (v_res_width, v_res_height)
                         
-                        # 阶段1：渲染片段
-                        render_all_video_clips(
-                            video_configs, 
-                            video_output_path,
-                            video_res,
-                            v_bitrate_kbps,
-                            font_path=FONT_PATH,
-                            auto_add_transition=trans_enable,
-                            trans_time=trans_time,
-                            force_render=force_render_clip
-                        )
+#                         # 阶段1：渲染片段
+#                         render_all_video_clips(
+#                             video_configs, 
+#                             video_output_path,
+#                             video_res,
+#                             v_bitrate_kbps,
+#                             font_path=FONT_PATH,
+#                             auto_add_transition=trans_enable,
+#                             trans_time=trans_time,
+#                             force_render=force_render_clip,
+#                             classic_fast_render=state['classic_fast_mode']
+#                         )
                         
-                        # 阶段2：视频拼接
-                        combine_full_video_direct(
-                            video_output_path,
-                            username=username,
-                            video_res=video_res,
-                            video_bitrate=v_bitrate_kbps,
-                            use_overprocess=use_over_process,
-                        )
+#                         # 阶段2：视频拼接
+#                         combine_full_video_direct(
+#                             video_output_path,
+#                             username=username,
+#                             video_res=video_res,
+#                             video_bitrate=v_bitrate_kbps,
+#                             use_overprocess=use_over_process,
+#                         )
                         
-                        # 显示完成信息
-                        st.success(f"""
-                        视频生成完成！  
-                        - 输出路径: `{video_output_path}`  
-                        - 分辨率: {res_display}
-                        - 码率: {bitrate_display}
-                        """, icon="✅")
+#                         duration = time.time() - start_time
+#                         total_time = format_time_difference(duration)
+#                         # 显示完成信息
+#                         st.success(f"""
+#                         视频生成完成！  
+#                         - 输出路径: `{video_output_path}`  
+#                         - 分辨率: {res_display}
+#                         - 码率: {bitrate_display}
+#                         - 总耗时：{total_time}
+#                         """, icon="✅")
+#                         print(f"生成完成，总耗时 {total_time}")
+                        
+#                     except Exception as e:
+#                         st.error(f"""
+#                             生成失败：{str(e)}
+#                         """, icon="❌")
+#                         raise
+#                     finally:
+#                         # 无论执行成功与否，都清理生成缓存文件夹
+#                         shutil.rmtree('./videos/temp_generated')
+#                         os.makedirs('./videos/temp_generated')
+#                         # 5 秒后重新显示按钮
+#                         time.sleep(5)
+#                         state['show_button'] = True
+#                         st.rerun()
 
-                        
-                    except Exception as e:
-                        st.error(f"""
-                            生成失败：{str(e)}
-                        """, icon="❌")
-                        raise
-                    finally:
-                        # 无论执行成功与否，都清理生成缓存文件夹
-                        shutil.rmtree('./videos/temp_generated')
-                        os.makedirs('./videos/temp_generated')
-                        # 5 秒后重新显示按钮
-                        time.sleep(5)
-                        state['show_button'] = True
-                        st.rerun()
-
-            # 显示结果/错误信息
-            if state['message']:
-                if state['message']['type'] == 'success':
-                    st.success(state['message']['content'])
-                else:
-                    st.error(state['message']['content'])
+#             # 显示结果/错误信息
+#             if state['message']:
+#                 if state['message']['type'] == 'success':
+#                     st.success(state['message']['content'])
+#                 else:
+#                     st.error(state['message']['content'])
 # with st.container(border=True):
 #     st.write("【更多过渡效果】使用ffmpeg concat渲染")
 #     st.warning("需先安装ffmpeg concat插件，请务必查看使用说明后进行！", icon="⚠️")

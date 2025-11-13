@@ -1,9 +1,9 @@
-import time, random, traceback, os
+import asyncio, time, random, traceback, os
 import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
-from utils.DataUtils import REVERSE_LEVEL_LABELS
+from utils.chuni_extension import REVERSE_LEVEL_LABELS
 from pre_gen import download_one_video
 
 G_config = read_global_config()
@@ -23,7 +23,7 @@ current_paths = None
 data_loaded = False
 
 if not username:
-    st.error("请先获取指定用户名的B30存档！")
+    st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
 
 if save_id:
@@ -35,16 +35,16 @@ if save_id:
 else:
     st.warning("未索引到存档，请先加载存档数据！")
 
-with st.expander("更换B30存档"):
+with st.expander("更换 Best50 存档", icon="💾"):
     st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
     versions = get_user_versions(username)
     if versions:
         selected_save_id = st.selectbox(
             "选择存档",
             versions,
-            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y-%m-%d')})"
+            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
         )
-        if st.button("使用此存档（只需要点击一次！）", use_container_width=True, icon="▶️"):
+        if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
             if selected_save_id:
                 st.session_state.save_id = selected_save_id
                 st.rerun()
@@ -59,29 +59,79 @@ def st_download_video(placeholder, dl_instance, G_config, b30_config):
     search_wait_time = G_config['SEARCH_WAIT_TIME']
     download_high_res = G_config['DOWNLOAD_HIGH_RES']
     video_download_path = f"./videos/downloads"
+    
+    # 确保下载目录存在
+    os.makedirs(video_download_path, exist_ok=True)
+    
     with placeholder.container(border=True):
         with st.spinner("正在下载视频……"):
             progress_bar = st.progress(0)
             write_container = st.container(border=True, height=400)
-            i = 0
-            for song in b30_config:
-                i += 1
+            total_songs = len(b30_config)
+            
+            # 正确的缓存检查：每个曲目独立生成文件名
+            for i, song in enumerate(b30_config, 1):
+                progress_value = min(i / total_songs, 1.0)
                 if 'video_info_match' not in song or not song['video_info_match']:
-                    st.warning(f"没有找到({i}/30): {song['song_name']} 的视频信息，无法下载，请检查前置步骤是否完成")
-                    write_container.write(f"跳过({i}/30): {song['song_name']} ，没有视频信息")
+                    st.warning(f"没有找到({i}/{total_songs}): {song['song_name']} 的视频信息，无法下载，请检查前置步骤是否完成")
+                    write_container.write(f"跳过({i}/{total_songs}): {song['song_name']} ，没有视频信息")
                     continue
                 
                 video_info = song['video_info_match']
-                progress_bar.progress(i / 30, text=f"正在下载视频({i}/30): {video_info['title']}")
                 
+                # 为每个曲目独立生成文件名
+                clip_name = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
+                video_path = os.path.join(video_download_path, f"{clip_name}.mp4")
+                
+                # 调试信息
+                # print(f"处理曲目 {i}: ID={song['id']}, 难度={song['level_index']}, 文件名={clip_name}")
+                
+                # 检查缓存
+                if os.path.exists(video_path):
+                    message = f"已找到【{song['song_name']}】的缓存（{clip_name}）"
+                    write_container.write(f"[{i}/{total_songs}] - {message}")
+                    progress_bar.progress(progress_value, text=f"跳过缓存({i}/{total_songs}): {video_info['title']}")
+                    continue
+                
+                progress_bar.progress(progress_value, text=f"{video_info['title']}")
+                
+                # 调用下载函数
                 result = download_one_video(dl_instance, song, video_download_path, download_high_res)
-                write_container.write(f"【{i}/30】{result['info']}")
+                write_container.write(f"[{i}/{total_songs}] - {result['info']}")
 
-                # 等待几秒，以减少被检测为bot的风险
-                if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
+                if result['status'] == 'success' and search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
                     time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
 
             st.success("下载完成！请点击下一步按钮核对视频素材的详细信息。", icon="✅")
+
+# def st_download_video(placeholder, dl_instance, G_config, b30_config):
+#     search_wait_time = G_config['SEARCH_WAIT_TIME']
+#     download_high_res = G_config['DOWNLOAD_HIGH_RES']
+#     video_download_path = f"./videos/downloads"
+#     with placeholder.container(border=True):
+#         with st.spinner("正在下载视频……"):
+#             progress_bar = st.progress(0)
+#             write_container = st.container(border=True, height=400)
+#             total_songs = len(b30_config)  # 获取实际歌曲数量
+#             for i, song in enumerate(b30_config, 1):
+#                 # 使用 min() 确保进度值不超过 1.0
+#                 progress_value = min(i / total_songs, 1.0)
+#                 if 'video_info_match' not in song or not song['video_info_match']:
+#                     st.warning(f"没有找到({i}/{total_songs}): {song['song_name']} 的视频信息，无法下载，请检查前置步骤是否完成")
+#                     write_container.write(f"跳过({i}/{total_songs}): {song['song_name']} ，没有视频信息")
+#                     continue
+                
+#                 video_info = song['video_info_match']
+#                 progress_bar.progress(progress_value, text=f"正在下载视频({i}/{total_songs}): {video_info['title']}")
+                
+#                 result = download_one_video(dl_instance, song, video_download_path, download_high_res)
+#                 write_container.write(f"【{i}/{total_songs}】{result['info']}")
+
+#                 # 等待几秒，以减少被检测为bot的风险
+#                 if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
+#                     time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
+
+#             st.success("下载完成！请点击下一步按钮核对视频素材的详细信息。", icon="✅")
 
 # 在显示数据框之前，将数据转换为兼容的格式
 def convert_to_compatible_types(data):
@@ -113,6 +163,14 @@ def show_video_info(video_info: dict) -> None:
     # 确定数据是单页还是多页格式
     is_multi_page = 'pages' in video_info and isinstance(video_info['pages'], list)
     
+    def display_field(display_name: str, value: any) -> None:
+        """统一的字段显示函数，处理转义"""
+        if value is not None:
+            # 对所有字符串值进行Markdown转义
+            if isinstance(value, str):
+                value = escape_markdown_text(value)
+            st.write(f"**{display_name}**: {value}")
+    
     if is_multi_page:
         # 处理多页视频数据
         for i, page in enumerate(video_info['pages']):
@@ -124,27 +182,25 @@ def show_video_info(video_info: dict) -> None:
                 'page': i+1,
                 'page_title': page.get('title'),
                 'page_url': page.get('url'),
-                'page_duration': page.get('duration')
+                'page_duration': f"{page.get('duration')} 秒"
             }
             
             # 使用更美观的格式展示
             for field_key, display_name in FIELD_MAPPING.items():
-                if field_key in combined_info and combined_info[field_key] is not None:
-                    value = combined_info[field_key]
-                    st.write(f"**{display_name}**: {value}")
+                if field_key in combined_info:
+                    display_field(display_name, combined_info[field_key])
             
             st.write("---")  # 添加分隔线
             
     else:
-        # 处理单页视频数据
+        # 处理单页视频数据 - 这里添加了转义
         for field_key, display_name in FIELD_MAPPING.items():
-            if field_key in video_info and video_info[field_key] is not None:
-                value = video_info[field_key]
-                st.write(f"**{display_name}**: {value}")
+            if field_key in video_info:
+                display_field(display_name, video_info[field_key])
 
 def update_match_info(placeholder, v_info_match, song_name):
     # 使用封装的函数展示视频信息
-    with st.expander("当前匹配的视频信息", expanded=True):
+    with st.expander("当前匹配的视频信息", expanded=True, icon="💾"):
        show_video_info(v_info_match)
 
 def update_editor(placeholder, config, current_index, dl_instance, record_ids):
@@ -152,9 +208,9 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
         song = config[current_index]
         
         # 片段ID和快速跳转功能整合在一起
-        col1, col2, col3 = st.columns([1, 2.25, .75], vertical_alignment="center")
+        col1, col2, col3 = st.columns([.5, 2.75, .75], vertical_alignment="center")
         with col1:
-            st.write("快速跳转到指定曲目")
+            st.write("快速跳转")
         with col2:
             clip_selector = st.selectbox(
                 label="跳转指定曲目", 
@@ -172,7 +228,7 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                 else:
                     st.toast("已经是当前记录！", icon="ℹ️")
 
-        st.subheader(f"Best 片段 #{song['clip_id'][5:]}（{song['song_name']}）")
+        st.subheader(f"{song['clip_id'].split('_')[0]} 片段 #{song['clip_id'].split('_')[1]}（{song['song_name']}）")
         # 显示匹配信息
         match_info_placeholder = st.empty()
         update_match_info(match_info_placeholder, song['video_info_match'], 
@@ -199,16 +255,16 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
 
         # 显示选中视频的详细信息
         if selected_index is not None:
-            with st.expander("查看已选项的详细信息", expanded=True):
+            with st.expander("查看已选项的详细信息", expanded=True, icon="👁️"):
                 show_video_info(to_match_videos[selected_index])
-                if st.button("确定使用该信息", key=f"confirm_selected_match_{song['clip_id']}", use_container_width=True):
+                if st.button("确定使用该信息", key=f"confirm_selected_match_{song['clip_id']}", use_container_width=True, icon="☑️"):
                     song['video_info_match'] = to_match_videos[selected_index]
                     save_config(b30_config_file, config)
                     st.toast("配置已保存！", icon="✅")
         
         # 如果搜索结果均不符合，手动输入地址：
         st.divider()
-        with st.expander("以上都不对？手动搜索正确的谱面确认"):
+        with st.expander("以上都不对？手动搜索正确的谱面确认", icon="🔍"):
             col1, col2 = st.columns([1.5, 0.5])
             with col1:
                 replace_id = st.text_input("搜索关键词 (建议为谱面确认的 youtube ID 或 BV 号)", 
@@ -261,7 +317,7 @@ if b30_config:
             st.stop()
 
     # 获取所有视频片段的ID
-    record_ids = [f"{item['song_name']} [{REVERSE_LEVEL_LABELS.get(item['level_index'])}]" for item in b30_config]
+    record_ids = [f"[{item['clip_id'].split('_', 1)[0]} #{item['clip_id'].split('_', 1)[1]}, {REVERSE_LEVEL_LABELS.get(item['level_index'])}]: {item['song_name']}" for item in b30_config]
     # 使用session_state来存储当前选择的视频片段索引
     if 'current_index' not in st.session_state:
         st.session_state.current_index = 0

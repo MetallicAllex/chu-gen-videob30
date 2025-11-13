@@ -308,8 +308,8 @@ class BilibiliDownloader(Downloader):
         return sync(user.get_self_info(self.credential))['name']
 
     def log_in(self, credential_path):
-        # credential = login.login_with_qrcode_term() # 在终端打印二维码登录
-        credential = login.login_with_qrcode_term() # 使用 Tkinter 终端显示二维码登录
+        # credential = login.login_with_qrcode_term() # 在终端打印二维码登录（debug，实际效果不如显示窗口好）
+        credential = login.login_with_qrcode() # 使用 Tkinter 窗口显示二维码登录
         try:
             credential.raise_for_no_bili_jct() # 判断是否成功
             credential.raise_for_no_sessdata() # 判断是否成功
