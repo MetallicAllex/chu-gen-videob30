@@ -4,7 +4,8 @@ from PIL.Image import Resampling
 
 # 全局配置变量
 asset_paths = {}
-image_root_path = "./static/assets/images/Chunithm"
+root_path ="./static/assets"
+image_root_path = "./static/assets/images"
 ui_font_path = "./static/assets/fonts/SOURCEHANSANSSC-BOLD.OTF"
 title_font_path = "./static/assets/fonts/SweiBellLegCJKsc-Black.ttf"
 level_font_path = "./static/assets/fonts/NimbusSanL-Bol.otf"
@@ -14,7 +15,9 @@ def FrameLoader(level_index: int = 0):
         return _frame.copy()
 
 def LevelLoader(level: float, level_next: float = 0.0):
-    lv = level if level > 1 else level_next
+    print(f"DEBUG: level={level}, type={type(level)}")
+    print(f"DEBUG: level_next={level_next}, type={type(level_next)}")
+    lv = level if level > 1.0 else level_next
     __lv = str(lv)
     if '.' in __lv:
         level, decimai = __lv.split('.')
@@ -223,7 +226,7 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
 
 def generate_single_image(record_detail: dict, output_path, prefix, index):
     """
-    生成单个Best30成绩记录图片。
+    生成单个 Best50 成绩记录图。
 
     Args:
         record_detail (dict): 成绩记录详情，包含以下字段：

@@ -1,11 +1,8 @@
 from gene_video import create_video_segment, create_info_segment, create_full_video, combine_full_video_from_existing_clips
-import json
-import os
-import traceback
+from gene_images import ui_font_path
+import json, os, traceback
 
-FONT_PATH = "./font/SOURCEHANSANSSC-BOLD.OTF"
-
-def generate_one_video_clip(config, video_output_path, video_res, video_bitrate, font_path=FONT_PATH):
+def generate_one_video_clip(config, video_output_path, video_res, video_bitrate, font_path=ui_font_path):
     print(f"正在合成视频片段: {config['id']}")
     try:
         clip = create_video_segment(config, resolution=video_res, font_path=font_path)
@@ -18,7 +15,7 @@ def generate_one_video_clip(config, video_output_path, video_res, video_bitrate,
         return {"status": "error", "info": f"合成 {config['id']} 时发生错误：{traceback.print_exc()}"}
     
 def generate_complete_video(configs, username, video_output_path, video_res, video_bitrate,
-                            video_trans_enable, video_trans_time, full_last_clip, font_path=FONT_PATH):
+                            video_trans_enable, video_trans_time, full_last_clip, font_path=ui_font_path):
     print(f"正在合成完整视频")
     try:
         final_video = create_full_video(configs, resolution=video_res, font_path=font_path, 
@@ -60,23 +57,23 @@ def video_generation_test():
     }
 
     for resource in intro_configs:
-        clip = create_info_segment(resource, resolution=(1920, 1080), font_path=FONT_PATH)
+        clip = create_info_segment(resource, resolution=(1920, 1080), font_path=ui_font_path)
         # clip.write_videofile(os.path.join(video_output_path, f"{resource['id']}.mp4"), fps=30, codec='h264_nvenc', threads=4, preset='fast', bitrate='5000k')
         clip.show()
     
     # for resource in main_configs:
-    #     clip = create_video_segment(resource, resolution=(1920, 1080), font_path=FONT_PATH)
+    #     clip = create_video_segment(resource, resolution=(1920, 1080), font_path=ui_font_path)
     #     clip.write_videofile(os.path.join(video_output_path, f"{resource['id']}.mp4"), 
     #                          fps=30, threads=4, preset='ultrafast', bitrate='5000k')
     # clip.show()
     
     # for resource in ending_configs:
-    #     clip = create_info_segment(resource, resolution=(1920, 1080), font_path=FONT_PATH)
+    #     clip = create_info_segment(resource, resolution=(1920, 1080), font_path=ui_font_path)
     #     clip.show()
 
     # generate full video
     # full_video = create_full_video(test_resources, resolution=(1920, 1080), 
-    #                                font_path=FONT_PATH, auto_add_transition=True, trans_time=1)
+    #                                font_path=ui_font_path, auto_add_transition=True, trans_time=1)
     # full_video.write_videofile(os.path.join(video_output_path, f"{username}_B50.mp4"), 
     #                            fps=30, threads=4, preset='ultrafast', bitrate='5000k')
     # full_video.show()

@@ -64,7 +64,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 - [x] 实现存档配置文件剪辑数据迁移
 - [x] 极速模式下更快的生成速度（GPU 调用）
-
+- [x] 支持选择多 P 谱面确认
 ---
 
 ## 使用说明（从源代码启动）

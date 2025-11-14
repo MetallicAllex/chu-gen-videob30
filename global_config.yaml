@@ -24,7 +24,7 @@ USE_ALL_CACHE: false
 USE_AUTO_PO_TOKEN: false
 USE_CUSTOM_PO_TOKEN: false
 USE_OAUTH: false
-USE_PROXY: true
+USE_PROXY: false
 VIDEO_BITRATE: 5000
 VIDEO_RES: !!python/tuple
 - 1920

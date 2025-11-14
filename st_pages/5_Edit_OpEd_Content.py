@@ -112,48 +112,60 @@ def edit_context_widget(name, config, config_file_path):
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
-
-if save_id:
-    # load save data
-    current_paths = get_data_paths(username, save_id)
-    data_loaded = True
-    st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
-
-
-    # 为了实现实时的小组件更新，文本框数据存储在session_state中，
-    # 因此需要在读取存档的过程中更新
-    video_config_file = current_paths['video_config']
-    if not os.path.exists(video_config_file):
-        st.error(f"未找到{video_config_file}，请检查前置步骤是否完成，以及b30存档的数据完整性！", icon="❌")
-        config = None
-    else:
-        config = load_config(video_config_file)
-        for name in ["intro", "ending"]:
-            st.session_state[f"{name}_items"] = config[name]
-else:
-    st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
-
-with st.expander("更换 Best50 存档", icon="💾"):
-    st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
-    versions = get_user_versions(username)
-    if versions:
-        with st.container(border=True):
-            selected_save_id = st.selectbox(
-                "选择存档",
-                versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+    
+with st.container(border=True):
+    if save_id:
+        # load save data
+        current_paths = get_data_paths(username, save_id)
+        data_loaded = True
+        # st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
+        # 方案2：指标卡片式显示
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                label="👤 当前用户",
+                value=username
             )
-            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
-                if selected_save_id:
-                    st.session_state.save_id = selected_save_id
-                    st.rerun()
-                else:
-                    st.error("无效的存档路径！", icon="❌")
+        with col2:
+            st.metric(
+                label="⏰ 存档时间", 
+                value=save_id
+            )
+
+        # 为了实现实时的小组件更新，文本框数据存储在session_state中，
+        # 因此需要在读取存档的过程中更新
+        video_config_file = current_paths['video_config']
+        if not os.path.exists(video_config_file):
+            st.error(f"未找到{video_config_file}，请检查前置步骤是否完成，以及b30存档的数据完整性！", icon="❌")
+            config = None
+        else:
+            config = load_config(video_config_file)
+            for name in ["intro", "ending"]:
+                st.session_state[f"{name}_items"] = config[name]
     else:
-        st.warning("未找到任何存档，请先在存档管理页获取存档！", icon="⚠️")
+        st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
+
+    with st.expander("更换 Best50 存档", icon="💾"):
+        st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
+        versions = get_user_versions(username)
+        if versions:
+            with st.container(border=True):
+                selected_save_id = st.selectbox(
+                    "选择存档",
+                    versions,
+                    format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+                )
+                if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
+                    if selected_save_id:
+                        st.session_state.save_id = selected_save_id
+                        st.rerun()
+                    else:
+                        st.error("无效的存档路径！", icon="❌")
+        else:
+            st.warning("未找到任何存档，请先在存档管理页获取存档！", icon="⚠️")
+            st.stop()
+    if not save_id:
         st.stop()
-if not save_id:
-    st.stop()
 ### Savefile Management - End ###
 
 if config:

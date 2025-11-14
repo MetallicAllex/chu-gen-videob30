@@ -35,33 +35,45 @@ if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
 
-if save_id:
-    # load save data
-    current_paths = get_data_paths(username, save_id)
-    data_loaded = True
-    st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
-    
-else:
-    st.warning("未索引到存档，请先加载存档数据！")
-
-with st.expander("更换 Best50 存档", icon="💾"):
-    st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
-    versions = get_user_versions(username)
-    if versions:
-        selected_save_id = st.selectbox(
-            "选择存档",
-            versions,
-            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
-        )
-        if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
-            if selected_save_id:
-                st.session_state.save_id = selected_save_id
-                st.rerun()
-            else:
-                st.error("无效的存档路径！")
+with st.container(border=True):
+    if save_id:
+        # load save data
+        current_paths = get_data_paths(username, save_id)
+        data_loaded = True
+        # st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
+        # 方案2：指标卡片式显示
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                label="👤 当前用户",
+                value=username
+            )
+        with col2:
+            st.metric(
+                label="⏰ 存档时间", 
+                value=save_id
+            )
     else:
-        st.warning("未找到任何存档，请先在存档管理页面获取存档！")
-        st.stop()
+        st.warning("未索引到存档，请先加载存档数据！")
+
+    with st.expander("更换 Best50 存档", icon="💾"):
+        st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
+        versions = get_user_versions(username)
+        if versions:
+            selected_save_id = st.selectbox(
+                "选择存档",
+                versions,
+                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+            )
+            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
+                if selected_save_id:
+                    st.session_state.save_id = selected_save_id
+                    st.rerun()
+                else:
+                    st.error("无效的存档路径！")
+        else:
+            st.warning("未找到任何存档，请先在存档管理页面获取存档！")
+            st.stop()
 ### Savefile Management - End ###
 
 st.write("视频抓取设置")
@@ -76,19 +88,21 @@ visitor_data = _customer_po_token.get('visitor_data', '')
 
 extra_setting_container = st.container(border=True)
 with extra_setting_container:
+    st.write("下载器设置")
     # 选择下载器
-    st.write("下载器相关")
     default_index = ["bilibili", "youtube"].index(_downloader)
     downloader = st.selectbox("选择下载器", ["bilibili", "youtube"], index=default_index)
+    
     col1, col2 = st.columns([0.35, 2])
     with col1:
         # 选择是否启用代理
         use_proxy = st.checkbox("启用代理", value=_use_proxy)
     with col2:
         # 输入代理地址，默认值为127.0.0.1:7890
-        proxy_address = st.text_input("输入代理地址（默认 127.0.0.1:7890）", value=_proxy_address, disabled=not use_proxy, placeholder="输入代理地址（默认 127.0.0.1:7890）", label_visibility="collapsed")
+        proxy_address = st.text_input("输入代理地址", value=_proxy_address, disabled=not use_proxy, placeholder="输入代理地址（默认 127.0.0.1:7890）", label_visibility="collapsed")
+    
     if downloader == "bilibili":
-        no_credential = st.checkbox("不登录账号", value=_no_credential)
+        no_credential = st.checkbox("不使用B站账号登录", value=_no_credential)
     elif downloader == "youtube":
         use_oauth = st.checkbox("使用OAuth登录", value=_use_oauth)
         po_token_mode = st.radio(
@@ -107,19 +121,19 @@ with extra_setting_container:
             po_token = st.text_input("输入自定义 PO Token", value=_po_token)
             visitor_data = st.text_input("输入自定义 Visitor Data", value=_visitor_data)
 
-    st.divider()
-# search_setting_container = st.container(border=True)
-# with search_setting_container:
-    st.write("搜索与下载相关")
+search_setting_container = st.container(border=True)
+with search_setting_container:
+    st.write("搜索设置")
     _search_max_results = G_config.get('SEARCH_MAX_RESULTS', 3)
     _search_wait_time = G_config.get('SEARCH_WAIT_TIME', [5, 10])
-    col1, col2 = st.columns([0.9, 0.3], vertical_alignment="bottom")
-    with col1:
-        search_max_results = st.number_input("备选搜索结果数量", value=_search_max_results, min_value=1, max_value=10)
-    with col2:
-        _download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
-        download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res)
+    search_max_results = st.number_input("备选搜索结果数量", value=_search_max_results, min_value=1, max_value=10)
     search_wait_time = st.select_slider("搜索间隔时间（随机范围）", options=range(1, 60), value=_search_wait_time)
+
+download_setting_container = st.container(border=True)
+with download_setting_container:
+    st.write("下载设置")
+    _download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
+    download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res)
 
 col1, col2 = st.columns([1, 1], gap="small")
 with col1:
@@ -163,7 +177,7 @@ def st_init_downloader():
     elif downloader == "bilibili":
         st.toast("正在初始化Bilibili下载器...", icon="ℹ️")
         if not no_credential:
-            st.toast("正在尝试登录B站...请使用bilibili客户端扫描在终端弹出的二维码图像登录（按住 Ctrl + 滚轮缩小终端文字大小以便扫描二维码）", icon="ℹ️")
+            st.toast("正在尝试登录... 如弹出二维码窗口，请使用 bilibili 客户端扫描进行登录", icon="ℹ️")
         dl_instance = BilibiliDownloader(
             proxy=proxy_address if use_proxy else None,
             no_credential=no_credential,
@@ -172,9 +186,9 @@ def st_init_downloader():
         )
         bilibili_username = dl_instance.get_credential_username()
         if bilibili_username:
-            st.toast(f"登录成功：{bilibili_username}", icon="✅")
+            st.toast(f"登录成功，当前登录账号为：{bilibili_username}", icon="✅")
     else:
-        st.error(f"未配置正确下载器，请重新配置！", icon="❌")
+        st.error(f"未配置正确的下载器，请重新确定上方配置！", icon="❌")
         return None
     
     return dl_instance
@@ -209,7 +223,7 @@ def st_search_b50_videoes(dl_instance, placeholder, search_wait_time):
     b50_config = load_config(b50_config_file)
     total_songs = len(b50_config)  # 获取实际歌曲数量
 
-    with placeholder.container(border=True):
+    with placeholder.container(border=True, height=560):
         with st.spinner(f"正在搜索 b{total_songs} 视频信息..."):
             progress_bar = st.progress(0)
             write_container = st.container(border=True, height=400)
@@ -238,11 +252,24 @@ def st_search_b50_videoes(dl_instance, placeholder, search_wait_time):
             # 搜索完成后显示100%
             progress_bar.progress(1.0, text="搜索完成！")
 
-# 仅在配置已保存时显示"开始预生成"按钮
+# 仅在配置已保存时显示搜索控件
 if st.session_state.get('config_saved_step2', False):
     info_placeholder = st.empty()
 
-    # with col2:
+    # 添加跳过搜索的提示和按钮
+    with st.expander("跳过自动搜索", expanded=True, icon="⤴️"):
+        st.warning("""
+                   如果您遇到自动搜索失败 / 大多数谱面的默认搜索结果完全不正确的情况
+                   - 多半与第三方查询接口有关，**难以立刻修复**
+                        - 请考虑到下一页 *手动输入谱面视频 BV 号*
+                   - 点击下方按钮可以跳过自动搜索。
+                   """, icon="⚠️")
+        if st.button("跳过自动搜索", icon="⤴️", use_container_width=True):
+            dl_instance = st_init_downloader()
+            # 缓存downloader对象
+            st.session_state.downloader = dl_instance
+            st.switch_page("st_pages/3_Confirm_Videoes.py")
+
     button_label = "开始搜索"
     st.session_state.search_completed = False
 
@@ -265,4 +292,3 @@ if st.session_state.get('config_saved_step2', False):
             st.switch_page("st_pages/3_Confirm_Videoes.py")
 else:
     st.warning("请先保存配置！", icon="⚠️")  # 如果未保存配置，给出提示
-

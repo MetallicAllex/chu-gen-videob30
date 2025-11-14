@@ -31,36 +31,48 @@ data_loaded = False
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
+with st.container(border=True):
+    if save_id:
+        # load save data
+        current_paths = get_data_paths(username, save_id)
+        data_loaded = True
+        # st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
+        # 方案2：指标卡片式显示
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                label="👤 当前用户",
+                value=username
+            )
+        with col2:
+            st.metric(
+                label="⏰ 存档时间", 
+                value=save_id
+            )
 
-if save_id:
-    # load save data
-    current_paths = get_data_paths(username, save_id)
-    data_loaded = True
-    st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
-
-else:
-    st.warning("未索引到存档，请先加载存档数据！")
-
-with st.expander("更换 Best50 存档", icon="💾"):
-    st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
-    versions = get_user_versions(username)
-    if versions:
-        selected_save_id = st.selectbox(
-            "选择存档",
-            versions,
-            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
-        )
-        if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
-            if selected_save_id:
-                st.session_state.save_id = selected_save_id
-                st.rerun()
-            else:
-                st.error("无效的存档路径！")
     else:
-        st.warning("未找到任何存档，请先在存档管理页获取存档！")
+        st.warning("未索引到存档，请先加载存档数据！")
+
+    with st.expander("更换 Best50 存档", icon="💾"):
+        st.info("要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
+        versions = get_user_versions(username)
+        if versions:
+            selected_save_id = st.selectbox(
+                "选择存档",
+                versions,
+                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+            )
+            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
+                if selected_save_id:
+                    st.session_state.save_id = selected_save_id
+                    st.rerun()
+                else:
+                    st.error("无效的存档路径！")
+        else:
+            st.warning("未找到任何存档，请先在存档管理页获取存档！")
+            st.stop()
+    if not save_id:
         st.stop()
-if not save_id:
-    st.stop()
 ### Savefile Management - End ###
 
 image_output_path = current_paths['image_dir']
@@ -497,7 +509,11 @@ with st.container(border=True):
                 except Exception as e:
                     st.error(f"更新失败：{e}", icon="❌")
         with col2:
-            if st.button("迁移旧存档剪辑数据", icon="⏫", help="如果您需要迁移剪辑数据，请使用此项（将旧存档命名为 `old_video_config.json`）", use_container_width=True):
+            if st.button("迁移旧存档剪辑数据", icon="⏫", help=f"""
+                         如果您需要迁移剪辑数据，请使用此项
+                         - 将旧存档命名为 `old_video_config.json`
+                         - 放置在当前存档 `{save_id}` 下
+                         """, use_container_width=True):
                 try:
                     copy_video_args(video_config_output_file, old_video_config_file)
                     st.toast("数据迁移成功！3 秒后刷新", icon="✅")

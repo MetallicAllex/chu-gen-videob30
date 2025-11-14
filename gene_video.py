@@ -1,4 +1,3 @@
-import datetime
 import os, threading, subprocess, time
 from queue import Queue, Empty
 from typing import Any, Dict, List, Tuple
@@ -8,6 +7,7 @@ from moviepy import ColorClip, VideoFileClip, ImageClip, TextClip, AudioFileClip
 from moviepy import vfx, afx
 from utils.Utils import format_time_difference
 from utils.chuni_extension import REVERSE_LEVEL_LABELS
+from gene_images import root_path
 
 def get_splited_text(text, text_max_bytes=70):
     """
@@ -127,11 +127,11 @@ def normalize_audio_volume(clip, target_dbfs=-20):
 
 def create_info_segment(clip_config, resolution, font_path, text_size=44, inline_max_len=40):
     # print(f"正在合成视频片段: {clip_config['id']}")
-    bg_image = ImageClip("./images/IntroBase.png").with_duration(clip_config['duration'])
+    bg_image = ImageClip(f"{root_path}/IntroBase.png").with_duration(clip_config['duration'])
     bg_image = bg_image.with_effects([vfx.Resize(width=resolution[0])])
 
-    # bg_video = VideoFileClip("./images/BgClips/bg.mp4")
-    bg_video = VideoFileClip(f"./images/BgClips/bg_xverse.mp4")
+    # bg_video = VideoFileClip("{root_path}/BgClips/bg.mp4")
+    bg_video = VideoFileClip(f"{root_path}/BgClips/bg_xverse.mp4")
     bg_video = bg_video.with_effects([vfx.Loop(duration=clip_config['duration']), 
                                       vfx.MultiplyColor(0.5),
                                       vfx.Resize(width=resolution[0])])
@@ -169,8 +169,8 @@ def create_info_segment(clip_config, resolution, font_path, text_size=44, inline
     )
 
     # 为整个composite_clip添加bgm
-    # bg_audio = AudioFileClip("./images/Audioes/intro_bgm.mp3")
-    bg_audio = AudioFileClip(f"./images/Audioes/bgm_verse.mp3")
+    # bg_audio = AudioFileClip(f"{root_path}/Audioes/intro_bgm.mp3")
+    bg_audio = AudioFileClip(f"{root_path}/Audioes/bgm.mp3")
     bg_audio = bg_audio.with_effects([afx.AudioLoop(duration=clip_config['duration'])])
     composite_clip = composite_clip.with_audio(bg_audio)
 
@@ -441,7 +441,7 @@ def create_video_segment(clip_config, resolution, font_path, bitrate, output_pat
     # end_time = clip_config['end']      # 结束时间
     
     # 确保所有输入文件存在
-    bg_video_path = os.path.abspath("./images/BgClips/bg_xverse.mp4").replace('\\', '/')
+    bg_video_path = os.path.abspath(f"{root_path}/BgClips/bg_xverse.mp4").replace('\\', '/')
     main_image_path = os.path.abspath(clip_config.get('main_image', '')).replace('\\', '/') if clip_config.get('main_image') else ''
     video_path = os.path.abspath(clip_config.get('video', '')).replace('\\', '/') if clip_config.get('video') else ''
     
@@ -582,7 +582,7 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
         text_size = calculated_text_size
     
     # 1. 背景层
-    bg_video = VideoFileClip("./images/BgClips/bg_xverse.mp4")
+    bg_video = VideoFileClip(f"{root_path}/BgClips/bg_xverse.mp4")
     bg_video = bg_video.with_effects([
         vfx.Loop(duration=clip_config['duration']), 
         vfx.Resize(resolution)

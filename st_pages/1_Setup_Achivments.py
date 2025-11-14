@@ -348,7 +348,7 @@ if st.session_state.get('config_saved', False):
                                     current_paths,
                                 )
                     except Exception as e:
-                        st.error(f"获取数据时发生错误: {e}")
+                        st.error(f"获取数据时发生错误: {e}", icon="❌")
         with col2:
             if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟", use_container_width=True):
                 current_paths = get_data_paths(username, timestamp=None)
@@ -377,7 +377,7 @@ if st.session_state.get('config_saved', False):
                 save_id = os.path.basename(save_dir)
                 os.makedirs(save_dir, exist_ok=True)
                 st.session_state.save_id = save_id
-                st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}")
+                st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}", icon="✅")
         
     if st.session_state.get('data_updated_step1', False):
         col1, col2 = st.columns(2, gap="small")

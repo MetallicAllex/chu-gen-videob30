@@ -8,7 +8,7 @@ package.json
 cred_datas/
 
 # B30 cache directories
-b30_images/
+b30_datas/
 videos/  
 
 # Byte-compiled / optimized / DLL files
@@ -184,23 +184,8 @@ cython_debug/
 *.json
 
 # debug and test resources
-test_html.txt
-test_dxrating.txt
 ffmpeg.exe
 start.bat
-images/LevelBg/屏幕截图 2025-03-25 002315.png
-images/LevelBg/test.py
-images/LevelBg/output_with_background.png
-images/LevelBg/layered_output.png
-utils/bilibili_downloader_partVideo.py
-music_datasets/all_music_infos.json
-music_datasets/jp_songs_info.json
 ffmpeg2.exe
-images/temp_text.png
-st_pages/3_Confirm_Videoes-original.py
-st_pages/4_Edit_Video_Content-original.py
-2696-MASTER.mp4
 global_config.yaml
-ImageUtils-NEW.py
-b30_datas/
 chu-gen-videob30_v0.4-2026modified2.zip

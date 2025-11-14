@@ -6,6 +6,7 @@ from utils.PathUtils import get_data_paths, get_user_versions
 from main_gen import generate_complete_video
 from gene_video import render_all_video_clips, combine_full_video_direct
 from utils.Utils import format_time_difference, get_ffmpeg_version
+from gene_images import ui_font_path
 
 st.header("Step 5: 视频渲染")
 
@@ -13,7 +14,6 @@ st.info("渲染视频前，请确保已完成 4-1 和 4-2，并且所有配置�
 st.error("请勿在渲染过程中修改任何参数，这可能会导致渲染过程意外中断或素材损坏！", icon="❗")
 
 G_config = read_global_config()
-FONT_PATH = "./font/SOURCEHANSANSSC-BOLD.OTF"
 
 if 'global_rendering' not in st.session_state:
     st.session_state.global_rendering = False
@@ -36,37 +36,51 @@ data_loaded = False
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
-
-if save_id:
-    # load save data
-    current_paths = get_data_paths(username, save_id)
-    data_loaded = True
-    st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
-else:
-    st.warning("未索引到存档，请先加载存档数据！")
-
-with st.expander("更换 Best50 存档", icon="💾"):
-    st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
-    versions = get_user_versions(username)
-    if versions:
-        with st.container(border=True):
-            selected_save_id = st.selectbox(
-                "选择存档",
-                versions,
-                # label_visibility="collapsed",
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+    
+with st.container(border=True):
+    if save_id:
+        # load save data
+        current_paths = get_data_paths(username, save_id)
+        data_loaded = True
+        # st.write(f"当前存档【用户名：{username}，存档时间：{save_id}】")
+        # 方案2：指标卡片式显示
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                label="👤 当前用户",
+                value=username
             )
-            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
-                if selected_save_id:
-                    st.session_state.save_id = selected_save_id
-                    st.rerun()
-                else:
-                    st.error("存档路径无效！")
+        with col2:
+            st.metric(
+                label="⏰ 存档时间", 
+                value=save_id
+            )
+            
     else:
-        st.warning("未找到任何存档，请先在存档管理页获取！")
+        st.warning("未索引到存档，请先加载存档数据！")
+
+    with st.expander("更换 Best50 存档", icon="💾"):
+        st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
+        versions = get_user_versions(username)
+        if versions:
+            with st.container(border=True):
+                selected_save_id = st.selectbox(
+                    "选择存档",
+                    versions,
+                    # label_visibility="collapsed",
+                    format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+                )
+                if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
+                    if selected_save_id:
+                        st.session_state.save_id = selected_save_id
+                        st.rerun()
+                    else:
+                        st.error("存档路径无效！")
+        else:
+            st.warning("未找到任何存档，请先在存档管理页获取！")
+            st.stop()
+    if not save_id:
         st.stop()
-if not save_id:
-    st.stop()
 ### Savefile Management - End ###
 
 st.write("基础设置")
@@ -229,7 +243,7 @@ with col1:
                     st.warning("渲染过程中请不要手动跳转到其他页面，或刷新本页面，否则可能导致渲染失败！", icon="⚠️")
                     with st.spinner("正在渲染所有视频片段，请稍候。"):
                         render_all_video_clips(video_configs, video_output_path, video_res, v_bitrate_kbps, 
-                                            font_path=FONT_PATH, auto_add_transition=False, trans_time=trans_time,
+                                            font_path=ui_font_path, auto_add_transition=False, trans_time=trans_time,
                                             force_render=force_render_clip)
                         st.toast("已启动批量视频片段渲染，请在控制台窗口查看进度。", icon="ℹ️")
                 st.success("渲染成功。", icon="✅")
@@ -362,7 +376,7 @@ if mode_str == "完整视频":
                                         video_output_path,
                                         video_res,
                                         v_bitrate_kbps,
-                                        font_path=FONT_PATH,
+                                        font_path=ui_font_path,
                                         auto_add_transition=trans_enable,
                                         trans_time=trans_time,
                                         force_render=force_render_clip,
@@ -476,7 +490,7 @@ if mode_str == "完整视频":
                                     video_output_path,
                                     video_res,
                                     v_bitrate_kbps,
-                                    font_path=FONT_PATH,
+                                    font_path=ui_font_path,
                                     auto_add_transition=trans_enable,
                                     trans_time=trans_time,
                                     force_render=force_render_clip,
@@ -590,7 +604,7 @@ if mode_str == "完整视频":
 #                             video_output_path,
 #                             video_res,
 #                             v_bitrate_kbps,
-#                             font_path=FONT_PATH,
+#                             font_path=ui_font_path,
 #                             auto_add_transition=trans_enable,
 #                             trans_time=trans_time,
 #                             force_render=force_render_clip,
@@ -703,7 +717,7 @@ if mode_str == "完整视频":
 #                             video_output_path,
 #                             video_res,
 #                             v_bitrate_kbps,
-#                             font_path=FONT_PATH,
+#                             font_path=ui_font_path,
 #                             auto_add_transition=trans_enable,
 #                             trans_time=trans_time,
 #                             force_render=force_render_clip,
@@ -773,7 +787,7 @@ if mode_str == "完整视频":
 #             video_res = (v_res_width, v_res_height)
 #             with st.spinner("正在渲染所有视频片段……"):
 #                 render_all_video_clips(video_configs, video_output_path, video_res, v_bitrate_kbps, 
-#                                        font_path=FONT_PATH, auto_add_transition=False, trans_time=trans_time,
+#                                        font_path=ui_font_path, auto_add_transition=False, trans_time=trans_time,
 #                                        force_render=force_render_clip)
 #                 st.info("已启动批量视频片段渲染，请在控制台窗口查看进度……")
 #             with st.spinner("正在拼接视频……"):

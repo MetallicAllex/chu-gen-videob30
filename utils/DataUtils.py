@@ -52,7 +52,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
         "lxns": {
             "id": "id",
             "song_name": "song_name",
-            "level": "level",
+            "level": None,
             "level_index": "level_index",
             "score": "score",
             "rating": "rating",
@@ -146,7 +146,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
             print(f"曲目数据: {song}")  # 打印完整曲目数据
             
             # 检查必要字段是否存在
-            required_fields = ['id', 'song_name', 'level', 'level_index', 'score', 'rating', 'fc']
+            required_fields = ['id', 'song_name', 'level_index', 'score', 'rating', 'fc']
             for field in required_fields:
                 field_name = fields[field]
                 if field_name not in song:
@@ -158,7 +158,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
                 "id": song[fields["id"]],
                 "song_name": song[fields["song_name"]],
                 "artist": None,
-                "level": song[fields["level"]],
+                "level": song[fields["level"]] if fields["level"] is not None else None,
                 "level_index": song[fields["level_index"]],
                 "level_next": None,
                 "score": song[fields["score"]],
