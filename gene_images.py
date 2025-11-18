@@ -15,8 +15,8 @@ def FrameLoader(level_index: int = 0):
         return _frame.copy()
 
 def LevelLoader(level: float, level_next: float = 0.0):
-    print(f"DEBUG: level={level}, type={type(level)}")
-    print(f"DEBUG: level_next={level_next}, type={type(level_next)}")
+    # print(f"DEBUG: level={level}, type={type(level)}")
+    # print(f"DEBUG: level_next={level_next}, type={type(level_next)}")
     lv = level if level > 1.0 else level_next
     __lv = str(lv)
     if '.' in __lv:
@@ -234,8 +234,9 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
             - level_index (int): 难度索引
             - score (int): 分数
             - rating (float): Rating值
-            - full_combo (str): FC状态，可选值：空、'fullcombo'、'alljustice'
-            - full_chain (str): 连锁状态，可选值：空、'fullchain'、'fullchain2'
+            - full_combo (str): Combo 类型，可选：空、'fullcombo'、'alljustice'
+            - full_chain (str): Chain 类型，可选：空、'fullchain'、'fullchain2'
+            - play_count (int): 游玩次数，可选：空、（整数）游玩次数
             - clip_id (str): 标识符
             - level (float): 当前定数
             - level_next (float): 下版本定数
@@ -341,6 +342,26 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
                                 font_path=title_font_path, font_size=28,
                                 font_color=(255, 255, 255), h_align="center")
             
+            # 游玩次数
+            if record_detail['play_count'] is not None:
+                PlayCount = int(record_detail['play_count'])
+            else:
+                PlayCount = 0
+            # 只有当游玩次数≥1时才显示
+            if PlayCount >= 1:
+                # 载入游玩次数背景图标
+                play_count_base_path = os.path.join(os.getcwd(), f"{image_root_path}/Playcount/PlayCountBase.png")
+                with Image.open(play_count_base_path) as play_count_base:
+                    if play_count_base.mode != 'RGBA':
+                        play_count_base = play_count_base.convert('RGBA')
+                    temp_img.paste(play_count_base, (1170, 840), play_count_base)
+                
+                # 绘制游玩次数文字
+                text_central_position = (1350, 860)
+                play_count_text = str(PlayCount)
+                temp_img = TextDraw(temp_img, play_count_text, text_central_position,
+                                   font_path=title_font_path, font_size=24,
+                                   font_color=(255, 152, 0), h_align="center")
             
             # 将temp_img合成到background上
             background = Image.alpha_composite(background, temp_img)

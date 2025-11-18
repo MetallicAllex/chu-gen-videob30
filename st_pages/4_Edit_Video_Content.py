@@ -80,7 +80,7 @@ video_config_output_file = current_paths['video_config']
 old_video_config_file = current_paths['old_video_config']
 video_download_path = f"./videos/downloads"
 
-def refresh_main_image_paths(config_path, username, save_id, max_order_id=50):
+def refresh_main_image_paths(config_path, username, save_id, max_order_id):
     """
     更新 video_config.json 中 main_image 字段的路径，使用当前的 username 和 save_id。
 
@@ -209,6 +209,11 @@ def update_preview(preview_placeholder, config, current_index):
     with preview_placeholder.container(border=True):
         # 快速跳转组件 - 现在放在框内但在大标题上方
         def on_jump_to_clip():
+            # 添加安全检查
+            if not video_ids or clip_selector not in video_ids:
+                st.toast("无效的选择！", icon="⚠️")
+                return
+                
             target_index = video_ids.index(clip_selector)
             if target_index != st.session_state.current_index:
                 # 保存当前配置
@@ -217,7 +222,6 @@ def update_preview(preview_placeholder, config, current_index):
                 # 更新session_state
                 st.session_state.current_index = target_index
                 st.rerun()
-                # update_preview(preview_placeholder, video_config, st.session_state.current_index)
             else:
                 st.toast("已经是当前视频片段！", icon="ℹ️")
         
@@ -226,11 +230,19 @@ def update_preview(preview_placeholder, config, current_index):
         with col1:
             st.write("**快速跳转**")
         with col2:
+            # 添加索引安全检查
+            safe_index = current_index
+            if video_ids:  # 确保选项列表不为空
+                safe_index = min(current_index, len(video_ids) - 1)
+                safe_index = max(0, safe_index)  # 确保索引非负
+            else:
+                safe_index = 0
+                
             clip_selector = st.selectbox(
                 label="快速跳转到指定曲目", 
                 options=video_ids, 
                 key=f"video_selector_{current_index}",
-                index=current_index,
+                index=safe_index,
                 label_visibility="collapsed"
             )
         with col3:
@@ -238,6 +250,11 @@ def update_preview(preview_placeholder, config, current_index):
                 on_jump_to_clip()
 
         # 获取当前视频的配置信息
+        # 添加额外的安全检查
+        if not config or 'main' not in config or current_index >= len(config['main']):
+            st.error("配置数据无效或索引超出范围！")
+            return
+            
         item = config['main'][current_index]
 
         # 检查是否存在图片和视频：
@@ -502,7 +519,7 @@ with st.container(border=True):
         with col1:
             if st.button("更新成绩图存档路径", icon="🔄", help="如果您拷贝了其他用户的配置文件，需点击此按钮更新", use_container_width=True):
                 try:
-                    refresh_main_image_paths(video_config_output_file, username, save_id)
+                    refresh_main_image_paths(video_config_output_file, username, save_id, len(video_config_output_file))
                     st.toast("配置路径已更新，3 秒后刷新", icon="✅")
                     time.sleep(3)
                     st.rerun()

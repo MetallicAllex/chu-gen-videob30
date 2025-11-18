@@ -115,7 +115,13 @@ with st.container(border=True):
                 "好友码（落雪查分器所需）",
                 value=friend_code if friend_code else "",
                 placeholder="使用落雪查分（首次）必须提供此项，否则查询将失败",
-                help="访问 [【账号详情】页](https://maimai.lxns.net/user/profile) 查看"
+                help="""
+                不知道好友码在哪？
+                - 访问 [【账号详情】页](https://maimai.lxns.net/user/profile) 查看
+                
+                为什么我提供了好友码，仍然无法查询数据？
+                - 请确保您在 [【账号设置】页](https://maimai.lxns.net/user/settings) 开启了所有读取权限
+                """
             )
         with col2:
             if st.session_state.get('config_saved', False):
@@ -185,7 +191,7 @@ with st.container(border=True):
             with open(userinfo_file, 'w', encoding='utf-8') as f:
                 json.dump(user_info, f, indent=2, ensure_ascii=False)
             
-            st.success("用户信息已保存！", icon="✅")
+            st.toast("用户信息已保存！", icon="✅")
             st.session_state.update({
                 "username": username,
                 "friend_code": user_info.get("friend_code", ""),
@@ -235,10 +241,11 @@ def update_b50(update_function, secret_identifier, save_paths):
 @st.dialog("删除存档？", width="medium")
 def delete_save_data(username, save_id):
     version_dir = get_user_version_dir(username, save_id)
-    st.warning(f"您是要删除存档【{username} - {save_id}】吗？将清除所有已生成 Best50 底图和视频，且不可撤销！", icon="⚠️")
+    st.write(f"您是要删除【{username} - {save_id}】吗？")
+    st.warning("将清除所有已生成 Best50 底图和视频，且不可撤销！", icon="⚠️")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("是的！确定要删除它！", icon="✔️", use_container_width=True):
+        if st.button("是的！我要删除它！", icon="✔️", use_container_width=True):
             # 迭代地删除文件夹version_dir下的所有文件和子文件夹
             for root, dirs, files in os.walk(version_dir, topdown=False):
                 for name in files:
@@ -267,7 +274,7 @@ def load_user_info(username):
                 })
                 return True
         except Exception as e:
-            st.error(f"加载用户信息失败: {e}")
+            st.error(f"加载用户信息失败: {e}", icon="❌")
             return False
     return False
 
@@ -276,7 +283,7 @@ if st.session_state.get('config_saved', False):
 
     st_init_cache_pathes()
 
-    st.write("b30 存档读取 / 编辑")
+    st.write("b50 存档读取 / 编辑")
     versions = get_user_versions(username)
     if versions:
         with st.container(border=True):
@@ -296,10 +303,10 @@ if st.session_state.get('config_saved', False):
                             st.session_state.friend_code = friend_code
                             st.toast("同时您的好友码已恢复至生成器内，您现在可以获取落雪查分器数据了。", icon="ℹ️")
                         else:
-                            st.warning("存档加载成功，但未找到用户信息（可能需要重新输入好友码）。")
+                            st.warning("存档加载成功，但未找到用户信息（可能需要重新输入好友码）。", icon="⚠️")
                         st.session_state.data_updated_step1 = True
                     else:
-                        st.error("未指定有效的存档路径！")
+                        st.error("未指定有效的存档路径！", icon="❌")
             with col2:
                 version_dir = get_user_version_dir(username, selected_save_id)
                 if st.button("打开文件夹", icon="📂", help=version_dir, use_container_width=True):
@@ -313,7 +320,7 @@ if st.session_state.get('config_saved', False):
                     delete_save_data(username, selected_save_id)
 
     else:
-        st.warning(f"{username} 还没有历史存档，请从下方获取新的 Best30 数据。")
+        st.warning(f"{username} 还没有历史存档，请从下方获取新的 Best30 数据。", icon="⚠️")
 
     st.write(f"新建 / 获取 b50 数据")
     st.info("""

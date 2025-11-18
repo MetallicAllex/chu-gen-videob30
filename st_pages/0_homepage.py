@@ -1,8 +1,8 @@
+import os, time
 import streamlit as st
-from update_music_data import fetch_music_data
+from update_music_data import fetch_music_data, should_update_metadata
 from utils.Utils import get_ffmpeg_version
-# from utils.PageUtils import change_theme
-# from utils.themes import THEME_COLORS
+from utils.DataUtils import music_info_path, jp_music_info_path
 
 col1, col2 = st.columns([.7, 1.3])
 with col1:
@@ -84,7 +84,7 @@ with col2:
     
     .version-info {
         text-align: left;
-        margin-top: 10px;
+        margin-top: 8px;
         animation: slideInLeft 1s ease-in-out 6s both;
     }
     
@@ -110,6 +110,7 @@ with col2:
     # st.markdown("请按照下列引导步骤操作，以生成您的 Best30 视频。")
 
 st.info("""
+        注意事项：
         - 缓存数据均保存在本地，如在编辑过程中意外退出，可加载已有存档继续编辑。
         - 使用时请不要随意刷新，这可能会导致索引丢失。
             - 发生此情况时，请重新加载存档并检查数据完整性。""", icon="ℹ️")
@@ -121,35 +122,35 @@ st.success("使用过程中遇到任何问题，前往 [GitHub 发起 issue](htt
 #          - 不要分享该密钥给不信任的第三方（本查分器仅用于获取游戏数据）
 #          - 如果该密钥被泄露，请及时重新生成密钥
 #          """, icon="❗")
-st.write("当你准备好时，单击下面的按钮开始")
-
-col1, col2 = st.columns(2)
-
+if not (os.path.exists(music_info_path) and os.path.exists(jp_music_info_path)):
+    st.warning("""
+               您的包体（目前）未拥有谱面数据
+               - 刚下载的新包体**默认未携带谱面数据**，请先下载后再开始
+               - **已经使用过但未存在谱面数据**，可能是被误删除，请重新下载
+               """, icon="⚠️")
+    
+col1, col2 = st.columns([.45, 1], vertical_alignment="center")
 with col1:
+    st.write("准备好时，单击右边按钮开始")
+
+with col2:
     if st.button("开始使用", icon="▶️", use_container_width=True):
         st.switch_page("st_pages/1_Setup_Achivments.py")
 
-with col2:
-    if st.button("更新乐曲数据", help="如果你认为曲目数据不正确或已经修改，点击此按钮更新", icon="🔄️", use_container_width=True):
+st.divider()
+with st.expander("附加选项（谱面数据更新）"):
+    st.warning("若谱面数据不正确或已经修改（如游戏更新添加了新数据等），请及时更新", icon="⚠️")
+    update_status = should_update_metadata(24)
+    update_help_text = "最近更新是在 24 小时内" if update_status == False else "最近更新时间已超过 24 小时"
+    # col1, col2 = st.columns(2, vertical_alignment="center")
+    # with col1:
+    #     if update_status == False:
+    #         st.success("最近一次更新在 24 小时内", icon="☑️") 
+    #     else:
+    #         st.error("最近一次更新已超过 24 小时", icon="⚠️")
+    # with col2:
+    if st.button(f"更新谱面数据（{update_help_text}）", help=update_help_text, icon="🔄️", use_container_width=True):
         fetch_music_data()
-
-# st.write("外观选项")
-# with st.container(border=True):
-#     if 'theme' not in st.session_state:
-#         st.session_state.theme = "Default"
-#     @st.dialog("刷新主题")
-#     def refresh_theme():
-#         st.info("主题已更改，要刷新并应用主题吗？")
-#         if st.button("刷新并应用", key=f"confirm_refresh_theme"):
-#             st.toast("新主题已应用！")
-#             st.rerun()
-        
-#     options = ["Default", "Festival", "Buddies", "Prism"]
-#     theme = st.segmented_control("更改页面主题",
-#                                  options, 
-#                                  default=st.session_state.theme,
-#                                  selection_mode="single")
-#     if st.button("确定"):
-#         st.session_state.theme = theme
-#         change_theme(THEME_COLORS.get(theme, None))
-#         refresh_theme()
+        st.toast("谱面数据更新完成！3 秒后刷新", icon="✅")
+        time.sleep(3)
+        st.rerun()

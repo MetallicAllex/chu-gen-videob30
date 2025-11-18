@@ -1,11 +1,13 @@
 import json, threading, random, os
+import streamlit as st
+import pandas as pd
 from update_music_data import music_info_path, jp_music_info_path
 from utils.chuni_extension import REVERSE_LEVEL_LABELS
 from concurrent.futures import ThreadPoolExecutor
 
-BUCKET_ENDPOINT = "https://nickbit-maigen-images.oss-cn-shanghai.aliyuncs.com"
-DATA_ENDPOINT = "https://maimai.lxns.net"
-FC_PROXY_ENDPOINT = "https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run"
+# BUCKET_ENDPOINT = "https://nickbit-maigen-images.oss-cn-shanghai.aliyuncs.com"
+# DATA_ENDPOINT = "https://maimai.lxns.net"
+# FC_PROXY_ENDPOINT = "https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run"
 
 # def download_metadata(data_type):
 #     url = f"{DATA_ENDPOINT}/api/v0/{data_type}/song/list"
@@ -30,15 +32,15 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
     """Best50 数据清洗"""
     
     # 调试：打印原始数据结构
-    print(f"=== 数据调试信息 ===")
-    print(f"原始数据类型: {type(raw_data)}")
-    if isinstance(raw_data, dict):
-        print(f"原始数据顶层键: {list(raw_data.keys())}")
-        if "records" in raw_data:
-            print(f"records 键: {list(raw_data['records'].keys())}")
-            print(f"b30 数据长度: {len(raw_data['records'].get('b30', []))}")
-            print(f"n20 数据长度: {len(raw_data['records'].get('n20', []))}")
-            print(f"r10 数据长度: {len(raw_data['records'].get('r10', []))}")
+    # print(f"=== 数据调试信息 ===")
+    # print(f"原始数据类型: {type(raw_data)}")
+    # if isinstance(raw_data, dict):
+    #     print(f"原始数据顶层键: {list(raw_data.keys())}")
+    #     if "records" in raw_data:
+    #         print(f"records 键: {list(raw_data['records'].keys())}")
+    #         print(f"b30 数据长度: {len(raw_data['records'].get('b30', []))}")
+    #         print(f"n20 数据长度: {len(raw_data['records'].get('n20', []))}")
+    #         print(f"r10 数据长度: {len(raw_data['records'].get('r10', []))}")
 
     # 1. 加载本地曲目数据库
     with open(music_info_path, 'r', encoding='utf-8') as f:
@@ -102,7 +104,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
                     else:
                         result.append(current)
             except (KeyError, TypeError, AttributeError) as e:
-                print(f"提取字段 '{field_path}' 时出错: {e}")
+                print(f"提取 '{field_path}' 时出错: {e}")
                 continue
         
         return result
@@ -143,7 +145,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
     def process_song(song, i):
         try:
             print(f"处理第 {i} 首曲目: {song.get(fields['song_name'], 'Unknown')}")
-            print(f"曲目数据: {song}")  # 打印完整曲目数据
+            # print(f"曲目数据: {song}")  # 打印完整曲目数据
             
             # 检查必要字段是否存在
             required_fields = ['id', 'song_name', 'level_index', 'score', 'rating', 'fc']
@@ -152,23 +154,24 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
                 if field_name not in song:
                     print(f"错误：字段 '{field_name}' 不存在于曲目数据中")
                     return None
-                print(f"  {field}: {song[field_name]}")
+                # print(f"  {field}: {song[field_name]}")
             
             processed_song = {
+                "clip_id": f"Best_{i + 1}" if i < 30 else f"New_{i - 29}",
                 "id": song[fields["id"]],
                 "song_name": song[fields["song_name"]],
                 "artist": None,
-                "level": song[fields["level"]] if fields["level"] is not None else None,
-                "level_index": song[fields["level_index"]],
-                "level_next": None,
                 "score": song[fields["score"]],
                 "rating": song[fields["rating"]],
+                "level": song[fields["level"]] if fields["level"] is not None else None,
+                "level_next": None,
+                "level_index": song[fields["level_index"]],
                 "full_combo": song.get(fields["fc"]) if fields["fc"] is not None else None,
                 "full_chain": song.get(fields["fchain"]) if fields["fchain"] is not None else None,
-                "clip_id": f"Best_{i + 1}" if i < 30 else f"New_{i - 29}"
+                "play_count": None
             }
 
-            print(f"处理后的曲目基础信息: {processed_song['song_name']} - ID: {processed_song['id']}")
+            print(f"【处理后】曲目基础信息: {processed_song['song_name']} - ID: {processed_song['id']}")
 
             # 从本地数据库匹配曲目信息
             song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
@@ -182,9 +185,9 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
                         print(f"更新难度等级: {processed_song['level']}")
                         break
                 else:
-                    print(f"警告：曲目【{processed_song['song_name']}】未找到 {processed_song['level_index']} 难度")
+                    print(f"警告：【{processed_song['song_name']}】未找到 {processed_song['level_index']} 难度")
             else:
-                print(f"警告：未找到曲目【{processed_song['song_name']}】的信息")
+                print(f"警告：未找到【{processed_song['song_name']}】的信息")
 
             # 从日服数据库匹配日服曲目信息
             jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
@@ -197,9 +200,9 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
                     processed_song["level_next"] = difficulty_data["const"]
                     print(f"国服 - [{processed_song['level']}], 日服 - [{processed_song['level_next']}]")
                 else:
-                    print(f"警告：曲目【{processed_song['song_name']}】未找到 {level_label} 难度")
+                    print(f"警告：【{processed_song['song_name']}】未找到 {level_label} 难度")
             else:
-                print(f"警告：未找到曲目【{processed_song['song_name']}】的信息")
+                print(f"警告：未找到【{processed_song['song_name']}】的信息")
             
             # 备用方案
             if processed_song["level_next"] is None:
@@ -222,40 +225,11 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
             if result := future.result():
                 processed_data.append(result)
 
-    print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===")
-
+    print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===\n若需要添加 PickUp 曲目，请按照 b30_config.json 中的格式编写")
     # 6. 保存处理后的数据
     with open(b50_data_file, 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, ensure_ascii=False, indent=4)
     return processed_data
-
-def get_nested_field(data, field_paths):
-    """从嵌套字典中获取字段值"""
-    if isinstance(field_paths, str):
-        field_paths = [field_paths]
-    
-    result = []
-    
-    for field_path in field_paths:
-        try:
-            keys = field_path.split('.')
-            current = data
-            for key in keys:
-                current = current[key]
-            
-            print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
-            
-            if current is not None:
-                if isinstance(current, list):
-                    if current:  # 只添加非空列表
-                        result.extend(current)
-                else:
-                    result.append(current)
-        except (KeyError, TypeError, AttributeError) as e:
-            print(f"提取字段 '{field_path}' 时出错: {e}")
-            continue
-    
-    return result
 
 def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
                             clip_start_interval, clip_play_time, default_comment_placeholders):
@@ -368,7 +342,70 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
 
     return video_config_data
 
+def load_config_with_types(file_path):
+    """加载配置并确保正确的数据类型"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # 数据类型转换
+        for item in data:
+            # 整型字段
+            for int_field in ['id', 'score', 'level_index']:
+                if int_field in item and item[int_field] is not None:
+                    item[int_field] = int(item[int_field])
+            
+            # 浮点型字段
+            for float_field in ['level', 'level_next', 'rating']:
+                if float_field in item and item[float_field] is not None:
+                    item[float_field] = float(item[float_field])
+            
+            # 可选整型字段（允许为null）
+            if 'play_count' in item:
+                if item['play_count'] is None or pd.isna(item['play_count']):
+                    item['play_count'] = None
+                else:
+                    item['play_count'] = int(item['play_count'])
+            
+            # 字符串字段 - 确保是字符串类型
+            for str_field in ['song_name', 'artist', 'clip_id']:
+                if str_field in item and item[str_field] is not None:
+                    item[str_field] = str(item[str_field])
+            
+            # 可选枚举字段 - 处理空值
+            for enum_field in ['full_combo', 'full_chain']:
+                if enum_field in item and (item[enum_field] is None or pd.isna(item[enum_field])):
+                    item[enum_field] = None
+            return data
+    except Exception as e:
+        st.error(f"加载数据失败: {e}", icon="❌")
+        return []
 
+def save_config_with_types(file_path, data):
+    """保存配置并确保正确的数据类型和null值"""
+    try:
+        # 深拷贝数据以避免修改原始数据
+        data_to_save = []
+        
+        for item in data:
+            cleaned_item = {}
+            for key, value in item.items():
+                # 处理NaN和空值，转换为None
+                if value is None or (isinstance(value, (int, float)) and pd.isna(value)):
+                    cleaned_item[key] = None
+                else:
+                    cleaned_item[key] = value
+            
+            data_to_save.append(cleaned_item)
+        
+        # 保存为JSON，确保null值正确序列化
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        
+        return True
+    except Exception as e:
+        st.error(f"保存数据失败: {e}")
+        return False
 
 # if __name__ == "__main__":
 #     img_path = "jackets/maimaidx/Jacket_1103.jpg"
