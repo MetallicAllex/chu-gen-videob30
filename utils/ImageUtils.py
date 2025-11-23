@@ -1,14 +1,36 @@
 import os, traceback
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from PIL.Image import Resampling
+from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path
+# def blur_image(image_path, blur_radius=5):
+#     """
+#     对图片进行高斯模糊处理
+    
+#     Args:
+#         image_path (str): 图片路径
+#         blur_radius (int): 模糊半径，默认为10
+        
+#     Returns:
+#         numpy.ndarray: 模糊处理后的图片数组
+#     """
+#     try:
+#         pil_image = Image.open(image_path)
+#         blurred_image = pil_image.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+#         # 将模糊后的图片转换为 numpy 数组
+#         return np.array(blurred_image)
+#     except Exception as e:
+#         print(f"Warning: 图片模糊处理失败 - {str(e)}")
+#         return np.array(Image.open(image_path))
 
-# 全局配置变量
-asset_paths = {}
-root_path ="./static/assets"
-image_root_path = "./static/assets/images"
-ui_font_path = "./static/assets/fonts/SOURCEHANSANSSC-BOLD.OTF"
-title_font_path = "./static/assets/fonts/SweiBellLegCJKsc-Black.ttf"
-level_font_path = "./static/assets/fonts/NimbusSanL-Bol.otf"
+def create_blank_image(width, height, color=(0, 0, 0, 0)):
+    """
+    创建一个透明的图片
+    """
+    # 创建一个RGBA模式的空白图片
+    image = Image.new('RGBA', (width, height), color)
+    # 转换为numpy数组，moviepy需要这种格式
+    return np.array(image)
 
 def FrameLoader(level_index: int = 0):
     with Image.open(f"{image_root_path}/Frames/{level_index}.png") as _frame:
@@ -371,91 +393,3 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
             background = Image.new('RGBA', (1520, 500), (0, 0, 0, 255))
     finally:
         background.save(os.path.join(output_path, f"{prefix}_{index}.png"))
-
-# def generate_single_image(record_detail: dict, output_path, prefix, index):
-#     # 预先初始化背景
-#     background = None
-#     try:
-#         assert record_detail['level_index'] in range(0, 5)
-#         image_base_path = os.path.join(os.getcwd(), f"{image_root_path}/content_base_chunithm_verse.png")
-#         with Image.open(image_base_path) as background:
-#             background = background.convert("RGBA")
-#             assert background.size == (1920, 1080)
-            
-#             # 载入元素
-#             temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
-            
-#             # 边框
-#             frame = FrameLoader(record_detail['level_index'])
-#             temp_img.paste(frame, (65, 32), frame)
-            
-#             # 等级
-#             level = LevelLoader(record_detail['level'], record_detail['level_next'])
-#             temp_img.paste(level, (102, 844), level)
-            
-#             # 定数
-#             cur_pos = (1562, 1018)
-#             next_pos = (1756, 1018)
-#             cur_level = record_detail['level']
-#             next_level = record_detail['level_next']
-#             cur_text = str(cur_level)
-#             if cur_level <= 0.0:  # 非当前版本谱面使用 0 来标记
-#                 cur_level = "--"
-#             temp_img = TextDraw(temp_img, cur_text, cur_pos,
-#                                  font_path=title_font_path,
-#                                  font_size=45, font_color=(77, 77, 77), h_align="center")
-            
-#             if cur_level <= 0:
-#                 next_text = str(next_level)
-#             elif next_level > cur_level:
-#                 next_text = str(next_level) + "↑" 
-#             elif next_level < cur_level:
-#                 next_text = str(next_level) + "↓"
-#             else:
-#                 next_text = str(next_level) + "→"
-#             temp_img = TextDraw(temp_img, next_text, next_pos,
-#                                  font_path=title_font_path,
-#                                  font_size=45, font_color=(77, 77, 77), h_align="center")
-            
-#             # 分数
-#             score_pos = (706, 958)
-#             score = ScoreLoader(record_detail["score"])
-#             temp_img.paste(score, score_pos, score)
-
-#             # Rating
-#             rating_pos = (1216, 980)
-#             rating = RatingLoader(record_detail["rating"])
-#             temp_img.paste(rating, rating_pos, rating)
-
-#             # Combo
-#             combo_pos = (426, 975)
-#             combo_status = ComboStatusLoader(record_detail['full_combo'], record_detail['score'])
-#             temp_img.paste(combo_status, combo_pos, combo_status)
-
-#             # Chain
-#             chain_pos = (426, 1020)
-#             chain_status = ChainStatusLoader(record_detail['full_chain'])
-#             temp_img.paste(chain_status, chain_pos, chain_status)
-
-#             # 标题
-#             title_pos = (234, 876)
-#             temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=900,
-#                                  font_path=title_font_path, font_size=48,
-#                                  font_color=(26, 0, 84), h_align="left")
-
-
-#     except Exception as e:
-#             print(f"在生成图像时出现错误：{e}")
-#             print(traceback.format_exc())
-#             background = Image.new('RGBA', (1520, 500), (0, 0, 0, 255))
-#     finally:
-#         background.save(os.path.join(output_path, f"{prefix}_{index + 1}.png"))
-
-def generate_b30_images(UserID, b35_data, output_dir):
-    print("生成B30图片中...")
-    os.makedirs(output_dir, exist_ok=True)
-    # 生成最佳图片
-    # gene_images_batch(b35_data, UserID, "Best")
-
-    print(f"已生成 {UserID} 的 B30 图片，请在 b30_images/{UserID} 文件夹中查看。")
-

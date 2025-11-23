@@ -4,7 +4,7 @@ from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
 from utils.DataUtils import st_gen_resource_config
-from utils.chuni_extension import REVERSE_LEVEL_LABELS
+from utils.Variables import REVERSE_LEVEL_LABELS
 
 DEFAULT_VIDEO_MAX_DURATION = 180
 
@@ -421,6 +421,15 @@ if not video_config or 'main' not in video_config:
                 st.toast(f"视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
                 st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
                 video_config = None
+    st.info("""
+            如果存档中有数据需要修改，请在生成配置之前，前往【生成成绩图】页修改
+            - 配置生成后将难于修改，若已经生成，请【迁移】剪辑数据
+            - 要迁移的数据若均不在新数据内，请【刷新配置】重新生成
+            - 仍要强制迁移，将新数据中要迁移曲目的以下字段，拷贝并复制到对应旧数据字段：
+                - `id, song_name, artist, level_index`
+                - 拷贝会对曲目 ID、曲名、曲师和难度校验
+                    - 两份数据中只要以上字段有完全相同的就会拷贝
+            """, icon="💬")
 
 if video_config:
     # 获取所有视频片段的ID
@@ -543,7 +552,7 @@ with st.container(border=True):
         st.warning("若已填写内容，则操作前必须备份 `video_configs.json`", icon="⚠️")
         # st.write("如果无法正常读取图片、视频或评论，请尝试强制刷新配置文件。")
         # st.warning("将清空所有已填写评论和时长数据，如有需要请备份 `video_configs.json`", icon="⚠️")
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2, vertical_alignment="center")
         with col1:
             @st.dialog("删除配置确认")
             def delete_video_config_dialog(file):

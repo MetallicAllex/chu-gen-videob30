@@ -4,8 +4,8 @@ from datetime import datetime
 from utils.PageUtils import load_config, read_global_config, save_config, write_global_config
 from utils.PathUtils import get_data_paths, get_user_versions
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
-from utils.chuni_extension import REVERSE_LEVEL_LABELS
-from pre_gen import search_one_video, merge_b50_data
+from utils.Variables import REVERSE_LEVEL_LABELS
+from utils.DataUtils import search_one_video, merge_b50_data
 
 G_config = read_global_config()
 _downloader = G_config.get('DOWNLOADER', 'bilibili')
@@ -237,7 +237,7 @@ def st_search_b50_videoes(dl_instance, placeholder, search_wait_time):
                     write_container.write(f"({i}/{total_songs}[跳过]): {song['song_name']} （已储存有相关视频信息）")
                     continue
                 
-                song_data, ouput_info = search_one_video(dl_instance, song)
+                ouput_info = search_one_video(dl_instance, song)
                 write_container.write(f"【{i}/{total_songs}】{ouput_info}")
                 # write_container.write(f"{song_data}") # debug
 

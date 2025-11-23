@@ -3,8 +3,8 @@ import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
-from utils.chuni_extension import REVERSE_LEVEL_LABELS
-from pre_gen import download_one_video
+from utils.Variables import REVERSE_LEVEL_LABELS
+from utils.DataUtils import download_one_video
 
 G_config = read_global_config()
 
@@ -90,7 +90,7 @@ def get_web_search_url(song_data, dl_type):
 
 @st.dialog("分p视频指定", width="large")
 def change_video_page(cur_song_data, cur_p_index):
-    st.write("分P视频指定")
+    st.info("请选择对应您的曲目的谱面确认分 p，如果没有，请尝试重新搜索。", icon="ℹ️")
 
     try:
         page_info = dl_instance.get_video_pages(cur_song_data['video_info_match']['id'])
@@ -105,10 +105,10 @@ def change_video_page(cur_song_data, cur_p_index):
             format_func=lambda x: page_options[x],
             index=cur_p_index,
             key=f"radio_select_page_{cur_song_data['clip_id']}",
-            label_visibility="visible"
+            label_visibility="collapsed"
         )
 
-        if st.button("确定更新分p", key=f"confirm_selected_page_{cur_song_data['clip_id']}"):
+        if st.button("更新", key=f"confirm_selected_page_{cur_song_data['clip_id']}", use_container_width=True, icon="🔄️"):
             cur_song_data['video_info_match']['p_index'] = selected_p_index
             save_config(b30_config_file, b30_config)
             st.rerun()
@@ -289,7 +289,7 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
             replace_p_index = st.number_input(
                 "分P序号（可选）", 
                 help="""
-                以下条件，请直接填写视频分 P 序号（可从网页端查询，P 数较多时直接输入序号加载更快）：
+                以下条件，请填写视频分 P 号（可从网页端查询，P 数较多时直接输入序号加载更快）：
                 - 您选择的谱面确认来源是【哔哩哔哩】
                 - 您选择的谱面确认有分 P（一般是合集）
                 
@@ -324,8 +324,18 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                         else:
                             to_replace_video_info = videos[0]
                     elif downloader_type == "bilibili":
-                        # 对于B站，直接使用search_video方法
+                        # # 判断是关键词搜索还是BV号直接搜索
+                        # if replace_id.startswith('BV'):  # 如果是BV号
+                        #     # 使用新的BV号搜索方法
+                        #     video_info = dl_instance.get_video_info(replace_id)
+                        #     if video_info:
+                        #         videos = [video_info]  # 包装成列表以保持接口一致
+                        #     else:
+                        #         videos = []
+                        # else:  # 如果是关键词
+                        #     # 原有的关键词搜索
                         videos = dl_instance.search_video(replace_id)
+                        
                         if len(videos) == 0:
                             st.error("未找到有效的视频，请重试", icon="❌")
                         else:
@@ -336,8 +346,8 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                             to_replace_video_info['p_index'] = replace_p_index - 1  # 用户输入从1开始，内部从0开始
                         st.success(f"已使用视频{to_replace_video_info['id']}替换匹配信息，详情：", icon="✅")
                         st.markdown(f"【{to_replace_video_info['title']}】({to_replace_video_info['duration']}秒)" + 
-                                   (f", p{replace_p_index}" if replace_p_index > 0 else "") + 
-                                   f" [🔗{to_replace_video_info['id']}]({to_replace_video_info['url']})")
+                                (f", p{replace_p_index}" if replace_p_index > 0 else "") + 
+                                f" [🔗{to_replace_video_info['id']}]({to_replace_video_info['url']})")
                         song['video_info_match'] = to_replace_video_info
                         song['video_info_list'] = [to_replace_video_info]  # 同时更新备选列表
                         save_config(b30_config_file, config)
@@ -346,6 +356,7 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                         matched_count, unmatched_count, _ = check_matched_songs(b30_config)
                         st.session_state.matched_count = matched_count
                         st.session_state.unmatched_count = unmatched_count
+                        time.sleep(10)
                         st.rerun()
                     else:
                         st.error("未找到相关视频", icon="❌")

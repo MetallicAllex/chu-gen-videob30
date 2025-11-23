@@ -6,67 +6,8 @@ from datetime import datetime
 from utils.DataUtils import load_config_with_types, save_config_with_types
 from utils.PageUtils import *
 from utils.PathUtils import *
-from gene_images import generate_single_image
+from utils.ImageUtils import generate_single_image
 from concurrent.futures import ThreadPoolExecutor
-
-# def st_generate_b30_images(placeholder, save_paths):
-#     # read b50_data
-#     b50_data = load_config(save_paths['data_file'])
-#     image_path = save_paths['image_dir']
-#     with placeholder.container(border=True):
-#         pb = st.progress(0, text="正在生成 Best50 成绩底图...")
-#         for index, record_detail in enumerate(b50_data):
-#             pb.progress((index + 1) / len(b50_data), text=f"正在生成 Best50 成绩底图({index + 1}/{len(b50_data)})")
-#             acc_string = f"{record_detail['score']}"
-#             record_for_gene_image = deepcopy(record_detail)
-#             record_for_gene_image['score'] = acc_string
-#             prefix = "Best"
-#             image_name_index = index
-#             generate_single_image(
-#                 # "./images/b30ViedoBase.png",
-#                 f"./images/LevelBg/{record_detail['level_index']}.png",
-#                 record_for_gene_image,
-#                 image_path,
-#                 prefix,
-#                 image_name_index
-#             )
-
-# def st_generate_b30_images(placeholder, save_paths):
-#     b50_data = load_config(save_paths['data_file'])
-#     image_path = save_paths['image_dir']
-        
-#     def worker(index, record_detail):
-#         try:
-#             generate_single_image(
-#                 f"./images/LevelBg/{record_detail['level_index']}.png",
-#                 {"score": f"{record_detail['score']}", **record_detail},
-#                 image_path,
-#                 "Best",
-#                 index
-#             )
-#             return True
-#         except Exception as e:
-#             print(f"生成图片 {index} 失败: {str(e)}")
-#             return False
-    
-#     with placeholder.container(border=True):
-#         pb = st.progress(0, text="正在生成 Best50 成绩底图...")
-        
-#         with ThreadPoolExecutor(max_workers=8) as executor:  # 限制线程数
-#             futures = []
-#             for index, record_detail in enumerate(b50_data):
-#                 futures.append(
-#                     executor.submit(worker, index, deepcopy(record_detail))
-#                 )
-            
-#             # 实时更新进度条
-#             completed = 0
-#             while completed < len(b50_data):
-#                 for future in futures:
-#                     if future.done() and future.result():
-#                         progress_value = max(completed / len(b50_data), 1.0)  # 确保不超过1.0
-#                         pb.progress(progress_value)
-#                 time.sleep(0.1)  # 避免CPU空转
 
 def st_generate_b30_images(placeholder, save_paths):
     b50_data = load_config(save_paths['data_file'])
@@ -108,7 +49,7 @@ def st_generate_b30_images(placeholder, save_paths):
                     pb.progress(
                         min(completed / len(b50_data), 1.0),
                         text=(
-                            f"进度: {completed}/{len(b50_data)} | "
+                            f"进度: {completed}/{len(b50_data)}&nbsp; | &nbsp;"
                             # f"速度: {speed:.1f} 张/秒 | "
                             f"剩余: {remaining:.1f}秒"
                         )
@@ -360,12 +301,12 @@ with st.container(border=True):
                                         # 处理空值和类型
                                         if value is None or (isinstance(value, (int, float)) and pd.isna(value)):
                                             cleaned_item[key] = None
-                                        elif key in ['id', 'score', 'level_index'] and value is not None:
+                                        elif key in ['id', 'score', 'level_index', 'play_count'] and value is not None:
                                             cleaned_item[key] = int(value)
                                         elif key in ['level', 'level_next', 'rating'] and value is not None:
                                             cleaned_item[key] = float(value)
-                                        elif key == 'play_count' and value is not None:
-                                            cleaned_item[key] = int(value)
+                                        # elif key == 'play_count' and value is not None:
+                                        #     cleaned_item[key] = int(value)
                                         else:
                                             cleaned_item[key] = value
                                     cleaned_data.append(cleaned_item)

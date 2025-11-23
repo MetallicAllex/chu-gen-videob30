@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import *
-from pre_gen import update_b50_data_lxns, update_b50_data_fish, st_init_cache_pathes
+from utils.DataUtils import update_b50_data_lxns, update_b50_data_fish, st_init_cache_pathes
 
 def convert_old_files(folder, username, save_paths):
     """
@@ -199,7 +199,7 @@ with st.container(border=True):
                 "config_saved": True
             })
 
-def update_b50(update_function, secret_identifier, save_paths):
+def update_b50(update_function, secret_identifier, save_paths, data_type):
     try:
         # 1. 强制加载用户名（完全隔离好友码）
         def get_safe_display_name():
@@ -220,10 +220,10 @@ def update_b50(update_function, secret_identifier, save_paths):
         safe_name = get_safe_display_name()
 
         # 2. 执行数据获取（原逻辑不变）
-        b50_data = update_function(save_paths['raw_file'], save_paths['data_file'], secret_identifier)
+        b50_data = update_function(save_paths['raw_file'], save_paths['data_file'], secret_identifier, data_type)
         
         # 3. 绝对安全显示
-        st.success(f"已获取 {safe_name} 的 Best50 数据：{os.path.dirname(save_paths['data_file'])}")
+        st.success(f"已获取 {safe_name} 的游戏数据：{os.path.dirname(save_paths['data_file'])}")
         st.session_state.data_updated_step1 = True
         return b50_data
 
@@ -278,6 +278,7 @@ def load_user_info(username):
             return False
     return False
 
+st.divider()
 if st.session_state.get('config_saved', False):
     raw_username = read_raw_username(username)
 
@@ -322,6 +323,7 @@ if st.session_state.get('config_saved', False):
     else:
         st.warning(f"{username} 还没有历史存档，请从下方获取新的 Best30 数据。", icon="⚠️")
 
+    st.divider()
     st.write(f"新建 / 获取 b50 数据")
     st.info("""
             从下面选择您使用的查分器获取 Best50 数据，系统将为您创建存档。
@@ -329,56 +331,73 @@ if st.session_state.get('config_saved', False):
             - 【落雪】加载存档后若下方未出现【已保存好友码】提示，请重新加载
             """, icon="ℹ️")
     with st.container(border=True):
-        st.warning("因当前开发分支限制，水鱼查分器数据源获取被禁用。", icon="⚠️")
+        # st.warning("因当前开发分支限制，水鱼查分器数据源获取被禁用。", icon="⚠️")
         
-        # 显示当前好友码状态（如果有）
-        if st.session_state.get("friend_code"):
-            st.info(f"【落雪】已保存好友码: ******{st.session_state.friend_code[11:]}", icon="ℹ️")
+        with st.expander("我玩国服", icon="🔴"):
+            col1, col2 = st.columns([1.25, .75])
             
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("从落雪查分器获取", help="将使用您的好友码作为验证参数向代理请求游戏数据", icon="❄️", use_container_width=True):
-                if not st.session_state.get("friend_code"):
-                    st.error("未设置好友码！请在上方勾选'我使用落雪查分器'并输入您的好友码。", icon="❌")
-                else:
-                    try:
-                        current_paths = get_data_paths(username, timestamp=None)
-                        save_dir = os.path.dirname(current_paths['data_file'])
-                        save_id = os.path.basename(save_dir)
-                        if save_id:
-                            os.makedirs(save_dir, exist_ok=True)
-                            st.session_state.save_id = save_id
-                            with st.spinner("正在获取 Best50 数据..."):
-                                update_b50(
-                                    update_b50_data_lxns,
-                                    st.session_state.friend_code,
-                                    current_paths,
-                                )
-                    except Exception as e:
-                        st.error(f"获取数据时发生错误: {e}", icon="❌")
-        with col2:
-            if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟", use_container_width=True):
-                current_paths = get_data_paths(username, timestamp=None)
-                save_dir = os.path.dirname(current_paths['data_file'])
-                save_id = os.path.basename(save_dir)
-                if save_id:
-                    os.makedirs(save_dir, exist_ok=True)
-                    st.session_state.save_id = save_id
-                    with st.spinner("正在获取 Best50 数据..."):
-                        update_b50(
-                            update_b50_data_fish,
-                            raw_username,
-                            current_paths,
-                        )
+            with col1:
+                data_type = st.radio("获取数据类型",["全都要", "仅旧曲", "仅新曲"], index=0, horizontal=True, key="select_data_type",
+                                    help="此设置目前只影响国服（外服缺少测试数据）", captions=["Best30 + New20", "Only Best30", "Only New20"])
+            
+            with col2: 
+                # 显示当前好友码状态（如果有）
+                if st.session_state.get("friend_code"):
+                    st.info(f"【落雪】已存好友码: ******{st.session_state.friend_code[11:]}", icon="ℹ️")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("从落雪查分器获取", help="将使用您的好友码作为验证参数向代理请求游戏数据", icon="❄️", use_container_width=True):
+                    if not st.session_state.get("friend_code"):
+                        st.error("未设置好友码！请在上方勾选'我使用落雪查分器'并输入您的好友码。", icon="❌")
+                    else:
+                        try:
+                            current_paths = get_data_paths(username, timestamp=None)
+                            save_dir = os.path.dirname(current_paths['data_file'])
+                            save_id = os.path.basename(save_dir)
+                            if save_id:
+                                os.makedirs(save_dir, exist_ok=True)
+                                st.session_state.save_id = save_id
+                                with st.spinner("正在获取数据。"):
+                                    update_b50(
+                                        update_b50_data_lxns,
+                                        st.session_state.friend_code,
+                                        current_paths,
+                                        data_type
+                                    )
+                        except Exception as e:
+                            st.error(f"获取数据时发生错误: {e}", icon="❌")
+            with col2:
+                if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟", use_container_width=True):
+                    current_paths = get_data_paths(username, timestamp=None)
+                    save_dir = os.path.dirname(current_paths['data_file'])
+                    save_id = os.path.basename(save_dir)
+                    if save_id:
+                        os.makedirs(save_dir, exist_ok=True)
+                        st.session_state.save_id = save_id
+                        with st.spinner("正在获取数据。"):
+                            update_b50(
+                                update_b50_data_fish,
+                                raw_username,
+                                current_paths,
+                                data_type
+                            )
+        with st.expander("我玩外服", icon="🔵"):
+            st.info(f"""
+                    请按照以下操作放入您的游戏数据：
+                    - 将您获取的游戏数据保存为 `b30_raw.json`
+                    - 将其放在您的用户目录【{username}】下
+                    - 点击 “解析原始数据” 以开始解析
+                    """, icon="ℹ️")
+            st.warning("目前需要提供测试样本以用于测试，因此此功能仍在重新开发", icon="⚠️")
 
-        st.error("因外服缺少测试样本，我们目前无法支持导入其数据，不过您仍可尝试手动编写", icon="❌")
 
-        col1, col2 = st.columns(2, gap="small")
+        col1, col2 = st.columns([.4, 1.6], gap="small", vertical_alignment="center")
         with col1:
-            st.markdown("如果您目前没有可用于生成存档的数据，可生成空白存档（作为占位使用）")
+            st.markdown("或者，您也可以")
         
         with col2:
-            if st.button("新建空白存档", key="dx_int_create_new_save", icon="📄", use_container_width=True):
+            if st.button("新建空白存档", key="int_create_new_save", icon="📄", use_container_width=True, help="如果您目前没有可用于生成存档的数据，可生成空白存档（作为占位）"):
                 current_paths = get_data_paths(username, timestamp=None)
                 save_dir = os.path.dirname(current_paths['data_file'])
                 save_id = os.path.basename(save_dir)

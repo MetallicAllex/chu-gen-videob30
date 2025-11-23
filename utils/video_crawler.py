@@ -3,16 +3,7 @@ from bilibili_api import login, user, search, video, Credential, sync, HEADERS
 from bilibili_api.video import Video
 from typing import Tuple
 from abc import ABC, abstractmethod
-import os
-import yaml
-import json
-import asyncio
-import pickle
-import httpx
-import traceback
-import subprocess
-import platform
-import re
+import os, yaml, json, asyncio, pickle, httpx, traceback, subprocess, platform, re
 
 # 根据操作系统选择FFMPEG的输出重定向方式
 # TODO：添加日志输出
@@ -23,6 +14,7 @@ else:
 
 FFMPEG_PATH = 'ffmpeg'
 MAX_LOGIN_RETRIES = 3
+BILIBILI_URL_PREFIX = "https://www.bilibili.com/video/"
 
 def custom_po_token_verifier() -> Tuple[str, str]:
 
@@ -88,7 +80,7 @@ def convert_duration_to_seconds(duration: str) -> int:
 
 def load_credential(credential_path):
     if not os.path.isfile(credential_path):
-        print("#####【bilibili】未找到登录凭证，请在终端扫码登录（按住 Ctrl + 滚轮缩小终端文字大小以便扫描二维码）")
+        print("#####【bilibili】未找到登录凭证，请重新扫码登录（若首次扫描登录未成功，请关闭当前二维码窗口，程序会要求重新登录）")
         return None
     else:
         # 读取凭证文件
@@ -106,13 +98,13 @@ def load_credential(credential_path):
             )
         except:
             traceback.print_exc()
-            print("#####【bilibili】登录凭证无效，请在终端重新扫码登录（按住 Ctrl + 滚轮缩小终端文字大小以便扫描二维码）")
+            print("#####【bilibili】登录凭证无效，请重新扫码登录（若首次扫描登录未成功，请关闭当前二维码窗口，程序会要求重新登录）")
             return False
         
         # 验证凭证的有效性
         is_valid = sync(credential.check_valid())
         if not is_valid:
-            print("#####【bilibili】登录凭证无效，请在终端重新扫码登录（按住 Ctrl + 滚轮缩小终端文字大小以便扫描二维码）")
+            print("#####【bilibili】登录凭证无效，请重新扫码登录（若首次扫描登录未成功，请关闭当前二维码窗口，程序会要求重新登录）")
             return None
         try:
             need_refresh = sync(credential.check_refresh())
@@ -121,10 +113,10 @@ def load_credential(credential_path):
                 sync(credential.refresh())
         except:
             traceback.print_exc()
-            print("#####【【bilibili】刷新登录凭证失败，请在终端重新扫码登录（按住 Ctrl + 滚轮缩小终端文字大小以便扫描二维码）")
+            print("#####【bilibili】刷新登录凭证失败，请重新扫码登录（若首次扫描登录未成功，请关闭当前二维码窗口，程序会要求重新登录）")
             return None
         
-        print(f"#####【bilibili】缓存登录成功：{sync(user.get_self_info(credential))['name']}】")
+        print(f"#####【bilibili】缓存登录成功：{sync(user.get_self_info(credential))['name']}")
         return credential
 
 async def download_url_from_bili(url: str, out: str, info: str):
@@ -141,11 +133,11 @@ async def download_url_from_bili(url: str, out: str, info: str):
                 percentage = (process / int(length)) * 100 if length else 0
                 print(f'      -- [正在从bilibili下载流: {info} {percentage:.2f}%]', end='\r')
                 f.write(chunk)
-        print("Done.\n")
+        print("完成。\n")
 
-async def bilibili_download(bvid, credential, output_name, output_path, high_res=False):
+async def bilibili_download(bvid, credential, output_name, output_path, high_res=False, p_index=0):
     v = video.Video(bvid=bvid, credential=credential)
-    download_url_data = await v.get_download_url(0)
+    download_url_data = await v.get_download_url(p_index)
     detecter = video.VideoDownloadURLDataDetecter(data=download_url_data)
 
     # 获取最佳媒体流: 返回列表中0是视频流，1是音频流
@@ -170,8 +162,8 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
         print(f"下载完成，正在合并视频和音频")
         os.system(f'{FFMPEG_PATH} -y -i video_temp.m4s -i audio_temp.m4s -vcodec copy -acodec copy {output_file} {REDIRECT}')
         # 删除临时文件
-        # os.remove("video_temp.m4s")
-        # os.remove("audio_temp.m4s")
+        os.remove("video_temp.m4s")
+        os.remove("audio_temp.m4s")
         print(f"合并完成，存储为: {output_name}.mp4")
 
 class Downloader(ABC):
@@ -180,11 +172,17 @@ class Downloader(ABC):
         pass
 
     @abstractmethod
-    def download_video(self, video_id, output_name, output_path, high_res=False):
+    def download_video(self, video_id, output_name, output_path, high_res=False, p_index=0):
+        pass
+    
+    @abstractmethod
+    def get_video_info(self, video_id):
         pass
 
 class PurePytubefixDownloader(Downloader):
-    """使用pytubefix进行搜索和下载的youtube视频下载器"""
+    """
+    只使用pytubefix进行搜索和下载的youtube视频下载器
+    """
     def __init__(self, proxy=None, use_oauth=False, use_potoken=False, auto_get_potoken=False, 
                  search_max_results=3):
         self.proxy = proxy
@@ -228,7 +226,7 @@ class PurePytubefixDownloader(Downloader):
             videos = videos[:self.search_max_results]
         return videos
     
-    def download_video(self, video_id, output_name, output_path, high_res=False):
+    def download_video(self, video_id, output_name, output_path, high_res=False, p_index=0):
         try:
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
@@ -283,8 +281,12 @@ class PurePytubefixDownloader(Downloader):
             traceback.print_exc()
             return None
 
+    def get_video_pages(self, video_id):
+        # pytubefix暂时不支持获取分p信息，返回空
+        raise NotImplementedError("PurePytubefixDownloader 不支持 get_video_pages 方法。")
+
 class BilibiliDownloader(Downloader):
-    def __init__(self, proxy=None, no_credential=False, credential_path="../cred_datas/bilibili_cred.pkl", search_max_results=3):
+    def __init__(self, proxy=None, no_credential=False, credential_path="cred_datas/bilibili_cred.pkl", search_max_results=3):
         self.proxy = proxy
         self.search_max_results = search_max_results
         
@@ -324,33 +326,28 @@ class BilibiliDownloader(Downloader):
         return True
     
     def search_video(self, keyword): 
-            # 并发搜索视频可能被风控，使用同步方法逐个搜索
-            results = sync(
-                search.search_by_type(keyword=keyword, 
-                                    search_type=search.SearchObjectType.VIDEO,
-                                    order_type=search.OrderVideo.TOTALRANK,
-                                    order_sort=0,  # 由高到低
-                                    page=1,
-                                    page_size=self.search_max_results)
-            )
-            videos = []
-            if 'result' not in results:
-                print(f"搜索结果异常，请检查如下输出：")
-                print(results)
-                return []
-            res_list = results['result']
-            for each in res_list:
-                videos.append({
-                    'id': each['bvid'],  # 使用bilibili-api时，video_id是bvid字符串或aid
-                    'aid': each['aid'],
-                    'cid': each['cid'] if 'cid' in each else 0,
-                    'title': remove_html_tags_and_invalid_chars(each['title']),  # 去除特殊字符
-                    'url': each['arcurl'],
-                    'duration': convert_duration_to_seconds(each['duration']),  # 转换为总秒数
-                })
-            return videos
+        # 并发搜索50个视频可能被风控，使用同步方法逐个搜索
+        results = sync(
+            search.search_by_type(keyword=keyword, 
+                                  search_type=search.SearchObjectType.VIDEO,
+                                  order_type=search.OrderVideo.TOTALRANK,
+                                  order_sort=0,  # 由高到低
+                                  page=1,
+                                  page_size=self.search_max_results)
+        )
+        videos = []
+        if 'result' not in results:
+            print(f"搜索结果异常，请检查如下输出：")
+            print(results)
+            return []
+        res_list = results['result']
+        for each in res_list:
+            vid = each['bvid'] # 只取bvid，然后通过视频接口获取信息，这样可以得到分p信息
+            match_info = self.get_video_info(vid)
+            videos.append(match_info)
+        return videos
 
-    def download_video(self, video_id, output_name, output_path, high_res=False):
+    def download_video(self, video_id, output_name, output_path, high_res=False, p_index=0):
         if not self.credential:
             print(f"Warning: 未成功配置bilibili登录凭证，下载视频可能失败！")
         # 使用异步方法下载
@@ -359,12 +356,54 @@ class BilibiliDownloader(Downloader):
                               credential=self.credential, 
                               output_name=output_name, 
                               output_path=output_path,
-                              high_res=high_res)
+                              high_res=high_res,
+                              p_index=p_index)
         )
 
+    def get_video_info(self, video_id):
+        # 获取视频信息
+        v = video.Video(bvid=video_id, credential=self.credential)
+        info = sync(v.get_info())
+
+        # 返回符合存档格式的match_info信息
+        match_info = {
+            "id": info.get("bvid", ""),
+            "aid": info.get("aid", 0),
+            "title": info.get("title", ""),
+            "duration": info.get("duration", 0),
+            "page_count": len(info.get("pages", [])),
+            "p_index": info.get("p_index", 0),
+            "url": BILIBILI_URL_PREFIX + info.get("bvid", ""),
+        }
+        return match_info
+
+    def get_video_pages(self, video_id):
+        # 获取视频分p信息
+        v = video.Video(bvid=video_id, credential=self.credential)
+        pages = sync(v.get_pages())
+        
+        page_info = []
+
+        for each in pages:
+            static_frame = len(pages) <= 5
+            static_path = None
+            # if static_frame:
+            #     # 尝试下载视频的首帧图像
+            #     fframe_url = each.get("first_frame", "")
+            #     static_path = download_temp_image_to_static(fframe_url)
+
+            page_info.append({
+                "cid": each.get("cid", 0),
+                "page": each.get("page", 0),
+                "part": remove_html_tags_and_invalid_chars(each.get("part", "")),
+                "duration": each.get("duration", 0),
+                "static_frame": static_frame,
+                "first_frame": static_path
+            })
+
+        return page_info
 
 # test
 if __name__ == "__main__":
     downloader = BilibiliDownloader()
-    downloader.search_video("【(maimai】【谱面确认】 DX谱面 Aegleseeker 紫谱 Master")
-    
+    # downloader.search_video("【(maimai】【谱面确认】 DX谱面 Aegleseeker 紫谱 Master")

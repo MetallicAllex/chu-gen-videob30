@@ -53,16 +53,3 @@ def open_file_explorer(path):
         return True
     except Exception as e:
         return False
-    
-# def change_theme(theme_dict):
-#     st_config_path = os.path.join(os.getcwd(), ".streamlit", "config.toml")
-#     if not os.path.exists(st_config_path):
-#         os.makedirs(os.path.dirname(st_config_path), exist_ok=True)
-    
-#     with open(st_config_path, "w", encoding="utf-8") as f:
-#         if theme_dict:
-#             f.write("[theme]\n")
-#             for key, value in theme_dict.items():
-#                 f.write(f'{key}="{value}"\n')
-#         else:
-#             f.write("")  # 清空文件以使用默认主题

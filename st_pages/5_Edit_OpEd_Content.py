@@ -1,7 +1,5 @@
+import os, traceback
 import streamlit as st
-import os
-import json
-import traceback
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
@@ -39,7 +37,7 @@ def edit_context_widget(name, config, config_file_path):
         for idx, item in enumerate(items):
             with st.expander(f"{name} 展示：第 {idx + 1} 页", expanded=True):
                 # 添加版本选择器
-                list_versions = G_config.get("AVAILABLE_VERSION", [])
+                # list_versions = G_config.get("AVAILABLE_VERSION", [])
                 # sel_version = st.radio(
                 #     "选择背景播放的游戏版本",
                 #     options=list_versions,
@@ -52,7 +50,7 @@ def edit_context_widget(name, config, config_file_path):
                     "文本内容",
                     value=item["text"],
                     key=f"{item['id']}_text",
-                    placeholder="请输入要展示的文本（每页最多 250 字）"
+                    placeholder="请输入要展示的文本（每页最多 100 字）"
                 )
                 items[idx]["text"] = new_text
                 # items[idx]['version'] = sel_version

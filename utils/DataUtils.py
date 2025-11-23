@@ -1,35 +1,31 @@
-import json, threading, random, os
+import json, threading, random, os, time, random
 import streamlit as st
 import pandas as pd
-from update_music_data import music_info_path, jp_music_info_path
-from utils.chuni_extension import REVERSE_LEVEL_LABELS
+from utils.Utils import music_info_path, jp_music_info_path
 from concurrent.futures import ThreadPoolExecutor
+from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE
+from utils.Utils import get_b50_data_from_lxns, get_b50_data_from_fish, get_keyword
+from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
+from utils.Variables import REVERSE_LEVEL_LABELS
 
-# BUCKET_ENDPOINT = "https://nickbit-maigen-images.oss-cn-shanghai.aliyuncs.com"
-# DATA_ENDPOINT = "https://maimai.lxns.net"
-# FC_PROXY_ENDPOINT = "https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run"
-
-# def download_metadata(data_type):
-#     url = f"{DATA_ENDPOINT}/api/v0/{data_type}/song/list"
-#     response = requests.get(url)
-#     if response.status_code == 200:
-#         return response.json()
-#     else:
-#         raise FileNotFoundError(f"从 {url} 下载元数据时出错. 状态码: {response.status_code}")
-
-
-# def download_image_data(image_path):
-#     url = f"{BUCKET_ENDPOINT}/{image_path}"
-#     response = requests.get(url, stream=True)
-#     if response.status_code == 200:
-#         img = Image.open(response.raw)
-#         return img
-#     else:
-#         print(f"Failed to download image from {url}. Status code: {response.status_code}")
-#         raise FileNotFoundError
-
-def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
-    """Best50 数据清洗"""
+def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, best_or_new: str):
+    """
+    Best50 数据清洗
+    
+    Args:
+        raw_data: 请求获取的原始数据
+        source_type(str): 数据源类型：[水鱼或落雪]
+        b50_raw_file: Best50 原始数据存储文件名
+        b50_data_file: Best50 清洗数据存储文件名
+        best_or_new(str): 数据类型: [全都要(b30 + n20), 仅新曲(n20), 仅旧曲(b30)]
+        
+    Returns:
+        processed_data: 已经过清洗的 Best50 数据
+        
+    Raises:
+        NoSuchFileExceptions: 未找到原始文件
+        KeyErrorExceptions: 字段不存在
+    """
     
     # 调试：打印原始数据结构
     # print(f"=== 数据调试信息 ===")
@@ -60,7 +56,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
             "rating": "rating",
             "fc": "full_combo",
             "fchain": "full_chain",
-            "data_field": ["data.bests", "data.new_bests"]
+            "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
         },
         "fish": {
             "id": "mid",
@@ -71,7 +67,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
             "rating": "ra",
             "fc": "fc",
             "fchain": None,
-            "data_field": ["records.b30", "records.n20"]  # 使用 b30 和 n20
+            "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
         }
     }
     
@@ -112,19 +108,19 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file):
     # 3. 提取原始 B50 数据
     print(f"=== 开始提取数据 ===")
     b50_data = get_nested_field(raw_data, fields["data_field"])
-    print(f"提取到的 b50_data 总长度: {len(b50_data)}")
+    print(f"提取到的 best_data 总长度: {len(b50_data)}")
     
     # 备用方案：如果嵌套提取失败，尝试直接提取
-    if len(b50_data) == 0:
-        print("=== 尝试备用提取方案 ===")
-        if isinstance(raw_data, dict) and "records" in raw_data:
-            records = raw_data["records"]
-            b30_data = records.get("b30", [])
-            n20_data = records.get("n20", [])
-            print(f"直接提取 b30: {len(b30_data)} 条")
-            print(f"直接提取 n20: {len(n20_data)} 条")
-            b50_data = b30_data + n20_data
-            print(f"合并后 b50_data 长度: {len(b50_data)}")
+    # if len(b50_data) == 0:
+    #     print("=== 尝试备用提取方案 ===")
+    #     if isinstance(raw_data, dict) and "records" in raw_data:
+    #         records = raw_data["records"]
+    #         b30_data = records.get("b30", [])
+    #         n20_data = records.get("n20", [])
+    #         print(f"直接提取 b30: {len(b30_data)} 条")
+    #         print(f"直接提取 n20: {len(n20_data)} 条")
+    #         b50_data = b30_data + n20_data
+    #         print(f"合并后 b50_data 长度: {len(b50_data)}")
 
     # 如果还是没有数据，直接返回空列表
     if len(b50_data) == 0:
@@ -406,6 +402,150 @@ def save_config_with_types(file_path, data):
     except Exception as e:
         st.error(f"保存数据失败: {e}")
         return False
+
+def merge_b50_data(new_b50_data, old_b50_data):
+    """
+    合并两份 Best50 数据，使用新数据的基本信息但保留旧数据中的视频相关信息
+    
+    Args:
+        new_b50_data (list): 新的b30数据（不含video_info_list和video_info_match）
+        old_b50_data (list): 旧的b30数据（youtube版或bilibili版）
+    
+    Returns:
+        tuple: (合并后的b30数据列表, 更新计数)
+    """
+    # 检查数据长度是否一致
+    if len(new_b50_data) != len(old_b50_data):
+        print(f"Warning: 新旧 b50 数据长度不一致，将使用新数据替换旧数据。")
+        return new_b50_data, 0
+    
+    # 创建旧数据的复合键映射表
+    old_song_map = {
+        (song['id'], song['level_index']): song 
+        for song in old_b50_data
+    }
+    
+    # 按新数据的顺序创建合并后的列表
+    merged_b50_data = []
+    keep_count = 0
+    for new_song in new_b50_data:
+        song_key = (new_song['id'], new_song['level_index'])
+        if song_key in old_song_map:
+            # 如果记录已存在，使用新数据但保留原有的视频信息
+            cached_song = old_song_map[song_key]
+            new_song['video_info_list'] = cached_song.get('video_info_list', [])
+            new_song['video_info_match'] = cached_song.get('video_info_match', {})
+            if new_song == cached_song:
+                keep_count += 1
+        else:
+            new_song['video_info_list'] = []
+            new_song['video_info_match'] = {}
+        merged_b50_data.append(new_song)
+
+    update_count = len(new_b50_data) - keep_count
+    return merged_b50_data, update_count
+
+def update_b50_data_lxns(b50_raw_file, b50_data_file, friend_code, data_type):
+    lxns = get_b50_data_from_lxns(friend_code)
+    # if "data" not in lxns:
+    #     raise Exception("落雪 API 未传回 Best50 数据，您可能需要检查好友码或账号设置")
+    if 'message' in lxns:
+        raise ConnectionError(f"请求 Best50 数据失败: {lxns['message']}")
+    return _process_b50_data(lxns, "lxns", b50_raw_file, b50_data_file, data_type)
+
+def update_b50_data_fish(b50_raw_file, b50_data_file, username, data_type):
+    try:
+        fish = get_b50_data_from_fish(username)
+        if 'message' in fish:
+            raise ConnectionError(f"请求 Best50 数据失败: {fish['message']}")
+        return _process_b50_data(fish, "fish", b50_raw_file, b50_data_file, data_type)
+    except json.JSONDecodeError:
+        raise Exception("Error: 返回数据非有效 JSON 格式")
+
+def search_one_video(downloader, song_data):
+    title_name = song_data['song_name']
+    level_index = REVERSE_LEVEL_LABELS.get(song_data['level_index'])
+    dl_type = "youtube" if isinstance(downloader, PurePytubefixDownloader) \
+                else "bilibili" if isinstance(downloader, BilibiliDownloader) \
+                else "None"
+    keyword = get_keyword(dl_type, title_name, level_index)
+
+    print(f"搜索关键词: {keyword}")
+    videos = downloader.search_video(keyword)
+
+    if len(videos) == 0:
+        output_info = f"Error: 没有找到{title_name}-({level_index})的视频"
+        # output_info = f"Error: 没有找到{title_name}-{difficulty_name}({level_index})-{type}的视频"
+        print(output_info)
+        song_data['video_info_list'] = []
+        song_data['video_info_match'] = {}
+        return song_data, output_info
+
+    match_index = 0
+    output_info = f"首个搜索结果: {videos[match_index]['title']}, {videos[match_index]['url']}"
+    print(f"首个搜索结果: {videos[match_index]['title']}, {videos[match_index]['url']}")
+
+    song_data['video_info_list'] = videos
+    song_data['video_info_match'] = videos[match_index]
+    return song_data, output_info
+
+
+def search_b30_videos(downloader, b50_data, b50_data_file, search_wait_time=(0,0)):
+    global search_max_results, downloader_type
+
+    i = 0
+    for song in b50_data:
+        i += 1
+        # Skip if video info already exists and is not empty
+        if 'video_info_match' in song and song['video_info_match']:
+            print(f"跳过({i}/30): {song['title']} ，已储存有相关视频信息")
+            continue
+        
+        print(f"正在搜索视频({i}/30): {song['title']}")
+        song_data = search_one_video(downloader, song)
+
+        # 每次搜索后都写入b50_data_file
+        with open(b50_data_file, "w", encoding="utf-8") as f:
+            json.dump(b50_data, f, ensure_ascii=False, indent=4)
+        
+        # 等待几秒，以减少被检测为bot的风险
+        if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
+            time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
+    
+    return b50_data
+
+def download_one_video(downloader, song, video_download_path, high_res=False):
+    """同步版本的视频下载函数"""
+    clip_name = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
+    video_path = os.path.join(video_download_path, f"{clip_name}.mp4")
+    
+    # 同步检查缓存
+    if os.path.exists(video_path):
+        message = f"已找到【{song['song_name']}】的缓存: {clip_name}"
+        print(message.encode('gbk', errors='replace').decode('gbk'))
+        return {"status": "skip", "info": message}
+    
+    # 原有下载逻辑保持不变
+    if 'video_info_match' not in song or not song['video_info_match']:
+        print(f"错误: 没有【{song['title']}-{song['level_label']}】的视频信息")
+        return {"status": "error", "info": f"错误: 没有【{song['title']}-{song['level_label']}】的视频信息"}
+    
+    video_info = song['video_info_match']
+    v_id = video_info['id'] 
+    downloader.download_video(v_id, clip_name, video_download_path, high_res=high_res)
+    
+    return {"status": "success", "info": f"下载【{song['song_name']}】（{clip_name}）完成"}
+
+def st_init_cache_pathes():
+    cache_pathes = [
+        f"./b30_datas",
+        f"./videos",
+        f"./videos/downloads",
+        f"./cred_datas"
+    ]
+    for path in cache_pathes:
+        if not os.path.exists(path):
+            os.makedirs(path)
 
 # if __name__ == "__main__":
 #     img_path = "jackets/maimaidx/Jacket_1103.jpg"
