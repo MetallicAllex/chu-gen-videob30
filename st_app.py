@@ -4,10 +4,10 @@ homepage = st.Page("st_pages/0_homepage.py",
                 title="首页",
                 icon=":material/home:")
 setup = st.Page("st_pages/1_Setup_Achivments.py",
-                title="获取 / 管理 Best50 成绩与存档",
+                title="获取 / 管理存档",
                 icon=":material/leaderboard:")
 img_gen = st.Page("st_pages/Generate_Pic_Resources.py",
-                title="1. 生成 Best50 成绩图",
+                title="1. 生成 Best50 图 / 编辑数据",
                 icon=":material/photo_library:")
 
 # custom_save = st.Page("st_pages/Make_Custom_Save.py",

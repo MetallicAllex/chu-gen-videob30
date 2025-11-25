@@ -1,3 +1,4 @@
+import shutil
 import time, random, traceback, os
 import streamlit as st
 from datetime import datetime
@@ -5,6 +6,7 @@ from utils.PageUtils import *
 from utils.PathUtils import get_data_paths, get_user_versions
 from utils.Variables import REVERSE_LEVEL_LABELS
 from utils.DataUtils import download_one_video
+from utils.video_crawler import BilibiliDownloader
 
 G_config = read_global_config()
 
@@ -46,31 +48,35 @@ with st.container(border=True):
     else:
         st.warning("未索引到存档，请先加载存档数据！")
 
-with st.expander("更换 Best50 存档", icon="💾"):
-    st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
-    versions = get_user_versions(username)
-    if versions:
-        selected_save_id = st.selectbox(
-            "选择存档",
-            versions,
-            format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
-        )
-        if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
-            if selected_save_id:
-                st.session_state.save_id = selected_save_id
-                # 清除旧的匹配状态，强制重新初始化
-                if 'matched_count' in st.session_state:
-                    del st.session_state.matched_count
-                if 'unmatched_count' in st.session_state:
-                    del st.session_state.unmatched_count
-                if 'total_songs' in st.session_state:
-                    del st.session_state.total_songs
-                st.rerun()
-            else:
-                st.error("无效的存档路径！")
-    else:
-        st.warning("未找到任何存档，请先在存档管理页面获取存档！")
-        st.stop()
+    with st.expander("更换 Best50 存档", icon="💾"):
+        st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
+        versions = get_user_versions(username)
+        if versions:
+            selected_save_id = st.selectbox(
+                "选择存档",
+                versions,
+                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+            )
+            if st.button("使用此存档", help="（只需要点击一次！）", use_container_width=True, icon="▶️"):
+                if selected_save_id:
+                    st.session_state.save_id = selected_save_id
+                    # 清除旧的匹配状态，强制重新初始化
+                    song_status = ['matched_count', 'unmatched_count', 'total_songs', 'current_index']
+                    for song_key in song_status:
+                        if song_key in st.session_state:
+                            del st.session_state[song_key]
+                        # if 'unmatched_count' in st.session_state:
+                        #     del st.session_state.unmatched_count
+                        # if 'total_songs' in st.session_state:
+                        #     del st.session_state.total_songs
+                        # if 'current_index' in st.session_state:
+                        #     del st.session_state.current_index
+                    st.rerun()
+                else:
+                    st.error("无效的存档路径！")
+        else:
+            st.warning("未找到任何存档，请先在存档管理页面获取存档！")
+            st.stop()
 ### Savefile Management - End ###
 
 def get_web_search_url(song_data, dl_type):
@@ -201,12 +207,83 @@ def check_matched_songs(config):
     
     return matched_count, unmatched_count, unmatched_names
 
+def copy_search_args(config_path, old_config_path):
+    """
+    复制旧存档的 视频候选列表 和 视频匹配列表 到新存档
+
+    Args:
+        config_path: 新的 b30_config_<平台>.json 完整路径
+        old_config_path: 旧的 old_b30_search_config.json 完整路径
+
+    Raises:
+        FileNotFoundError: 未找到存档数据
+
+    Returns:
+        dict: 更新后的配置数据
+    """
+    if not os.path.exists(config_path) or not os.path.exists(old_config_path):
+        missing_file = config_path if not os.path.exists(config_path) else old_config_path
+        raise FileNotFoundError("找不到配置文件：" + missing_file)
+
+    # 读取配置文件
+    with open(old_config_path, 'r', encoding='utf-8') as f:
+        old_config_data = json.load(f)
+    with open(config_path, 'r', encoding='utf-8') as f:
+        new_config_data = json.load(f)
+
+    updated_count = 0
+    skipped_count = 0
+
+    # 获取对应的记录列表
+    try:
+        old_records = old_config_data
+        new_records = new_config_data
+    except KeyError as e:
+        raise FileNotFoundError(f"在配置中找不到对应的数据: {e}")
+
+    # 遍历所有记录进行匹配和更新
+    for old_record in old_records:
+        for new_record in new_records:
+            # 检查匹配条件：id, song_name, artist, level, 0-level_index
+            if (old_record['id'] == new_record['id'] and
+                old_record['song_name'] == new_record['song_name'] and
+                old_record['artist'] == new_record['artist'] and
+                old_record['level'] == new_record['level'] and
+                old_record['level_index'] == new_record['level_index']):
+                
+                # 检查需要更新的字段是否相同
+                need_update = False
+                fields_to_check = ['video_info_list', 'video_info_match']
+                
+                for field in fields_to_check:
+                    if old_record.get(field) != new_record.get(field):
+                        need_update = True
+                        break
+                
+                if need_update:
+                    # 更新剪辑参数
+                    new_record['video_info_list'] = old_record['video_info_list']
+                    new_record['video_info_match'] = old_record['video_info_match']
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+                
+                break  # 找到匹配后跳出内层循环
+
+    # 保存更新后的配置
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(new_config_data, f, ensure_ascii=False, indent=4)
+
+    print(f"已成功更新 {updated_count} 条记录的搜索参数，跳过 {skipped_count} 条无需更新（不符合）的记录")
+    return new_config_data
+
 def update_editor(placeholder, config, current_index, dl_instance, record_ids):
     with placeholder.container(border=True):
         song = config[current_index]
         
         # 改进的快速跳转UI
         st.markdown("### 🎵 当前曲目")
+        # st.warning("如果您不同存档间曲目数量不同，请先回到 Best#1 后再切换存档", icon="⚠️")
         col1, col2 = st.columns([3, 1])
         with col1:
             clip_selector = st.selectbox(
@@ -217,7 +294,7 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                 label_visibility="collapsed"
             )
         with col2:
-            if st.button("🚀 跳转", use_container_width=True):
+            if st.button("跳转", use_container_width=True, icon="🚀"):
                 target_index = record_ids.index(clip_selector)
                 if target_index != current_index:
                     st.session_state.current_index = target_index
@@ -277,10 +354,10 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
         # 添加跳转搜索页功能
         search_url = get_web_search_url(song, downloader_type)
         st.info('以上都不对？手动输入谱面确认视频的 ID', icon="ℹ️")
-        col1, col2 = st.columns([1.5, 0.5])
+        col1, col2 = st.columns([1.35, .65])
         with col1:
             replace_id = st.text_input(
-                "谱面确认视频的 youtube ID 或 BV 号", 
+                "谱面确认的 youtube ID 或 BV 号", 
                 key=f"replace_id_{song['clip_id']}",
                 placeholder="输入视频 ID 或 BV 号"
             )
@@ -303,10 +380,14 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                 key=f"replace_p_index_{song['clip_id']}"
             )
         
-        col1, col2 = st.columns([.5, 1.5], vertical_alignment="center")
+        col1, col2, col3 = st.columns([.65, .5, 1.35], vertical_alignment="center")
         with col1:
             st.markdown(f"[➡点击跳转到搜索页]({search_url})", unsafe_allow_html=True)
+        
         with col2:
+            no_search = st.checkbox("直接指定", help="如果您不需要搜索直接指定，请选择此项（仅限 B 站）")    
+        
+        with col3:
             search_btn = st.button("搜索并替换", 
                                 key=f"search_replace_id_{song['clip_id']}",
                                 disabled=not replace_id,
@@ -324,17 +405,19 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                         else:
                             to_replace_video_info = videos[0]
                     elif downloader_type == "bilibili":
-                        # # 判断是关键词搜索还是BV号直接搜索
-                        # if replace_id.startswith('BV'):  # 如果是BV号
-                        #     # 使用新的BV号搜索方法
-                        #     video_info = dl_instance.get_video_info(replace_id)
-                        #     if video_info:
-                        #         videos = [video_info]  # 包装成列表以保持接口一致
-                        #     else:
-                        #         videos = []
-                        # else:  # 如果是关键词
-                        #     # 原有的关键词搜索
-                        videos = dl_instance.search_video(replace_id)
+                        print(replace_id)
+                        # 判断是关键词搜索还是BV号直接搜索
+                        if replace_id.startswith('BV'):  # 如果是BV号
+                            if no_search:
+                                # 使用新的BV号搜索方法
+                                video_info = dl_instance.get_video_info(replace_id)
+                                # video_info = dl_instance.get_video_info(replace_id)
+                                videos = [video_info]  # 包装成列表以保持接口一致
+                            else:
+                                # 如果查不到东西再硬指定
+                                video_info = dl_instance.search_video(replace_id)
+                                # videos = dl_instance.search_video(replace_id)
+                                videos = [video_info]
                         
                         if len(videos) == 0:
                             st.error("未找到有效的视频，请重试", icon="❌")
@@ -362,6 +445,42 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                         st.error("未找到相关视频", icon="❌")
                 except Exception as e:
                     st.error(f"搜索失败: {e}", icon="❌")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("迁移存档搜索数据", use_container_width=True, icon="📥",
+                         help=f"""
+                            请按照以下操作后，再点击此按钮：
+                            - 下载其他人的搜索数据（`exported_b30_search_config.json`）
+                            - 放入当前用户（`{username}`）存档（`{save_id}`）下
+                         """
+                         ):
+                try:
+                    copy_search_args(b30_config_file, exported_b30_search_config_file)
+                    st.toast("数据迁移成功！3 秒后刷新", icon="✅")
+                    time.sleep(3)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"迁移失败：{e}", icon="❌")
+        
+        with col2:
+            if st.button("导出存档搜索数据", use_container_width=True, icon="📤",
+                         help=f"""
+                        导出的搜索数据文件不要改名（`exported_b30_search_config.json`）
+                         - 生成器使用此名称进行数据导入
+                         """):
+                try:
+                    if not os.path.exists(b30_config_file):
+                        st.error("❌ 找不到搜索数据文件")
+                    else:
+                        
+                        # 复制文件
+                        shutil.copy2(b30_config_file, exported_b30_search_config_file)
+                        
+                        st.success(f"✅ 已创建搜索数据备份：{exported_b30_search_config_file}")
+                        
+                except Exception as e:
+                    st.error(f"❌ 导出失败：{e}")
 
 # 尝试读取缓存下载器
 if 'downloader' in st.session_state and 'downloader_type' in st.session_state:
@@ -378,9 +497,12 @@ if downloader_type == "youtube":
     b30_config_file = current_paths['config_yt']
 elif downloader_type == "bilibili":
     b30_config_file = current_paths['config_bi']
-    
+
+# 加载旧搜索数据
+exported_b30_search_config_file = current_paths['exported_b30_search_config']
+
 if not os.path.exists(b30_config_file):
-    st.error(f"未找到配置文件{b30_config_file}，请检查B30存档的数据完整性！", icon="❌")
+    st.error(f"未找到配置文件{b30_config_file}，请检查 Best50 数据完整性！", icon="❌")
     st.stop()
     
 b30_config = load_config(b30_config_file)
@@ -454,14 +576,14 @@ if b30_config:
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        if st.button("⏮️ 上一个", use_container_width=True):
+        if st.button("上一个", use_container_width=True, icon="⏮️"):
             if st.session_state.current_index > 0:
                 st.session_state.current_index -= 1
                 st.rerun()
             else:
                 st.toast("到顶啦！", icon="❗")
     with col2:
-        if st.button("⏭️ 下一个", use_container_width=True):
+        if st.button("下一个", use_container_width=True, icon="⏭️"):
             if st.session_state.current_index < len(record_ids) - 1:
                 st.session_state.current_index += 1
                 st.rerun()
@@ -469,7 +591,7 @@ if b30_config:
                 st.toast("到底啦！", icon="❗")
     with col3: 
         # 保存配置按钮
-        if st.button("💾 保存配置", use_container_width=True):
+        if st.button("保存配置", use_container_width=True, icon="💾"):
             save_config(b30_config_file, b30_config)
             # 更新匹配状态
             matched_count, unmatched_count, _ = check_matched_songs(b30_config)
@@ -490,7 +612,7 @@ if b30_config:
     download_info_placeholder = st.empty()
     st.session_state.download_completed = False
     
-    if st.button("⏬ 确认并开始下载视频", disabled=not dl_instance or not has_video_info, use_container_width=True, icon="⏬"):
+    if st.button("确认并开始下载视频", disabled=not dl_instance or not has_video_info, use_container_width=True, icon="⏬"):
         try:
             st_download_video(download_info_placeholder, dl_instance, G_config, b30_config)
             st.session_state.download_completed = True
@@ -501,7 +623,7 @@ if b30_config:
 
     # 下一步按钮
     st.markdown("---")
-    if st.button("▶️ 下一步", disabled=not st.session_state.download_completed, use_container_width=True, icon="▶️"):
+    if st.button("下一步", disabled=not st.session_state.download_completed, use_container_width=True, icon="▶️"):
         st.switch_page("st_pages/4_Edit_Video_Content.py")
 else:
     st.error("配置文件加载失败，请检查文件完整性！", icon="❌")

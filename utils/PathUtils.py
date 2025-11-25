@@ -22,6 +22,7 @@ def get_data_paths(username, timestamp=None):
         'config_bi': os.path.join(version_dir, "b30_config_bilibili.json"),
         'video_config': os.path.join(version_dir, "video_configs.json"),
         'old_video_config': os.path.join(version_dir, "old_video_configs.json"),
+        'exported_b30_search_config': os.path.join(version_dir, "exported_b30_search_config.json"),
         'image_dir': os.path.join(version_dir, "images"),
         'output_video_dir': os.path.join(version_dir, "videos"),
     }

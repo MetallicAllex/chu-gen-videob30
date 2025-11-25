@@ -2,51 +2,10 @@ import numpy as np
 from queue import Queue, Empty
 from typing import Any, Dict, List, Tuple
 from utils.Utils import format_time_difference
+import os, traceback, threading, subprocess, time
+from utils.ImageUtils import create_blank_image, get_splited_text
 from utils.Variables import HARD_RENDER_METHOD, root_path, ui_font_path, REVERSE_LEVEL_LABELS
-from utils.ImageUtils import create_blank_image
-import json, os, traceback, threading, subprocess, time
 from moviepy import ColorClip, VideoFileClip, ImageClip, TextClip, AudioFileClip, CompositeVideoClip, vfx, afx, concatenate_videoclips
-
-def get_splited_text(text, text_max_bytes=70):
-    """
-    将说明文本按照最大字节数限制切割成多行
-    
-    Args:
-        text (str): 输入文本
-        text_max_bytes (int): 每行最大字节数限制（utf-8编码）
-        
-    Returns:
-        str: 按规则切割并用换行符连接的文本
-    """
-    lines = []
-    current_line = ""
-    
-    # 按现有换行符先分割
-    for line in text.split('\n'):
-        current_length = 0
-        current_line = ""
-        
-        for char in line:
-            # 计算字符长度：中日文为2，其他为1
-            if '\u4e00' <= char <= '\u9fff' or '\u3040' <= char <= '\u30ff':
-                char_length = 2
-            else:
-                char_length = 1
-            
-            # 如果添加这个字符会超出限制，保存当前行并重新开始
-            if current_length + char_length > text_max_bytes:
-                lines.append(current_line)
-                current_line = char
-                current_length = char_length
-            else:
-                current_line += char
-                current_length += char_length
-        
-        # 处理剩余的字符
-        if current_line:
-            lines.append(current_line)
-    
-    return lines
 
 def normalize_audio_volume(clip, target_dbfs=-20):
     """均衡化音频响度到指定的分贝值"""
@@ -91,7 +50,7 @@ def normalize_audio_volume(clip, target_dbfs=-20):
         return clip
 
 
-def create_info_segment(clip_config, resolution, font_path, text_size=44, inline_max_len=40):
+def create_info_segment(clip_config, resolution, font_path, text_size=32, inline_max_len=75):
     # print(f"正在合成视频片段: {clip_config['id']}")
     bg_image = ImageClip(f"{root_path}/IntroBase.png").with_duration(clip_config['duration'])
     bg_image = bg_image.with_effects([vfx.Resize(width=resolution[0])])
@@ -107,15 +66,15 @@ def create_info_segment(clip_config, resolution, font_path, text_size=44, inline
     txt_clip = TextClip(font=font_path, text="\n".join(text_list),
                         method = "label",
                         font_size=text_size,
-                        margin=(20, 20),
+                        margin=(20, 5),
                         interline=6.5,
                         vertical_align="top",
                         color="white",
                         duration=clip_config['duration'])
     
-    addtional_text = "【本视频由基于 mai-genVb50 修改的 chu-gen-Vb30(测试版本) 生成，使用时请标记原作者与修改作者】"
+    addtional_text = "【本视频由基于 mai-genVb50 修改的 chu-gen-Vb30 生成，使用时请标记原作者与修改作者】"
     addtional_txt_clip = TextClip(font=font_path, text=addtional_text,
-                        method = "label",
+                        method="label",
                         font_size=20,
                         vertical_align="bottom",
                         color="white",
@@ -142,158 +101,318 @@ def create_info_segment(clip_config, resolution, font_path, text_size=44, inline
 
     return composite_clip.with_duration(clip_config['duration'])
 
+# def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_param,
+#                                              use_hardware_acceleration, acceleration_method="libx264",
+#                                              output_path='./videos/temp_generated'):
+#     """分页显示评论文字，使用简化的淡入淡出效果"""
+#     start_time_generation = time.time()
+    
+#     # 坐标计算
+#     inner_box_left = int(135 * resolution[0] / 1920)
+#     inner_box_top = int(83 * resolution[1] / 1080)
+#     inner_box_height = int(665 * resolution[1] / 1080)
+#     scale_factor = resolution[1] / 1080
+#     text_size = int(32 * scale_factor)
+    
+#     text = clip_config['text']
+#     duration = clip_config['duration']
+#     start_time = clip_config['start']
+    
+#     # 文件路径
+#     bg_video_path = os.path.abspath(f"{root_path}/BgClips/bg_xverse.mp4").replace('\\', '/')
+#     main_image_path = os.path.abspath(clip_config.get('main_image', '')).replace('\\', '/') if clip_config.get('main_image') else ''
+#     video_path = os.path.abspath(clip_config.get('video', '')).replace('\\', '/') if clip_config.get('video') else ''
+    
+#     input_args = []
+#     filter_complex_parts = []
+    
+#     # 硬件加速
+#     if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
+#         try:
+#             method_config = HARD_RENDER_METHOD[acceleration_method]
+#             hwaccel = method_config.get("hwaccel")
+#             if hwaccel:
+#                 input_args.extend(['-hwaccel', hwaccel])
+#         except Exception as e:
+#             print(f"硬件加速配置出错: {e}")
+    
+#     # 输入1: 背景视频
+#     input_args.extend(['-i', bg_video_path])
+    
+#     # 基础背景处理
+#     if main_image_path and os.path.exists(main_image_path):
+#         input_args.extend(['-i', main_image_path])
+#         filter_complex_parts.append(f'[1:v]scale={resolution[0]}:{resolution[1]}[img];')
+#         filter_complex_parts.append('[0:v][img]overlay=0:0[bg_img];')
+#         base_stream = 'bg_img'
+#     else:
+#         filter_complex_parts.append(f'[0:v]loop=loop=-1:size=1000:start=0,trim=duration={duration},scale={resolution[0]}:{resolution[1]}[bg_img];')
+#         base_stream = 'bg_img'
+    
+#     # 文本分页处理
+#     text_lines = get_splited_text(text, text_max_bytes=18)
+#     lines_per_page = 12  # 每页12行
+#     pages = []
+    
+#     # 将文本分页
+#     for i in range(0, len(text_lines), lines_per_page):
+#         page_lines = text_lines[i:i + lines_per_page]
+#         pages.append(page_lines)
+    
+#     total_pages = len(pages)
+    
+#     # 计算每页显示时间（包含过渡时间）
+#     fade_duration = 0.5  # 淡入淡出过渡时间（秒）
+#     effective_duration = duration - (fade_duration * (total_pages - 1))
+#     page_duration = effective_duration / total_pages
+    
+#     print(f"分页信息: 总行数={len(text_lines)}, 总页数={total_pages}")
+#     print(f"时间分配: 总时长={duration}s, 每页显示={page_duration:.2f}s, 过渡时间={fade_duration}s")
+    
+#     text_x = int(0.7594 * resolution[0])
+#     base_y = int(0.227 * resolution[1])
+#     line_height = text_size + 10
+    
+#     # 为每一页创建文字叠加（使用enable控制显示时间，不透明度固定）
+#     for page_num, page_lines in enumerate(pages):
+#         # 计算当前页的时间段
+#         page_start = page_num * (page_duration + fade_duration)
+#         page_end = page_start + page_duration + fade_duration
+        
+#         print(f"第{page_num + 1}页: {page_start:.1f}-{page_end:.1f}s")
+        
+#         # 为当前页的每一行添加文字
+#         for line_num, line in enumerate(page_lines):
+#             y_offset = base_y + line_num * line_height
+            
+#             # 使用enable控制显示时间，不设置透明度（保持完全不透明）
+#             filter_complex_parts.append(
+#                 f'[{base_stream}]drawtext=text=\'{line}\':fontfile={font_path}:'
+#                 f'fontsize={text_size}:fontcolor=78410E:'
+#                 f'x={text_x}:y={y_offset}:'
+#                 f'enable=\'between(t,{page_start},{page_end})\''
+#             )
+            
+#             # 如果是最后一页的最后一行，不需要添加输出标签
+#             if page_num == total_pages - 1 and line_num == len(page_lines) - 1:
+#                 filter_complex_parts.append(f'[page{page_num}_line{line_num}];')
+#             else:
+#                 filter_complex_parts.append(f'[page{page_num}_line{line_num}];')
+            
+#             base_stream = f'page{page_num}_line{line_num}'
+    
+#     # 视频片段处理
+#     audio_stream = None
+#     if video_path and os.path.exists(video_path):
+#         input_args.extend(['-i', video_path])
+#         video_idx = 2  # 第三个输入
+        
+#         filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{inner_box_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
+#         filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[final_video];')
+#         base_stream = 'final_video'
+        
+#         audio_stream = f'[{video_idx}:a]atrim=start={start_time}:duration={duration},asetpts=PTS-STARTPTS[a_out]'
+    
+#     # 最终输出
+#     filter_complex_parts.append(f'[{base_stream}]trim=duration={duration}[v_out];')
+    
+#     if audio_stream:
+#         filter_complex_parts.append(audio_stream)
+#     else:
+#         filter_complex_parts.append(f'aevalsrc=0::d={duration}[a_out]')
+    
+#     filter_complex = ''.join(filter_complex_parts)
+    
+#     print("调试信息 - 简化分页显示滤镜链:")
+#     print(filter_complex)
+    
+#     # 编码参数
+#     encoding_args = []
+#     if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
+#         encoder_prefix = encoder_param.get("encoder", "h264")
+#         hardware_suffix = HARD_RENDER_METHOD[acceleration_method]["codec"]
+#         final_encoder = f"{encoder_prefix}_{hardware_suffix}"
+#         encoding_args.extend(['-vcodec', final_encoder])
+#     else:
+#         final_encoder = encoder_param.get("encoder", "libx264")
+#         encoding_args.extend(['-vcodec', final_encoder])
+    
+#     # 输出路径
+#     if os.path.isdir(output_path):
+#         output_path = os.path.join(output_path, f"{clip_config['id']}-{REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}.mp4")
+    
+#     # 构建FFmpeg命令
+#     cmd = [
+#         'ffmpeg',
+#         '-y',
+#         *input_args,
+#         '-hide_banner',
+#         '-filter_complex', filter_complex,
+#         '-map', '[v_out]',
+#         '-map', '[a_out]',
+#         *encoding_args,
+#         '-preset', encoder_param.get("preset_type", "fast"),
+#         '-cq', str(encoder_param.get("cq_set", '33')),
+#         '-r', '60',
+#         '-threads', '0',
+#         '-thread_type', 'frame',
+#         '-b:v', f'{bitrate}k',
+#         '-maxrate', f'{int(bitrate)*2}k',
+#         '-bufsize', f'{int(bitrate)*4}k',
+#         '-pix_fmt', 'yuv420p',
+#         '-acodec', 'aac',
+#         '-b:a', '320k',
+#         '-max_muxing_queue_size', '4096',
+#         '-t', str(duration),
+#         output_path
+#     ]
+    
+#     print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
+#     print("执行FFmpeg命令:")
+#     print(" ".join(cmd))
+
+#     try:
+#         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+#         print(f"已生成您的视频片段，名称为: {output_path}")
+#         print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
+#         return VideoFileClip(output_path)
+#     except subprocess.CalledProcessError as e:
+#         print("========================== FFmpeg 生成失败！====================================")
+#         print(f"错误输出: {e.stderr}")
+#         print("============================ 这里是结尾 ========================================")
+#         return create_video_segment_classic(clip_config, resolution, font_path)
+
 def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_param,
-                         use_hardware_acceleration, acceleration_method="libx264",
-                         output_path='./videos/temp_generated'):
-    """修正视频叠加层剪辑时长的FFmpeg命令"""
+                                       use_hardware_acceleration, acceleration_method="libx264",
+                                       output_path='./videos/temp_generated'):
+    """分页显示评论文字 - 修复版本"""
     start_time_generation = time.time()
-    # 动态计算内框坐标（基于1080p的比例）
-    inner_box_left = int(135 * resolution[0] / 1920)    # 135/1920 的比例
-    inner_box_top = int(83 * resolution[1] / 1080)      # 81/1080 的比例
-    inner_box_height = int(665 * resolution[1] / 1080)  # 665/1080 的比例
     
+    # 坐标计算
+    inner_box_left = int(135 * resolution[0] / 1920)
+    inner_box_top = int(83 * resolution[1] / 1080)
+    inner_box_height = int(665 * resolution[1] / 1080)
     scale_factor = resolution[1] / 1080
-    # video_height = int(0.667 * resolution[1])
-    video_height = inner_box_height
     text_size = int(32 * scale_factor)
-    
     
     text = clip_config['text']
     duration = clip_config['duration']
-    start_time = clip_config['start']  # 开始时间
-    # end_time = clip_config['end']      # 结束时间
+    start_time = clip_config['start']
     
-    # 确保所有输入文件存在
+    # 文件路径
     bg_video_path = os.path.abspath(f"{root_path}/BgClips/bg_xverse.mp4").replace('\\', '/')
     main_image_path = os.path.abspath(clip_config.get('main_image', '')).replace('\\', '/') if clip_config.get('main_image') else ''
     video_path = os.path.abspath(clip_config.get('video', '')).replace('\\', '/') if clip_config.get('video') else ''
     
-    # 构建输入参数
-    input_args = ['-i', bg_video_path]
+    input_args = []
     filter_complex_parts = []
     
-    # 确定每个输入的索引
-    input_count = 1  # 背景视频是第一个输入
+    # 硬件加速
+    if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
+        try:
+            method_config = HARD_RENDER_METHOD[acceleration_method]
+            hwaccel = method_config.get("hwaccel")
+            if hwaccel:
+                input_args.extend(['-hwaccel', hwaccel])
+        except Exception as e:
+            print(f"硬件加速配置出错: {e}")
     
-    # 主图片处理
+    # 输入1: 背景视频
+    input_args.extend(['-i', bg_video_path])
+    
+    # 基础背景处理
     if main_image_path and os.path.exists(main_image_path):
         input_args.extend(['-i', main_image_path])
-        input_count += 1
-        # filter_complex_parts.append('[1:v]scale=1920:1080[img];')
         filter_complex_parts.append(f'[1:v]scale={resolution[0]}:{resolution[1]}[img];')
         filter_complex_parts.append('[0:v][img]overlay=0:0[bg_img];')
         base_stream = 'bg_img'
     else:
-        # 背景视频循环并设置时长
-        filter_complex_parts.append(f'[0:v]loop=loop=-1:size=1000:start=0,trim=duration={duration}[bg_loop];')
-        # filter_complex_parts.append('[bg_loop]scale=1920:1080[bg_img];')
-        filter_complex_parts.append(f'[bg_loop]scale={resolution[0]}:{resolution[1]}[bg_img];')
+        filter_complex_parts.append(f'[0:v]loop=loop=-1:size=1000:start=0,trim=duration={duration},scale={resolution[0]}:{resolution[1]}[bg_img];')
         base_stream = 'bg_img'
     
-    # 视频片段处理 - 关键修正部分
-    # audio_stream = None
-    # if video_path and os.path.exists(video_path):
-    #     input_args.extend(['-i', video_path])
-    #     input_count += 1
-    #     video_idx = input_count - 1
+    # 文本分页处理
+    text_lines = get_splited_text(text, text_max_bytes=20)
+    lines_per_page = 12  # 每页12行
+    pages = []
+    
+    # 将文本分页
+    for i in range(0, len(text_lines), lines_per_page):
+        page_lines = text_lines[i:i + lines_per_page]
+        pages.append(page_lines)
+    
+    total_pages = len(pages)
+    
+    # 计算每页显示时间（平均分配）
+    page_duration = duration / total_pages
+    
+    print(f"分页信息: 总行数 = {len(text_lines)}, 总页数 = {total_pages}, 每页显示时间 = {page_duration:.2f} 秒")
+    
+    text_x = int(0.7594 * resolution[0])
+    base_y = int(0.224 * resolution[1])
+    line_height = text_size + 10
+    
+    # 为每一页创建文字叠加（使用enable控制显示时间）
+    for page_num, page_lines in enumerate(pages):
+        # 计算当前页的时间段
+        page_start = page_num * page_duration
+        page_end = (page_num + 1) * page_duration
         
-    #     # 修正：确保叠加视频流被正确处理
-    #     # 先缩放再剪辑
-    #     filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{video_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
-    #     # filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={int(0.0422*resolution[0])}:{int(0.0583*resolution[1])}[base];')
-    #     filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[base];')
-    #     base_stream = 'base'
+        print(f"第 {page_num + 1} 页: {page_start:.1f} - {page_end:.1f} s, 行数 = {len(page_lines)}")
         
-    #     # 音频流单独处理，不合并到滤镜链中
-    #     audio_stream = f'[{video_idx}:a]atrim=start={start_time}:duration={duration},asetpts=PTS-STARTPTS[a_out]'
+        # 为当前页的每一行添加文字
+        for line_num, line in enumerate(page_lines):
+            y_offset = base_y + line_num * line_height
+            
+            # 使用enable控制显示时间，避免复杂的透明度表达式
+            filter_complex_parts.append(
+                f'[{base_stream}]drawtext=text=\'{line}\':fontfile={font_path}:'
+                f'fontsize={text_size}:fontcolor=78410E:'
+                f'x={text_x}:y={y_offset}:'
+                f'enable=\'between(t,{page_start},{page_end})\''
+            )
+            
+            # 设置输出标签
+            current_label = f'page{page_num}_line{line_num}'
+            filter_complex_parts.append(f'[{current_label}];')
+            base_stream = current_label
     
     # 视频片段处理
     audio_stream = None
     if video_path and os.path.exists(video_path):
         input_args.extend(['-i', video_path])
-        input_count += 1
-        video_idx = input_count - 1
+        video_idx = 2  # 第三个输入
         
-        # 先处理叠加层视频
-        filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{video_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
+        filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{inner_box_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
+        filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[final_video];')
+        base_stream = 'final_video'
         
-        # 主图片处理 - 放在叠加层视频之后
-        if main_image_path and os.path.exists(main_image_path):
-            input_args.extend(['-i', main_image_path])
-            input_count += 1
-            # 先叠加视频，再叠加图片
-            filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[base_with_video];')
-            base_stream = 'base_with_video'
-            
-            # 然后在视频之上叠加主图片
-            filter_complex_parts.append(f'[1:v]scale={resolution[0]}:{resolution[1]}[img];')
-            filter_complex_parts.append(f'[{base_stream}][img]overlay=0:0[bg_img];')
-            base_stream = 'bg_img'
-        else:
-            # 如果没有主图片，直接叠加视频
-            filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[base];')
-            base_stream = 'base'
-        
-        # 音频流单独处理
         audio_stream = f'[{video_idx}:a]atrim=start={start_time}:duration={duration},asetpts=PTS-STARTPTS[a_out]'
     
-    # 文本处理
-    text_lines = get_splited_text(text, text_max_bytes=18)
-
-    for i, line in enumerate(text_lines):
-        y_offset = int(0.227 * resolution[1]) + i * (text_size + 10)
-        filter_complex_parts.append(
-            f'[{base_stream}]drawtext=text=\'{line}\':fontfile={font_path}:'
-            f'fontsize={text_size}:fontcolor=0x78410E:x={int(0.7594*resolution[0])}:'
-            f'y={y_offset}[text{i}];'
-        )
-        base_stream = f'text{i}'
-    
-    # 最终输出流 - 确保总时长
+    # 最终输出
     filter_complex_parts.append(f'[{base_stream}]trim=duration={duration}[v_out];')
     
-    # 音频处理 - 修正部分
     if audio_stream:
-        # 将音频流添加到滤镜链中
         filter_complex_parts.append(audio_stream)
     else:
-        # 如果没有音频，创建指定时长的静音音频
         filter_complex_parts.append(f'aevalsrc=0::d={duration}[a_out]')
     
-    # 合并滤镜链
     filter_complex = ''.join(filter_complex_parts)
     
+    # print("调试信息 - 分页显示滤镜链:")
+    # print(filter_complex)
+    
+    # 编码参数
     encoding_args = []
-    # if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
-    #     # 组合硬件加速编码器名称
-    #     encoder_prefix = encoder_param.get("encoder", "h264")
-    #     hardware_suffix = HARD_RENDER_METHOD[acceleration_method]["codec"]
-    #     final_encoder = f"{encoder_prefix}_{hardware_suffix}"
-    #     encoding_args.extend(['-vcodec', final_encoder])
-    # else:
-    #     # 不使用硬件加速，使用默认编码器
-    #     final_encoder = acceleration_method
-    #     encoding_args.extend(['-vcodec', final_encoder])
     if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
-        # 硬件加速模式
         encoder_prefix = encoder_param.get("encoder", "h264")
         hardware_suffix = HARD_RENDER_METHOD[acceleration_method]["codec"]
         final_encoder = f"{encoder_prefix}_{hardware_suffix}"
         encoding_args.extend(['-vcodec', final_encoder])
-        
-        # 只在硬件加速模式下添加硬件加速参数
-        hwaccel = HARD_RENDER_METHOD[acceleration_method].get("hwaccel")
-        if hwaccel:
-            print(f'硬件加速器: {hwaccel}')
-            input_args.extend(['-hwaccel', hwaccel])
-            
     else:
-        # 软件编码模式
         final_encoder = encoder_param.get("encoder", "libx264")
         encoding_args.extend(['-vcodec', final_encoder])
-        print(f'软件编码器: {final_encoder}')
     
-    # 确保输出路径是文件而不是目录
+    # 输出路径
     if os.path.isdir(output_path):
         output_path = os.path.join(output_path, f"{clip_config['id']}-{REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}.mp4")
     
@@ -307,29 +426,26 @@ def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_pa
         '-map', '[v_out]',
         '-map', '[a_out]',
         *encoding_args,
-        '-preset', encoder_param.get("preset_type", "fast"),           # 高压缩率
+        '-preset', encoder_param.get("preset_type", "fast"),
         '-cq', str(encoder_param.get("cq_set", '33')),
         '-r', '60',
         '-threads', '0',
         '-thread_type', 'frame',
         '-b:v', f'{bitrate}k',
         '-maxrate', f'{int(bitrate)*2}k',
-        '-bufsize', f'{int(bitrate)*4}k', # 缓冲区大小设置为四倍码率
+        '-bufsize', f'{int(bitrate)*4}k',
         '-pix_fmt', 'yuv420p',
         '-acodec', 'aac',
         '-b:a', '320k',
         '-max_muxing_queue_size', '4096',
-        # 双重时长保险
         '-t', str(duration),
         output_path
     ]
     
     print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
-    # print(f"视频剪辑参数: 从 {start_time}秒 开始，持续 {duration} 秒")
-    print("执行FFmpeg命令:")
-    print(" ".join(cmd))
+    print("正在执行 FFmpeg 生成命令。")
+    # print(" ".join(cmd))
 
-    # 执行命令
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
         print(f"已生成您的视频片段，名称为: {output_path}")
@@ -346,15 +462,355 @@ def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_pa
         print(" -> 如果您仍要使用极速模式生成，请等待您报告的问题解决后，重新启动生成器。\n")
         return create_video_segment_classic(clip_config, resolution, font_path)
 
+# def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_param,
+#                          use_hardware_acceleration, acceleration_method="libx264",
+#                          output_path='./videos/temp_generated'):
+#     """修正视频叠加层剪辑时长的FFmpeg命令"""
+#     start_time_generation = time.time()
+#     # 动态计算内框坐标（基于1080p的比例）
+#     inner_box_left = int(135 * resolution[0] / 1920)    # 135/1920 的比例
+#     inner_box_top = int(83 * resolution[1] / 1080)      # 81/1080 的比例
+#     inner_box_height = int(665 * resolution[1] / 1080)  # 665/1080 的比例
+    
+#     scale_factor = resolution[1] / 1080
+#     # video_height = int(0.667 * resolution[1])
+#     video_height = inner_box_height
+#     text_size = int(32 * scale_factor)
+    
+    
+#     text = clip_config['text']
+#     duration = clip_config['duration']
+#     start_time = clip_config['start']  # 开始时间
+#     # end_time = clip_config['end']      # 结束时间
+    
+#     # 确保所有输入文件存在
+#     bg_video_path = os.path.abspath(f"{root_path}/BgClips/bg_xverse.mp4").replace('\\', '/')
+#     main_image_path = os.path.abspath(clip_config.get('main_image', '')).replace('\\', '/') if clip_config.get('main_image') else ''
+#     video_path = os.path.abspath(clip_config.get('video', '')).replace('\\', '/') if clip_config.get('video') else ''
+    
+#     input_args = []
+
+#     if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
+#         try:
+#             method_config = HARD_RENDER_METHOD[acceleration_method]
+#             hwaccel = method_config.get("hwaccel")
+#             print(f"hwaccel 值: {hwaccel}")
+            
+#             if hwaccel:
+#                 print(f'硬件加速器: {hwaccel}')
+#                 input_args.extend(['-hwaccel', hwaccel])
+#         except Exception as e:
+#             print(f"硬件加速配置出错: {e}")
+#             import traceback
+#             traceback.print_exc()
+    
+#     # 构建输入参数
+#     input_args.extend(['-i', bg_video_path])
+#     filter_complex_parts = []
+    
+#     # 确定每个输入的索引
+#     input_count = 1  # 背景视频是第一个输入
+    
+#     # 主图片处理
+#     if main_image_path and os.path.exists(main_image_path):
+#         input_args.extend(['-i', main_image_path])
+#         input_count += 1
+#         # filter_complex_parts.append('[1:v]scale=1920:1080[img];')
+#         filter_complex_parts.append(f'[1:v]scale={resolution[0]}:{resolution[1]}[img];')
+#         filter_complex_parts.append('[0:v][img]overlay=0:0[bg_img];')
+#         base_stream = 'bg_img'
+#     else:
+#         # 背景视频循环并设置时长
+#         filter_complex_parts.append(f'[0:v]loop=loop=-1:size=1000:start=0,trim=duration={duration}[bg_loop];')
+#         # filter_complex_parts.append('[bg_loop]scale=1920:1080[bg_img];')
+#         filter_complex_parts.append(f'[bg_loop]scale={resolution[0]}:{resolution[1]}[bg_img];')
+#         base_stream = 'bg_img'
+    
+#     # 视频片段处理 - 关键修正部分
+#     # audio_stream = None
+#     # if video_path and os.path.exists(video_path):
+#     #     input_args.extend(['-i', video_path])
+#     #     input_count += 1
+#     #     video_idx = input_count - 1
+        
+#     #     # 修正：确保叠加视频流被正确处理
+#     #     # 先缩放再剪辑
+#     #     filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{video_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
+#     #     # filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={int(0.0422*resolution[0])}:{int(0.0583*resolution[1])}[base];')
+#     #     filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[base];')
+#     #     base_stream = 'base'
+        
+#     #     # 音频流单独处理，不合并到滤镜链中
+#     #     audio_stream = f'[{video_idx}:a]atrim=start={start_time}:duration={duration},asetpts=PTS-STARTPTS[a_out]'
+    
+#     # 视频片段处理
+#     audio_stream = None
+#     if video_path and os.path.exists(video_path):
+#         input_args.extend(['-i', video_path])
+#         input_count += 1
+#         video_idx = input_count - 1
+        
+#         # 先处理叠加层视频
+#         filter_complex_parts.append(f'[{video_idx}:v]scale=-1:{video_height},trim=start={start_time}:duration={duration},setpts=PTS-STARTPTS[overlay_vid];')
+        
+#         # 主图片处理 - 放在叠加层视频之后
+#         if main_image_path and os.path.exists(main_image_path):
+#             input_args.extend(['-i', main_image_path])
+#             input_count += 1
+#             # 先叠加视频，再叠加图片
+#             filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[base_with_video];')
+#             base_stream = 'base_with_video'
+            
+#             # 然后在视频之上叠加主图片
+#             filter_complex_parts.append(f'[1:v]scale={resolution[0]}:{resolution[1]}[img];')
+#             filter_complex_parts.append(f'[{base_stream}][img]overlay=0:0[bg_img];')
+#             base_stream = 'bg_img'
+#         else:
+#             # 如果没有主图片，直接叠加视频
+#             filter_complex_parts.append(f'[{base_stream}][overlay_vid]overlay={inner_box_left}:{inner_box_top}[base];')
+#             base_stream = 'base'
+        
+#         # 音频流单独处理
+#         audio_stream = f'[{video_idx}:a]atrim=start={start_time}:duration={duration},asetpts=PTS-STARTPTS[a_out]'
+    
+#     # 文本处理
+#     # text_lines = get_splited_text(text, text_max_bytes=18)
+
+#     # for i, line in enumerate(text_lines):
+#     #     y_offset = int(0.227 * resolution[1]) + i * (text_size + 10)
+#     #     filter_complex_parts.append(
+#     #         f'[{base_stream}]drawtext=text=\'{line}\':fontfile={font_path}:'
+#     #         f'fontsize={text_size}:fontcolor=0x78410E:x={int(0.7594*resolution[0])}:'
+#     #         f'y={y_offset}[text{i}];'
+#     #     )
+#     #     base_stream = f'text{i}'
+    
+#     # 文本处理 - 生成图片
+#     text = clip_config['text']
+#     text_color = "RGB(120, 65, 14)"  # 深棕色
+    
+#     # 生成文本图片
+#     text_image_path, line_count = create_text_image(
+#         text, font_path, text_size, text_color, resolution
+#     )
+    
+#     # 计算文本图片位置
+#     text_x = int(0.7594 * resolution[0])
+#     text_y = int(0.227 * resolution[1])
+    
+#     # 添加文本图片叠加
+#     input_args.extend(['-i', text_image_path])
+#     text_idx = len(input_args) // 2  # 计算文本图片的输入索引
+    
+#     filter_complex_parts.append(
+#         f'[{base_stream}][{text_idx}:v]overlay={text_x}:{text_y}[text_overlay];'
+#     )
+#     base_stream = 'text_overlay'
+    
+#     # 最终输出流 - 确保总时长
+#     filter_complex_parts.append(f'[{base_stream}]trim=duration={duration}[v_out];')
+    
+#     # 音频处理 - 修正部分
+#     if audio_stream:
+#         # 将音频流添加到滤镜链中
+#         filter_complex_parts.append(audio_stream)
+#     else:
+#         # 如果没有音频，创建指定时长的静音音频
+#         filter_complex_parts.append(f'aevalsrc=0::d={duration}[a_out]')
+    
+#     # 合并滤镜链
+#     filter_complex = ''.join(filter_complex_parts)
+    
+#     encoding_args = []
+#     # if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
+#     #     # 组合硬件加速编码器名称
+#     #     encoder_prefix = encoder_param.get("encoder", "h264")
+#     #     hardware_suffix = HARD_RENDER_METHOD[acceleration_method]["codec"]
+#     #     final_encoder = f"{encoder_prefix}_{hardware_suffix}"
+#     #     encoding_args.extend(['-vcodec', final_encoder])
+#     # else:
+#     #     # 不使用硬件加速，使用默认编码器
+#     #     final_encoder = acceleration_method
+#     #     encoding_args.extend(['-vcodec', final_encoder])
+#     if use_hardware_acceleration and acceleration_method in HARD_RENDER_METHOD:
+#         # 硬件加速模式
+#         encoder_prefix = encoder_param.get("encoder", "h264")
+#         hardware_suffix = HARD_RENDER_METHOD[acceleration_method]["codec"]
+#         final_encoder = f"{encoder_prefix}_{hardware_suffix}"
+#         encoding_args.extend(['-vcodec', final_encoder])
+        
+#     else:
+#         # 软件编码模式
+#         final_encoder = encoder_param.get("encoder", "libx264")
+#         encoding_args.extend(['-vcodec', final_encoder])
+#         print(f'软件编码器: {final_encoder}')
+    
+#     # 确保输出路径是文件而不是目录
+#     if os.path.isdir(output_path):
+#         output_path = os.path.join(output_path, f"{clip_config['id']}-{REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}.mp4")
+    
+#     # 构建FFmpeg命令
+#     cmd = [
+#         'ffmpeg',
+#         '-y',
+#         *input_args,
+#         '-hide_banner',
+#         '-filter_complex', filter_complex,
+#         '-map', '[v_out]',
+#         '-map', '[a_out]',
+#         *encoding_args,
+#         '-preset', encoder_param.get("preset_type", "fast"),           # 高压缩率
+#         '-cq', str(encoder_param.get("cq_set", '33')),
+#         '-r', '60',
+#         '-threads', '0',
+#         '-thread_type', 'frame',
+#         '-b:v', f'{bitrate}k',
+#         '-maxrate', f'{int(bitrate)*2}k',
+#         '-bufsize', f'{int(bitrate)*4}k', # 缓冲区大小设置为四倍码率
+#         '-pix_fmt', 'yuv420p',
+#         '-acodec', 'aac',
+#         '-b:a', '320k',
+#         '-max_muxing_queue_size', '4096',
+#         # 双重时长保险
+#         '-t', str(duration),
+#         output_path
+#     ]
+    
+#     print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
+#     # print(f"视频剪辑参数: 从 {start_time}秒 开始，持续 {duration} 秒")
+#     print("执行FFmpeg命令:")
+#     print(" ".join(cmd))
+
+#     # 执行命令
+#     try:
+#         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+#         print(f"已生成您的视频片段，名称为: {output_path}")
+#         print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
+#         return VideoFileClip(output_path)
+#     except subprocess.CalledProcessError as e:
+#         error_cmd = " ".join(cmd)
+#         print("========================== FFmpeg 生成失败！====================================")
+#         print(f"视频生成命令：\n{str(error_cmd)}\n")
+#         print(f"生成输出日志: \n{e.stderr}")
+#         print("============================ 这里是结尾 ========================================")
+#         print("因为您的视频片段使用此模式生成时出现了问题，我们将使用快速模式重新生成；")
+#         print(" -> 生成器不会检查您的视频片段文件完整性，别忘了将您生成失败的片段删除掉；")
+#         print(" -> 如果您仍要使用极速模式生成，请等待您报告的问题解决后，重新启动生成器。\n")
+#         return create_video_segment_classic(clip_config, resolution, font_path)
+
+# def create_video_segment_classic(clip_config, resolution, font_path, text_size=None):
+#     """优化后的视频片段创建函数"""
+#     # print(f"正在合成视频片段: {clip_config['id']}")
+#     print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
+    
+#     # 根据上级函数计算新的位置参数
+#     video_pos = (int(0.0422 * resolution[0]), int(0.0602 * resolution[1]))
+#     text_x = int(0.7594 * resolution[0])
+#     text_first_y = int(0.227 * resolution[1])
+    
+#     try:
+#         if not isinstance(resolution, (tuple, list)) or len(resolution) != 2:
+#             raise ValueError(f"无效的 resolution 格式: {resolution}")
+#         width, height = int(resolution[0]), int(resolution[1])
+#         resolution = (width, height)
+#     except (TypeError, ValueError) as e:
+#         print(f"resolution 参数错误: {e}，使用默认分辨率 1920x1080")
+#         resolution = (1920, 1080)
+    
+#     # 1. 背景层
+#     bg_video = VideoFileClip(f"{root_path}/BgClips/bg_xverse.mp4")
+#     bg_video = bg_video.with_effects([
+#         vfx.Loop(duration=clip_config['duration']), 
+#         vfx.Resize(resolution)
+#     ])
+    
+#     # 2. 主图片层 - 使用更高效的加载方式
+#     if 'main_image' in clip_config and os.path.exists(clip_config['main_image']):
+#         # 直接使用 FFmpeg 加载图片，避免 PIL 开销
+#         main_image = ImageClip(clip_config['main_image']).with_duration(clip_config['duration'])
+#         main_image = main_image.with_effects([vfx.Resize(resolution)])
+#     else:
+#         print(f"警告: {clip_config['id']} 缺少主图片")
+#         # 创建纯色背景而不是加载图片
+#         main_image = ColorClip(size=resolution, color=(0, 0, 0)).with_duration(clip_config['duration'])
+    
+#     # 3. 视频片段层 - 优化加载和裁剪
+#     if 'video' in clip_config and os.path.exists(clip_config['video']):
+#         # 使用更高效的子剪辑方法
+#         try:
+#             # 直接使用FFmpeg提取所需片段，避免完全加载整个视频
+#             video_clip = VideoFileClip(clip_config['video']).subclipped(
+#                 clip_config['start'], clip_config['end']
+#             )
+#             # 计算内框高度并缩放
+#             inner_box_height = int(665 * resolution[1] / 1080)
+#             video_clip = video_clip.with_effects([vfx.Resize(height=inner_box_height)])
+#         except Exception as e:
+#             print(f"视频处理错误: {e}")
+#             # 创建备用视频片段
+#             inner_box_height = int(665 * resolution[1] / 1080)
+#             video_clip = ColorClip(size=(inner_box_height*16//9, inner_box_height), color=(0, 0, 0))
+#             video_clip = video_clip.with_duration(clip_config['duration'])
+#     else:
+#         print(f"警告: {clip_config['id']} 缺少视频文件")
+#         inner_box_height = int(665 * resolution[1] / 1080)
+#         video_clip = ColorClip(size=(inner_box_height*16//9, inner_box_height), color=(0, 0, 0))
+#         video_clip = video_clip.with_duration(clip_config['duration'])
+    
+#     # 使用计算出的文字大小（如果未提供）
+#     if text_size is None:
+#         base_text_size = 32
+#         text_size = int(base_text_size * resolution[1] / 1080) if text_size is None else text_size
+    
+#     # 4. 文字层 - 根据上级函数调整文本布局
+#     text_list = get_splited_text(clip_config['text'], text_max_bytes=18)  # 改为18字节
+    
+#     # 创建多个文本层，每行单独定位
+#     text_clips = []
+#     for i, line in enumerate(text_list):
+#         y_offset = text_first_y + i * (text_size + 10)
+#         try:
+#             txt_clip = TextClip(
+#                 text=line,
+#                 font=font_path,
+#                 font_size=text_size,
+#                 color="rgb(120,65,14)",
+#                 method="pango" if hasattr(TextClip, 'PANGO') else "label",
+#             ).with_duration(clip_config['duration'])
+#             text_clips.append(txt_clip.with_position((text_x, y_offset)))
+#         except:
+#             # 回退到原始方法
+#             txt_clip = TextClip(
+#                 font=font_path,
+#                 text=line,
+#                 method="label",
+#                 font_size=text_size,
+#                 color="rgb(120,65,14)",
+#                 duration=clip_config['duration']
+#             )
+#             text_clips.append(txt_clip.with_position((text_x, y_offset)))
+    
+#     # 5. 优化合成过程
+#     # 使用更高效的图层合成顺序
+#     all_clips = [
+#         bg_video.with_position((0, 0)),
+#         main_image.with_position((0, 0)),
+#         video_clip.with_position(video_pos)
+#     ]
+#     all_clips.extend(text_clips)
+    
+#     composite_clip = CompositeVideoClip(all_clips, size=resolution, use_bgclip=True)
+    
+#     return composite_clip.with_duration(clip_config['duration'])
+
 def create_video_segment_classic(clip_config, resolution, font_path, text_size=None):
-    """优化后的视频片段创建函数"""
-    # print(f"正在合成视频片段: {clip_config['id']}")
+    """优化后的视频片段创建函数，支持文本分页显示"""
     print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
     
     # 根据上级函数计算新的位置参数
     video_pos = (int(0.0422 * resolution[0]), int(0.0602 * resolution[1]))
     text_x = int(0.7594 * resolution[0])
-    text_first_y = int(0.227 * resolution[1])
+    text_first_y = int(0.224 * resolution[1])
     
     try:
         if not isinstance(resolution, (tuple, list)) or len(resolution) != 2:
@@ -365,6 +821,11 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
         print(f"resolution 参数错误: {e}，使用默认分辨率 1920x1080")
         resolution = (1920, 1080)
     
+    # 使用计算出的文字大小
+    if text_size is None:
+        base_text_size = 32
+        text_size = int(base_text_size * resolution[1] / 1080)
+    
     # 1. 背景层
     bg_video = VideoFileClip(f"{root_path}/BgClips/bg_xverse.mp4")
     bg_video = bg_video.with_effects([
@@ -372,30 +833,24 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
         vfx.Resize(resolution)
     ])
     
-    # 2. 主图片层 - 使用更高效的加载方式
+    # 2. 主图片层
     if 'main_image' in clip_config and os.path.exists(clip_config['main_image']):
-        # 直接使用 FFmpeg 加载图片，避免 PIL 开销
         main_image = ImageClip(clip_config['main_image']).with_duration(clip_config['duration'])
         main_image = main_image.with_effects([vfx.Resize(resolution)])
     else:
         print(f"警告: {clip_config['id']} 缺少主图片")
-        # 创建纯色背景而不是加载图片
         main_image = ColorClip(size=resolution, color=(0, 0, 0)).with_duration(clip_config['duration'])
     
-    # 3. 视频片段层 - 优化加载和裁剪
+    # 3. 视频片段层
     if 'video' in clip_config and os.path.exists(clip_config['video']):
-        # 使用更高效的子剪辑方法
         try:
-            # 直接使用FFmpeg提取所需片段，避免完全加载整个视频
+            inner_box_height = int(665 * resolution[1] / 1080)
             video_clip = VideoFileClip(clip_config['video']).subclipped(
                 clip_config['start'], clip_config['end']
             )
-            # 计算内框高度并缩放
-            inner_box_height = int(665 * resolution[1] / 1080)
             video_clip = video_clip.with_effects([vfx.Resize(height=inner_box_height)])
         except Exception as e:
             print(f"视频处理错误: {e}")
-            # 创建备用视频片段
             inner_box_height = int(665 * resolution[1] / 1080)
             video_clip = ColorClip(size=(inner_box_height*16//9, inner_box_height), color=(0, 0, 0))
             video_clip = video_clip.with_duration(clip_config['duration'])
@@ -405,41 +860,92 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
         video_clip = ColorClip(size=(inner_box_height*16//9, inner_box_height), color=(0, 0, 0))
         video_clip = video_clip.with_duration(clip_config['duration'])
     
-    # 使用计算出的文字大小（如果未提供）
-    if text_size is None:
-        base_text_size = 32
-        text_size = int(base_text_size * resolution[1] / 1080) if text_size is None else text_size
+    # 4. 文字层 - 新增分页功能
+    MAX_LINES_PER_PAGE = 12  # 每页最多12行
+    line_height = text_size + 10  # 行高
     
-    # 4. 文字层 - 根据上级函数调整文本布局
-    text_list = get_splited_text(clip_config['text'], text_max_bytes=18)  # 改为18字节
+    # 分割文本并分页
+    text_list = get_splited_text(clip_config['text'], text_max_bytes=20)
+    text_pages = []
     
-    # 创建多个文本层，每行单独定位
+    # 将文本分成多页，每页最多MAX_LINES_PER_PAGE行
+    for i in range(0, len(text_list), MAX_LINES_PER_PAGE):
+        page_lines = text_list[i:i + MAX_LINES_PER_PAGE]
+        text_pages.append(page_lines)
+    
+    # 计算每页的显示时长
+    total_pages = len(text_pages)
+    if total_pages > 0:
+        page_duration = clip_config['duration'] / total_pages
+    else:
+        page_duration = clip_config['duration']
+    
+    # 创建分页文字剪辑
     text_clips = []
-    for i, line in enumerate(text_list):
-        y_offset = text_first_y + i * (text_size + 10)
-        try:
-            txt_clip = TextClip(
-                text=line,
-                font=font_path,
-                font_size=text_size,
-                color="rgb(120,65,14)",
-                method="pango" if hasattr(TextClip, 'PANGO') else "label",
-            ).with_duration(clip_config['duration'])
-            text_clips.append(txt_clip.with_position((text_x, y_offset)))
-        except:
-            # 回退到原始方法
-            txt_clip = TextClip(
-                font=font_path,
-                text=line,
-                method="label",
-                font_size=text_size,
-                color="rgb(120,65,14)",
-                duration=clip_config['duration']
-            )
-            text_clips.append(txt_clip.with_position((text_x, y_offset)))
     
-    # 5. 优化合成过程
-    # 使用更高效的图层合成顺序
+    for page_index, page_lines in enumerate(text_pages):
+        page_start_time = page_index * page_duration
+        page_end_time = (page_index + 1) * page_duration
+        
+        for line_index, line in enumerate(page_lines):
+            y_offset = text_first_y + line_index * line_height
+            
+            try:
+                txt_clip = TextClip(
+                    text=line,
+                    font=font_path,
+                    font_size=text_size,
+                    color="rgb(120,65,14)",
+                    method="pango" if hasattr(TextClip, 'PANGO') else "label",
+                ).with_duration(page_duration)  # 每页文字只显示对应的时长
+                
+                # 设置文字的显示时间段
+                txt_clip = txt_clip.with_start(page_start_time)
+                text_clips.append(txt_clip.with_position((text_x, y_offset)))
+                
+            except Exception as e:
+                print(f"创建文字剪辑失败: {e}")
+                # 回退到原始方法
+                try:
+                    txt_clip = TextClip(
+                        font=font_path,
+                        text=line,
+                        method="label",
+                        font_size=text_size,
+                        color="rgb(120,65,14)",
+                        duration=page_duration
+                    )
+                    txt_clip = txt_clip.with_start(page_start_time)
+                    text_clips.append(txt_clip.with_position((text_x, y_offset)))
+                except Exception as e2:
+                    print(f"回退方法也失败: {e2}")
+    
+    # 5. 添加页码指示器（可选）
+    if total_pages > 1:
+        try:
+            # 在右下角显示页码
+            page_indicator_x = int(0.85 * resolution[0])
+            page_indicator_y = int(0.95 * resolution[1])
+            
+            for page_index in range(total_pages):
+                page_start_time = page_index * page_duration
+                indicator_text = f"{page_index + 1}/{total_pages}"
+                
+                indicator_clip = TextClip(
+                    text=indicator_text,
+                    font=font_path,
+                    font_size=int(text_size * 0.8),  # 稍小一点的字号
+                    color="rgb(120,65,14)",
+                    method="pango" if hasattr(TextClip, 'PANGO') else "label",
+                ).with_duration(page_duration)
+                
+                indicator_clip = indicator_clip.with_start(page_start_time)
+                text_clips.append(indicator_clip.with_position((page_indicator_x, page_indicator_y)))
+                
+        except Exception as e:
+            print(f"添加页码指示器失败: {e}")
+    
+    # 6. 合成所有图层
     all_clips = [
         bg_video.with_position((0, 0)),
         main_image.with_position((0, 0)),
@@ -450,7 +956,6 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
     composite_clip = CompositeVideoClip(all_clips, size=resolution, use_bgclip=True)
     
     return composite_clip.with_duration(clip_config['duration'])
-
 
 def add_clip_with_transition(clips, new_clip, set_start=False, trans_time=1):
     """

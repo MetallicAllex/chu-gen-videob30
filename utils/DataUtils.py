@@ -323,7 +323,7 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
             "duration": duration,
             "start": start,
             "end": end,
-            "text": "【请填写 Best50 评价】" if default_comment_placeholders else "",
+            "text": "【请填写 Best50 评价（不支持显示 Emoji，如需要请在剪辑时另外添加）】" if default_comment_placeholders else "",
         }
         main_clips.append(main_clip_data)
 

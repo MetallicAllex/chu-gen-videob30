@@ -3,6 +3,48 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from PIL.Image import Resampling
 from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path
+
+def get_splited_text(text, text_max_bytes=70):
+    """
+    将说明文本按照最大字节数限制切割成多行
+    
+    Args:
+        text (str): 输入文本
+        text_max_bytes (int): 每行最大字节数限制（utf-8编码）
+        
+    Returns:
+        str: 按规则切割并用换行符连接的文本
+    """
+    lines = []
+    current_line = ""
+    
+    # 按现有换行符先分割
+    for line in text.split('\n'):
+        current_length = 0
+        current_line = ""
+        
+        for char in line:
+            # 计算字符长度：中日文为2，其他为1
+            if '\u4e00' <= char <= '\u9fff' or '\u3040' <= char <= '\u30ff':
+                char_length = 2
+            else:
+                char_length = 1
+            
+            # 如果添加这个字符会超出限制，保存当前行并重新开始
+            if current_length + char_length > text_max_bytes:
+                lines.append(current_line)
+                current_line = char
+                current_length = char_length
+            else:
+                current_line += char
+                current_length += char_length
+        
+        # 处理剩余的字符
+        if current_line:
+            lines.append(current_line)
+    
+    return lines
+
 # def blur_image(image_path, blur_radius=5):
 #     """
 #     对图片进行高斯模糊处理
@@ -52,7 +94,7 @@ def LevelLoader(level: float, level_next: float = 0.0):
                                 font_path=level_font_path,
                                 font_size=60, font_color=(255, 255, 255))
 
-    if int(decimai) >= 6:
+    if int(decimai) >= 5:
         # 绘制加号
         level_number_img = TextDraw(level_number_img, '+', (92, 8),
                                     font_path=level_font_path,

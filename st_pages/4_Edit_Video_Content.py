@@ -88,7 +88,7 @@ def refresh_main_image_paths(config_path, username, save_id, max_order_id):
         config_path: video_config.json 的完整路径
         username: 当前存档用户名
         save_id: 当前存档时间 ID（如 '20250410_123456'）
-        max_order_id: 最大处理数 [50 条]
+        max_order_id: 最大处理数
     """
     if not os.path.exists(config_path):
         raise FileNotFoundError("找不到配置文件：" + config_path)
@@ -201,7 +201,7 @@ def copy_video_args(config_path, old_config_path):
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(new_config_data, f, ensure_ascii=False, indent=4)
 
-    print(f"已成功更新 {updated_count} 条记录的剪辑参数，跳过 {skipped_count} 条无需更新的记录")
+    print(f"已成功更新 {updated_count} 条记录的剪辑参数，跳过 {skipped_count} 条无需更新（不符合）的记录")
     return new_config_data
 
 # 通过向empty容器添加新的container，更新预览

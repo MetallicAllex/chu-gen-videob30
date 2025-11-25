@@ -284,6 +284,10 @@ class PurePytubefixDownloader(Downloader):
     def get_video_pages(self, video_id):
         # pytubefix暂时不支持获取分p信息，返回空
         raise NotImplementedError("PurePytubefixDownloader 不支持 get_video_pages 方法。")
+    
+    def get_video_info(self, video_id):
+        # pytubefix暂时不支持获取分p信息，返回空
+        raise NotImplementedError("PurePytubefixDownloader 不支持 get_video_info 方法。")
 
 class BilibiliDownloader(Downloader):
     def __init__(self, proxy=None, no_credential=False, credential_path="cred_datas/bilibili_cred.pkl", search_max_results=3):
@@ -397,8 +401,8 @@ class BilibiliDownloader(Downloader):
                 "page": each.get("page", 0),
                 "part": remove_html_tags_and_invalid_chars(each.get("part", "")),
                 "duration": each.get("duration", 0),
-                "static_frame": static_frame,
-                "first_frame": static_path
+                # "static_frame": static_frame,
+                # "first_frame": static_path
             })
 
         return page_info
