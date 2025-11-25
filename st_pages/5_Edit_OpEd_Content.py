@@ -50,7 +50,7 @@ def edit_context_widget(name, config, config_file_path):
                     "文本内容",
                     value=item["text"],
                     key=f"{item['id']}_text",
-                    placeholder="请输入要展示的文本（每页最多 100 字）"
+                    placeholder="请输入要展示的文本（超过 16 行将分为多个内文本页，此特性不会影响您设置的展示画面页）"
                 )
                 items[idx]["text"] = new_text
                 # items[idx]['version'] = sel_version
@@ -167,8 +167,12 @@ with st.container(border=True):
 ### Savefile Management - End ###
 
 if config:
-    st.write("添加想要展示的文字内容，每一页最多可以展示约250字")
-    st.info("左右两侧填写完毕后，需要分别点击保存才可生效！", icon="ℹ️")
+    st.write("添加想要展示的文字内容，每一页最多可以展示约 250 字")
+    st.warning("因缺少依赖库，文本中的 emoji 无法渲染，如需要请在剪辑软件中另行添加", icon="⚠️")
+    st.info("""
+            左右两侧填写完毕后，需要分别点击保存才可生效！
+            - 文本页（展示页内文本）显示时长将按画面页（整个展示页）时长平均切分
+            """, icon="ℹ️")
 
     # 分为两栏，左栏读取intro部分的配置，右栏读取outro部分的配置
     col1, col2 = st.columns(2)
