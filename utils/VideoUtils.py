@@ -1,3 +1,4 @@
+from datetime import datetime
 import numpy as np
 from queue import Queue, Empty
 from typing import Any, Dict, List, Tuple
@@ -90,8 +91,8 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
         duration=clip_config['duration']
     )
     
-    text_pos = (int(0.16 * resolution[0]), int(0.18 * resolution[1]))
-    addtional_text_pos = (int(0.2 * resolution[0]), int(0.88 * resolution[1]))
+    text_pos = (int(0.15 * resolution[0]), int(0.17 * resolution[1]))
+    addtional_text_pos = (int(0.2 * resolution[0]), int(0.89 * resolution[1]))
     
     # 单页情况
     if len(pages) <= 1:
@@ -99,7 +100,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
             font=font_path, text="\n".join(pages[0]),
             method="label", font_size=text_scale,
             margin=(20, 5), interline=6.5,
-            vertical_align="top", color="white",
+            vertical_align="top", color="black",
             duration=clip_config['duration']
         )
         
@@ -136,7 +137,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
                 font=font_path, text=page_text,
                 method="label", font_size=text_scale,
                 margin=(20, 5), interline=6.5,
-                vertical_align="top", color="white",  # 固定白色，不变色
+                vertical_align="top", color="black",  # 固定白色，不变色
                 duration=page_duration
             ).with_start(start_time)  # 设置开始时间
             
@@ -328,13 +329,44 @@ def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_pa
         return VideoFileClip(output_path)
     except subprocess.CalledProcessError as e:
         error_cmd = " ".join(cmd)
+        # 准备日志内容
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_content = f"""========================== FFmpeg 生成失败！============================
+生成时间：{timestamp}，
+视频 ID: {clip_config['id']}，
+歌曲名称: {clip_config['song_name']}，
+输出路径: {output_path}，
+持续时间: {duration} 秒，
+分辨率: {resolution}
+
+FFmpeg 命令:
+{str(error_cmd)}
+
+错误输出:
+{e.stderr}
+
+错误详情:
+{str(e)}
+
+配置信息:
+{clip_config}
+============================ 错误日志结束 ======================================="""
+        
+        # 写入错误日志文件
+        log_path = f'./videos/error_logs/video_generation_error_report_{timestamp}.log'
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(log_content)
+        
         print("========================== FFmpeg 生成失败！====================================")
-        print(f"视频生成命令：\n{str(error_cmd)}\n")
-        print(f"生成输出日志: \n{e.stderr}")
-        print("============================ 这里是结尾 ========================================")
-        print("因为您的视频片段使用此模式生成时出现了问题，我们将使用快速模式重新生成；")
-        print(" -> 生成器不会检查您的视频片段文件完整性，别忘了将您生成失败的片段删除掉；")
-        print(" -> 如果您仍要使用极速模式生成，请等待您报告的问题解决后，重新启动生成器。\n")
+        print(f"详细错误报告已保存，请将此错误报告文件发送给 chu-gen 开发者。")
+        print(f"路径：{os.path.abspath(log_path)}") # 额外提示日志位置
+        # print(f"视频生成命令：\n{str(error_cmd)}\n")
+        # print(f"生成输出日志: \n{e.stderr}")
+        print("============================ 这里是分隔符 ======================================")
+        print("将使用快速模式为您重新生成；")
+        print(" -> 生成器不会检查片段完整性，别忘了将失败的片段删除；")
+        print(" -> 如果仍要使用极速模式，请至少等待您报告的问题解决。\n")
         return create_video_segment_classic(clip_config, resolution, font_path)
 
 def create_video_segment_classic(clip_config, resolution, font_path, text_size=None):
@@ -342,7 +374,7 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
     print(f"正在为您生成【{clip_config['song_name']} - {REVERSE_LEVEL_LABELS.get(clip_config['level_index'])}】的片段")
     
     # 根据上级函数计算新的位置参数
-    video_pos = (int(0.0422 * resolution[0]), int(0.0602 * resolution[1]))
+    video_pos = (int(0.0641  * resolution[0]), int(0.075 * resolution[1]))
     text_x = int(0.7594 * resolution[0])
     text_first_y = int(0.224 * resolution[1])
     
@@ -419,7 +451,7 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
     
     for page_index, page_lines in enumerate(text_pages):
         page_start_time = page_index * page_duration
-        page_end_time = (page_index + 1) * page_duration
+        # page_end_time = (page_index + 1) * page_duration
         
         for line_index, line in enumerate(page_lines):
             y_offset = text_first_y + line_index * line_height
@@ -455,29 +487,29 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
                     print(f"回退方法也失败: {e2}")
     
     # 5. 添加页码指示器（可选）
-    if total_pages > 1:
-        try:
-            # 在右下角显示页码
-            page_indicator_x = int(0.85 * resolution[0])
-            page_indicator_y = int(0.95 * resolution[1])
+    # if total_pages > 1:
+    #     try:
+    #         # 在右下角显示页码
+    #         page_indicator_x = int(0.85 * resolution[0])
+    #         page_indicator_y = int(0.95 * resolution[1])
             
-            for page_index in range(total_pages):
-                page_start_time = page_index * page_duration
-                indicator_text = f"{page_index + 1}/{total_pages}"
+    #         for page_index in range(total_pages):
+    #             page_start_time = page_index * page_duration
+    #             indicator_text = f"{page_index + 1}/{total_pages}"
                 
-                indicator_clip = TextClip(
-                    text=indicator_text,
-                    font=font_path,
-                    font_size=int(text_size * 0.8),  # 稍小一点的字号
-                    color="rgb(120,65,14)",
-                    method="pango" if hasattr(TextClip, 'PANGO') else "label",
-                ).with_duration(page_duration)
+    #             indicator_clip = TextClip(
+    #                 text=indicator_text,
+    #                 font=font_path,
+    #                 font_size=int(text_size * 0.8),  # 稍小一点的字号
+    #                 color="rgb(120,65,14)",
+    #                 method="pango" if hasattr(TextClip, 'PANGO') else "label",
+    #             ).with_duration(page_duration)
                 
-                indicator_clip = indicator_clip.with_start(page_start_time)
-                text_clips.append(indicator_clip.with_position((page_indicator_x, page_indicator_y)))
+    #             indicator_clip = indicator_clip.with_start(page_start_time)
+    #             text_clips.append(indicator_clip.with_position((page_indicator_x, page_indicator_y)))
                 
-        except Exception as e:
-            print(f"添加页码指示器失败: {e}")
+    #     except Exception as e:
+    #         print(f"添加页码指示器失败: {e}")
     
     # 6. 合成所有图层
     all_clips = [
@@ -930,7 +962,8 @@ def render_all_video_clips(
     force_render=False,
     classic_fast_render=False,
     use_hardware_acceleration=False,
-    acceleration_method="libx264"
+    acceleration_method="libx264",
+    clips_only=False
 ):
     """生成所有视频片段的函数
 
@@ -1007,7 +1040,7 @@ def render_all_video_clips(
                     
                     # 如果是 Intel 且选择了不支持的编码器，强制使用 h264
                     if acceleration_method == "Intel" and encoder_prefix == "vp9":
-                        encoder_prefix = "h264"  # Intel 不支持 vp9，强制回退到 h264
+                        encoder_prefix = "h264"  # Intel 不支持 vp9 添加过渡，强制回退到 h264
                     
                     hardware_suffix = HARD_RENDER_METHOD[acceleration_method]['codec']
                     final_codec = f"{encoder_prefix}_{hardware_suffix}"

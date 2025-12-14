@@ -194,6 +194,8 @@ with st.container(border=True):
                                 - 生成图像时会自动根据您的成绩判断是否为 AJC
                             - Chain 类型：水鱼并未在接口中提供 Chain 数据
                                 - 本槽留空，使用水鱼的玩家请自行确定本曲是否已有 Chain
+                            - 剩余的标注请指向列头表签查看
+                            - 如果您需要计算 rating，请[访问此页](https://public.cm-tea.top/Rating_Calculator_CHUNITHM.html)
                             """, icon="ℹ️")
                     
                     # 显示数据预览和编辑，修改为：
@@ -251,7 +253,7 @@ with st.container(border=True):
                                 max_value=20.0, 
                                 step=0.01, 
                                 format="%.2f", 
-                                width="small", 
+                                width="small",
                                 required=True
                             ),
                             "full_combo": st.column_config.SelectboxColumn(
@@ -262,7 +264,8 @@ with st.container(border=True):
                             ),
                             "full_chain": st.column_config.SelectboxColumn(
                                 "Chain 类型",
-                                width="small", 
+                                width="small",
+                                help="使用水鱼的玩家请自行确定本曲是否已有 Chain",
                                 options=[None, "fullchain", "fullchain2"]
                             ),
                             "clip_id": st.column_config.TextColumn(

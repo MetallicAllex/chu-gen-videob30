@@ -382,7 +382,7 @@ if st.session_state.get('config_saved', False):
                                 current_paths,
                                 data_type
                             )
-        with st.expander("我玩外服", icon="🔵"):
+        with st.expander("我玩外服（待开发）", icon="🔵"):
             st.info(f"""
                     请按照以下操作放入您的游戏数据：
                     - 将您获取的游戏数据保存为 `b30_raw.json`
@@ -406,6 +406,7 @@ if st.session_state.get('config_saved', False):
                 st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}", icon="✅")
         
     if st.session_state.get('data_updated_step1', False):
+        st.divider()
         col1, col2 = st.columns(2, gap="small")
         with col1:
             st.write("确认数据无误后，前往下一步准备生成底图。")
