@@ -55,6 +55,16 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
     scale_factor = resolution[1] / 1080
     text_scale = int(text_size * scale_factor)
     
+    # 检查必要字段
+    if 'duration' not in clip_config:
+        raise ValueError(f"缺少 duration 字段: {clip_config}")
+    
+    if 'text' not in clip_config or not clip_config['text']:
+        # 如果没有文本，使用默认文本
+        clip_config['text'] = "【无文本内容】"
+        print(f"警告: 片段 {clip_config.get('id', 'unknown')} 没有填写内容，将填充占位符")
+        print("如果您反复填写保存无效果，请尝试手动编辑配置文件中的 intro 和 outro 部分。")
+    
     # 创建统一的背景（整个片段共用）
     bg_image = ImageClip(f"{root_path}/IntroBase.png").with_duration(clip_config['duration'])
     bg_image = bg_image.with_effects([vfx.Resize(width=resolution[0])])
@@ -68,6 +78,10 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
 
     # 文本分页处理
     text_list = get_splited_text(clip_config['text'], text_max_bytes=inline_max_len)
+    
+    # 如果文本列表为空，添加一个占位符
+    if not text_list:
+        text_list = ["【无文本内容】"]
     
     # 分页逻辑
     pages = []

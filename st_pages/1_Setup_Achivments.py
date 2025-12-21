@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import *
-from utils.DataUtils import update_b50_data_lxns, update_b50_data_fish, st_init_cache_pathes
+from utils.DataUtils import *
 
 def convert_old_files(folder, username, save_paths):
     """
@@ -332,13 +332,19 @@ if st.session_state.get('config_saved', False):
             """, icon="ℹ️")
     with st.container(border=True):
         # st.warning("因当前开发分支限制，水鱼查分器数据源获取被禁用。", icon="⚠️")
-        
+        metadata_status = os.path.exists(music_info_path) and os.path.exists(jp_music_info_path)
+        if not metadata_status:
+            st.error("""
+                    您的包体未拥有谱面数据，请回到首页下载！
+                    - 刚下载的新包体**默认未携带谱面数据**，**已经用过但文件不存在**则可能是被误删
+                    - 生成器任何操作**均基于此数据完成**，您*必须*要有这份数据后才能继续
+                    """, icon="❗")
         with st.expander("我玩国服", icon="🔴"):
             col1, col2 = st.columns([1.25, .75])
             
             with col1:
-                data_type = st.radio("获取数据类型",["全都要", "仅旧曲", "仅新曲"], index=0, horizontal=True, key="select_data_type",
-                                    help="此设置目前只影响国服（外服缺少测试数据）", captions=["Best30 + New20", "Only Best30", "Only New20"])
+                data_type = st.radio("获取数据类型",["全都要", "仅旧曲", "仅新曲"], index=0, disabled=not metadata_status, horizontal=True, key="select_data_type",
+                                    help="您的包体未拥有谱面数据，请回到首页下载！" if not metadata_status else "此设置目前只影响国服（外服缺少测试数据）", captions=["Best30 + New20", "Only Best30", "Only New20"])
             
             with col2: 
                 # 显示当前好友码状态（如果有）
@@ -347,7 +353,8 @@ if st.session_state.get('config_saved', False):
             
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("从落雪查分器获取", help="将使用您的好友码作为验证参数向代理请求游戏数据", icon="❄️", use_container_width=True):
+                if st.button("从落雪查分器获取", help="您的包体未拥有谱面数据，请回到首页下载！" if not metadata_status else "将使用您的好友码作为验证参数向代理请求游戏数据",
+                             icon="❄️", use_container_width=True, disabled=not metadata_status):
                     if not st.session_state.get("friend_code"):
                         st.error("未设置好友码！请在上方勾选'我使用落雪查分器'并输入您的好友码。", icon="❌")
                     else:
@@ -368,7 +375,8 @@ if st.session_state.get('config_saved', False):
                         except Exception as e:
                             st.error(f"获取数据时发生错误: {e}", icon="❌")
             with col2:
-                if st.button("从水鱼查分器获取", help="将使用您的用户名作为查询参数", icon="🐟", use_container_width=True):
+                if st.button("从水鱼查分器获取", help="您的包体未拥有谱面数据，请回到首页下载！" if not metadata_status else "将使用您的用户名作为查询参数",
+                             icon="🐟", use_container_width=True, disabled=not metadata_status):
                     current_paths = get_data_paths(username, timestamp=None)
                     save_dir = os.path.dirname(current_paths['data_file'])
                     save_id = os.path.basename(save_dir)
@@ -397,7 +405,8 @@ if st.session_state.get('config_saved', False):
             st.markdown("或者，您也可以")
         
         with col2:
-            if st.button("新建空白存档", key="int_create_new_save", icon="📄", use_container_width=True, help="如果您目前没有可用于生成存档的数据，可生成空白存档（作为占位）"):
+            if st.button("新建空白存档", key="int_create_new_save", icon="📄", use_container_width=True, disabled=not metadata_status,
+                         help="您的包体（目前）未拥有谱面数据，请回到首页下载！" if not metadata_status else "如果您目前没有可用于生成存档的数据，可生成空白存档（作为占位）"):
                 current_paths = get_data_paths(username, timestamp=None)
                 save_dir = os.path.dirname(current_paths['data_file'])
                 save_id = os.path.basename(save_dir)
@@ -407,12 +416,12 @@ if st.session_state.get('config_saved', False):
         
     if st.session_state.get('data_updated_step1', False):
         st.divider()
-        col1, col2 = st.columns(2, gap="small")
+        col1, col2 = st.columns(2, gap="small", vertical_alignment="center")
         with col1:
             st.write("确认数据无误后，前往下一步准备生成底图。")
         
         with col2:
-            if st.button("下一步", icon="➡️", use_container_width=True):
+            if st.button("下一步", icon="➡️", help="您需要获取谱面数据后才能继续，因为您的存档依靠此数据生成" if not metadata_status else "", use_container_width=True, disabled=not metadata_status):
                 st.switch_page("st_pages/Generate_Pic_Resources.py")
 else:
     st.warning("请先确定用户名！", icon="⚠️")

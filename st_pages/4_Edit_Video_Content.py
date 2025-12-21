@@ -226,6 +226,7 @@ def update_preview(preview_placeholder, config, current_index):
                 st.toast("已经是当前视频片段！", icon="ℹ️")
         
         # 快速跳转选择框 - 放在框内最上方
+        st.warning("因缺少依赖库，文本中的 emoji 无法渲染，如需要请在剪辑软件中另行添加", icon="⚠️")
         col1, col2, col3 = st.columns([0.5, 3, .85], vertical_alignment="center")
         with col1:
             st.write("**快速跳转**")
@@ -322,69 +323,165 @@ def update_preview(preview_placeholder, config, current_index):
         else:
             video_duration = DEFAULT_VIDEO_MAX_DURATION
 
-        def get_valid_time_range(config_item):
+        def get_valid_time_range(config_item, video_duration=DEFAULT_VIDEO_MAX_DURATION):
             start = config_item.get('start', 0)
-            end = config_item.get('end', 0) 
-            # 如果起始时间大于等于结束时间，调整起始时间
-            if start >= end:
-                start = end - 1
+            end = config_item.get('end', video_duration)
+            
+            # 确保值有效
+            start = max(0, min(start, video_duration - 1))
+            end = max(1, min(end, video_duration))
+            
+            # 确保结束时间大于起始时间
+            if end <= start:
+                # 自动步进值，用于处理时间超界
+                end = min(start + 1, video_duration)
+                # start = max(0, end - 1)
+            
             return start, end
+
+        # 工具函数定义（放在时间部分的最前面）
+        def format_time(seconds: int) -> tuple:
+            """将秒数转换为(分钟, 秒)元组"""
+            return int(seconds // 60), int(seconds % 60)
+
+        def to_seconds(minutes: int, seconds: int) -> int:
+            """将分钟和秒转换为总秒数"""
+            return minutes * 60 + seconds
 
         # 在使用select_slider之前，先获取有效的时间范围
         start_time, end_time = get_valid_time_range(config['main'][current_index])
+        show_start_minutes, show_start_seconds = format_time(start_time)
+        show_end_minutes, show_end_seconds = format_time(end_time)
+        # show_start_minutes = int(start_time // 60)
+        # show_start_seconds = int(start_time % 60)
+        # show_end_minutes = int(end_time // 60)
+        # show_end_seconds = int(end_time % 60)
+        minutes = lambda x: int(x // 60)
+        seconds = lambda x: int(x % 60)
         
-        show_start_minutes = int(start_time // 60)
-        show_start_seconds = int(start_time % 60)
-        show_end_minutes = int(end_time // 60)
-        show_end_seconds = int(end_time % 60)
-        
+        # 计算分钟的最大值
+        max_minutes = video_duration // 60
+
+        # 保存原始的结束时间（用户设置的值）
+        original_end_time = end_time
+
         scol1, scol2, scol3 = st.columns(3, vertical_alignment="bottom")
         with scol1:
             st.subheader("于此时开始：")
         with scol2:
-            start_min = st.number_input("分钟", min_value=0, value=show_start_minutes, step=1, key=f"start_min_{item['id']}_{current_index}")
+            start_min = st.number_input("分钟", min_value=0, max_value=max_minutes, value=show_start_minutes, step=1, key=f"start_min_{item['id']}_{current_index}")
         with scol3:
-            start_sec = st.number_input("秒", min_value=0, max_value=59, value=show_start_seconds, step=1, key=f"start_sec_{item['id']}_{current_index}")
+            # 根据分钟数动态计算最大秒数
+            # if start_min == max_minutes:
+            #     max_start_sec = video_duration % 60  # 最后一分钟的剩余秒数
+            # else:
+            #     max_start_sec = 59
             
+            max_start_sec = seconds(video_duration) if start_min == max_minutes else 59
+            
+            # 确保当前值不超过最大秒数
+            current_start_sec = min(show_start_seconds, max_start_sec)
+            
+            start_sec = st.number_input("秒", min_value=0, max_value=max_start_sec, value=current_start_sec, step=1, key=f"start_sec_{item['id']}_{current_index}")
+
+        # 计算开始时间总秒数
+        current_start_time = start_min * 60 + start_sec
+
         ecol1, ecol2, ecol3 = st.columns(3, vertical_alignment="bottom")
         with ecol1:
             st.subheader("于此时结束：")
         with ecol2:
-            end_min = st.number_input("分钟", min_value=0, value=show_end_minutes, step=1, key=f"end_min_{item['id']}_{current_index}")
+            # 结束分钟的最小值
+            min_end_min = start_min  # 不能小于开始分钟
+            
+            # 尝试保持用户原本设置的结束分钟，但要确保不小于开始分钟
+            preferred_end_min = show_end_minutes
+            # if preferred_end_min < min_end_min:
+            #     preferred_end_min = min_end_min
+            
+            preferred_end_min = min_end_min if preferred_end_min < min_end_min else show_end_minutes
+            
+            end_min = st.number_input(
+                "分钟", 
+                min_value=min_end_min,  # 动态最小值
+                max_value=max_minutes, 
+                value=preferred_end_min,  # 优先使用用户原本设置的值
+                step=1, 
+                key=f"end_min_{item['id']}_{current_index}"
+            )
         with ecol3:
-            end_sec = st.number_input("秒", min_value=0, max_value=59, value=show_end_seconds, step=1, key=f"end_sec_{item['id']}_{current_index}")
+            # 根据分钟数动态计算最大秒数
+            # if end_min == max_minutes:
+            #     max_end_sec = seconds(video_duration)
+            # else:
+            #     max_end_sec = 59
+            
+            max_end_sec = seconds(video_duration) if end_min == max_minutes else 59
+            
+            # 计算结束秒数的最小值
+            # min_end_sec = 0
+            # if end_min == start_min:
+            #     # 同一分钟，结束秒数必须大于开始秒数
+            #     min_end_sec = min(start_sec + 1, max_end_sec)
+            
+            min_end_sec = min(start_sec + 1, max_end_sec) if end_min == start_min else 0
+            
+            # 优先使用用户原本设置的结束秒数，但要确保在有效范围内
+            preferred_end_sec = show_end_seconds
+            # if end_min == start_min:
+            #     # 同一分钟时，确保不小于最小值
+            #     preferred_end_sec = max(preferred_end_sec, min_end_sec)
+            preferred_end_sec = max(preferred_end_sec, min_end_sec) if end_min == start_min else show_end_seconds
+            
+            # 确保不超过最大值
+            preferred_end_sec = min(preferred_end_sec, max_end_sec)
+            
+            end_sec = st.number_input(
+                "秒", 
+                min_value=min_end_sec,  # 动态最小值
+                max_value=max_end_sec, 
+                value=preferred_end_sec,  # 优先使用用户原本设置的值
+                step=1, 
+                key=f"end_sec_{item['id']}_{current_index}"
+            )
 
-        # 转换为总秒数
-        start_time = start_min * 60 + start_sec
-        end_time = end_min * 60 + end_sec
+        # 计算结束时间
+        end_time = to_seconds(end_min, end_sec)
 
-        # 确保结束时间大于起始时间
-        if end_time <= start_time:
-            st.warning("结束时间必须大于起始时间")
-            end_time = start_time + 5
+        # 如果结束时间小于等于开始时间，显示警告但不自动调整（让用户手动调整）
+        if end_time <= current_start_time:
+            st.error("⚠️ 结束时间必须大于开始时间")
+            # 这里不自动调整，让用户手动修改结束时间
+            # 只设置一个合理的默认值，但保留用户原本的意图
+            if end_time == current_start_time:
+                # 如果恰好相等，自动加1秒
+                end_time = min(current_start_time + 1, video_duration)
+                # 更新显示
+                end_min, end_sec = format_time(end_time)
+                # end_min = minutes(end_time)
+                # end_sec = seconds(end_time)
 
         # 确保结束时间不超过视频时长
         if end_time > video_duration:
-            st.warning(f"结束时间不能超过视频时长: {int(video_duration // 60)}分{int(video_duration % 60)}秒")
+            st.warning(f"结束时间已调整为视频末尾: {minutes(video_duration)} 分 {seconds(video_duration)} 秒")
             end_time = video_duration
-            start_time = end_time - 5
+            end_min, end_sec = format_time(end_time)
+            end_min = minutes(end_time)
+            end_sec = seconds(end_time)
 
         # 计算总秒数并更新config
-        item['start'] = start_time
+        item['start'] = current_start_time
         item['end'] = end_time
-        item['duration'] = end_time - start_time
-
-        minutes = lambda x: int(x // 60)
-        seconds = lambda x: int(x % 60)
+        item['duration'] = end_time - current_start_time
 
         time_col1, time_col2, time_col3 = st.columns(3)
         with time_col1:
-            st.subheader(f"开始于 {minutes(start_time):02d}:{seconds(start_time):02d}")
+            st.subheader(f"开始于 {minutes(current_start_time):02d}:{seconds(current_start_time):02d}")
         with time_col2:
             st.subheader(f"结束于 {minutes(end_time):02d}:{seconds(end_time):02d}")
         with time_col3:
             st.subheader(f"长度为 {item['duration']} 秒")
-
+    
 # 读取下载器配置
 if 'downloader_type' in st.session_state:
     downloader_type = st.session_state.downloader_type
@@ -421,15 +518,6 @@ if not video_config or 'main' not in video_config:
                 st.toast(f"视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
                 st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
                 video_config = None
-    st.info("""
-            如果存档中有数据需要修改，请在生成配置之前，前往【生成成绩图】页修改
-            - 配置生成后将难于修改，若已经生成，请【迁移】剪辑数据
-            - 要迁移的数据若均不在新数据内，请【刷新配置】重新生成
-            - 仍要强制迁移，将新数据中要迁移曲目的以下字段，拷贝并复制到对应旧数据字段：
-                - `id, song_name, artist, level_index`
-                - 拷贝会对曲目 ID、曲名、曲师和难度校验
-                    - 两份数据中只要以上字段有完全相同的就会拷贝
-            """, icon="💬")
 
 if video_config:
     # 获取所有视频片段的ID
@@ -524,9 +612,23 @@ with st.container(border=True):
                 open_file_explorer(download_folder_path)
     
     with st.expander("需要从旧的（或者别人的）存档迁移 / 更新数据？", icon="💾"):
+        st.info("""
+        如果存档中有数据需要修改，请在生成配置之前，前往【生成成绩图】页修改
+        - 配置生成后将难于修改，若已经生成，请【迁移】剪辑数据
+        - 要迁移的数据若均不在新数据内，请【刷新配置】重新生成
+        - 仍要强制迁移则将新数据中要迁移曲目的以下字段，复制到对应旧数据：
+            - `id, song_name, artist, level_index`
+            - 拷贝会对曲目 ID、曲名、曲师和难度校验
+                - 两份数据中只要以上字段有完全相同的就会拷贝
+        """, icon="💬")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("更新成绩图存档路径", icon="🔄", help="如果您拷贝了其他用户的配置文件，需点击此按钮更新", use_container_width=True):
+            if st.button("更新成绩图存档路径", icon="🔄", help="""
+                         如果您对本存档的配置文件执行了以下这些操作，需更新路径：
+                            - 您 `拷贝了` 其他玩家的配置文件来使用
+                            - 您的配置文件 `在生成后提示图片/视频路径不存在`
+                                - 请确定图片和视频文件均已存在后再执行。
+                         """, use_container_width=True):
                 try:
                     refresh_main_image_paths(video_config_output_file, username, save_id, len(video_config_output_file))
                     st.toast("配置路径已更新，3 秒后刷新", icon="✅")
@@ -536,9 +638,9 @@ with st.container(border=True):
                     st.error(f"更新失败：{e}", icon="❌")
         with col2:
             if st.button("迁移旧存档剪辑数据", icon="⏫", help=f"""
-                         如果您需要迁移剪辑数据，请使用此项
-                         - 将旧存档命名为 `old_video_config.json`
-                         - 放置在当前存档 `{save_id}` 下
+                         如果您需要迁移剪辑数据，请完成以下操作后，使用此项
+                         - 将旧存档的配置文件命名为 `old_video_configs.json`
+                         - 放置在当前存档 `{save_id}` 配置文件相同位置下
                          """, use_container_width=True):
                 try:
                     copy_video_args(video_config_output_file, old_video_config_file)

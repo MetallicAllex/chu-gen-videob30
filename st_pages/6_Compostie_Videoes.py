@@ -222,7 +222,7 @@ with st.container(border=True):
         # with trans_config_placeholder.container(border=True):
         st.write("片段过渡（仅渲染完整视频时有效）")
         col1, col2 = st.columns([1, 2])
-        with col1:    
+        with col1:
             trans_enable = st.checkbox("启用，过渡时间为（秒）：", value=_trans_enable)
         with col2:
             trans_time = st.number_input(
@@ -274,19 +274,19 @@ with st.expander("选择渲染模式", icon="⏩"):
     # 方案选择
     scheme_option = st.radio(
         "选择渲染方案",
-        ["快速模式（时间换稳定性）", "极速模式（稳定性换时间）"],
-        captions=["只使用 MoviePy 渲染，再使用 FFmpeg 拼接", " FFmpeg + MoviePy 混合渲染，再使用 FFmpeg 拼接"],
+        ["标准渲染（时间换稳定性）", "快速渲染（稳定性换时间）"],
+        captions=["只使用 MoviePy 完成，再使用 FFmpeg 拼接", "FFmpeg + MoviePy 混合，再使用 FFmpeg 拼接"],
         horizontal=True,
         help="选择不同的视频渲染方案",
         label_visibility="collapsed"
     )
 
     # 根据方案显示不同内容
-    if scheme_option == "快速模式（时间换稳定性）":
+    if scheme_option == "标准渲染（时间换稳定性）":
         # st.write("【快速模式】先渲染所有视频片段，再拼接为完整视频")
         # 快速模式
         st.info("""
-        **相较于（已弃用的）完整渲染：**  
+        **相较于（弃用的）完整渲染：**  
         - 有效降低渲染时内存占用，减少渲染所需时间
         - 全部片段分离，可单独提取用于二次制作
         - 不会因机器断电等问题，丢失已生成进度
@@ -317,9 +317,9 @@ with st.expander("选择渲染模式", icon="⏩"):
     # 极速模式
     else:
         st.info("""
-            **相较于快速模式：**
+            **相较于（现在的）标准渲染：**
             - 减少 70% 片段渲染时间【2 ~ 3min/片段 → 30s ~ 1min/片段】
-                - 和完整渲染相比，极速模式渲染时间减少 80%（已在 3060 笔本测试）
+                - 和完整渲染相比，渲染时间减少 80%（理论半小时可出片）
                 - 将 `MoviePy` 谱面确认主体 *（不含头尾）* 分离处理
                 - 生成平均时间会因片段长度之间不同分辨率和码率而变化
                     - 如果您单个片段很长，渲染时间也会变久，这是不会改变的事实
@@ -336,8 +336,9 @@ with st.expander("选择渲染模式", icon="⏩"):
                     - 生成时（由非机器本身性能原因所引起的）异常卡顿
                         - 包括 GPU 占用，生成时 GPU 不会持续高占，它只会跳这么一小会。
                 - 若您使用低内存设备渲染，请尽可能分段进行，低内存会导致您的设备出现异常
-                    - 已有报告【报错 failed to allocate memory (-4)、不时黑屏】之类的问题
-                    - 解决方法也很简单，重启设备即可。
+                    - 已有报告【failed to allocate memory (-4)、不时黑屏】之类的问题
+                    - 解决方法也很简单，重启设备再次生成即可。
+                        - 不要忘了删除损坏的片段，生成器会跳过已存在的文件。
                 """, icon="⚠️")
         st.divider()
         col1, col2 = st.columns(2)

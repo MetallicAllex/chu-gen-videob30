@@ -232,7 +232,7 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
     """生成视频配置文件，合并了 `st_gen_resource_config` 和 `gene_resource_config`
     
     Args:
-        b50_data: b30 数据列表
+        b50_data: b50 数据列表
         images_path: 图片路径
         videoes_path: 视频路径
         output_file: 输出配置文件路径
@@ -285,7 +285,7 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
     # 遍历 b50_data 来构建视频配置数据
     for song in b50_data:
         if not song['clip_id']:
-            print(f"Error: 没有找到 {song['title']}-{song['level_label']}-{song['type']} 的clip_id，请检查数据格式，跳过该片段。")
+            print(f"Error: 没有找到 {song['title']}-{song['level_label']}-{song['type']} 的 clip_id，请检查数据格式，跳过该片段。")
             continue
         id = song['clip_id']
         # video_name = f"{song['id']}-{song['song_name']}"
