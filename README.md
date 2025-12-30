@@ -1,12 +1,14 @@
-# chu-gen-videob30
+# ~chu-gen-videob30~
 
-自动从流媒体上搜索并构建你的中二节奏 best30 视频
+~自动从流媒体上搜索并构建你的中二节奏 best30 视频~
 
-Auto search and generate your best 30 videoes of CHUNITHM
+~Auto search and generate your best 30 videoes of CHUNITHM~
 
-此项目基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 修改而来
+此项目已存档（因原项目已支持中二节奏分表生成），请转至原始项目 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)
 
-This project was modified on original project [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)
+~项目基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 修改而来~
+
+~This project was modified on original project [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)~
 
 ## 快速开始
 
