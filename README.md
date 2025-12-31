@@ -4,11 +4,13 @@
 
 ~Auto search and generate your best 30 videoes of CHUNITHM~
 
-此项目已存档（因原项目已支持中二节奏分表生成），请转至原始项目 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)
+此分支已停止更新（因原项目使用了新的画面帧），请转至新的分支 [get_userdata_FC](https://github.com/MetallicAllex/chu-gen-videob30/tree/get_userdata_FC)
 
-~项目基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 修改而来~
+您仍可以使用此分支进行视频生成，但此分支代码因不再更新，我们也将不会解答此分支下的 issue。
 
-~This project was modified on original project [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)~
+项目基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 修改而来
+
+This project was modified on original project [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50)
 
 ## 快速开始
 
