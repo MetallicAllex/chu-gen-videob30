@@ -344,13 +344,18 @@ with st.expander("选择渲染模式", icon="⏩"):
         col1, col2 = st.columns(2)
         with col1:
             cq_set = st.number_input("cq(量化参数)", min_value=0, max_value=63,
-                            value=33, step=1, key="cq_range",
-                            help="此项会影响编码文件大小和画面质量，如果您不知道怎么调，请保持默认")
+                            value=33, step=1, key="cq_range", disabled=button_disable_stat or acceleration_method == 'AMD',
+                            help="""
+                            此项会影响编码文件大小和画面质量，如果您不知道怎么调，请保持默认
+                            
+                            `（使用 AMD 加速的此参数对您无效，您无需调整【自动忽略】）`
+                            """)
             encoder_param["cq_set"] = cq_set
         with col2:
-            preset_type = st.selectbox("预设编码参数", ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
-                        index=3, key="select_preset", help="往上生成越快，往下文件越小"
-                        )
+            preset_options_amf = ['speed' ,'balanced', 'quality']
+            default_preset = ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+            preset_type = st.selectbox("预设编码参数", default_preset if acceleration_method != 'AMD' else preset_options_amf,
+                        index=3 if acceleration_method != 'AMD' else 1, key="select_preset", help="往上生成越快，往下文件越小（AMD 往下为质量越好）", disabled=button_disable_stat)
             encoder_param["preset_type"] = preset_type
         
         if st.button("开始渲染", key="render_ffmpeg_mode",
@@ -409,7 +414,8 @@ if st.session_state.global_rendering:
                              force_render=force_render_clip, 
                              classic_fast_render=classic_fast_render,
                              use_hardware_acceleration=use_hardware_acceleration,
-                             acceleration_method=acceleration_method)
+                             acceleration_method=acceleration_method,
+                             clips_only=clips_only)
         
         if not clips_only:
             # 合并视频拼接逻辑：只有 classic_fast_render 参数不同

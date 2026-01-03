@@ -130,7 +130,8 @@ def get_b50_data_from_fish(username):
         return {"error": f"获取数据失败：{response.status_code}"}
 
 def get_b50_data_from_lxns(friend_code):
-    url = f"https://1315228137-5e9bxr0gaf.ap-guangzhou.tencentscf.com?game=chunithm&player_id={friend_code}"
+    # url = f"https://1315228137-5e9bxr0gaf.ap-guangzhou.tencentscf.com?game=chunithm&player_id={friend_code}"
+    url = f"https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run?source=lxns&game=chunithm&query=best&friend_code={friend_code}"
     # headers = {
     #     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     #     "X-User-Token": friend_code

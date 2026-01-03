@@ -97,7 +97,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
         pages.append(current_page)
     
     # 底部文字
-    addtional_text = "【本视频由基于 mai-genVb50 修改的 chu-gen-Vb30 生成，使用时请标记原作者与修改作者】"
+    addtional_text = "【本视频由基于 mai-genVb50 修改的 chu-gen-Vb30 生成】"
     addtional_txt_clip = TextClip(
         font=font_path, text=addtional_text,
         method="label", font_size=20,
@@ -971,7 +971,7 @@ def render_all_video_clips(
     v_bitrate_kbps, 
     font_path,
     encoder_param: dict,
-    auto_add_transition=True, 
+    auto_add_transition=False, 
     trans_time=1, 
     force_render=False,
     classic_fast_render=False,
@@ -1206,47 +1206,3 @@ def combine_full_video_direct(video_clip_path, username, classic_fast_render=Fal
 #     os.system(cmd)
 
 #     return output_path
-
-    # 渲染失败: generate_complete_video() got an unexpected keyword argument 'encoder_type'
-def generate_complete_video(configs, username, video_output_path, video_res, video_bitrate,
-                            video_trans_enable, video_trans_time, full_last_clip, encoder_param,
-                            acceleration_method="libx264", use_hardware_acceleration=False, font_path=ui_font_path):
-    """生成完整视频的函数
-
-    Args:
-        configs (JSON): 视频配置数据
-        username (str): 用户名
-        video_output_path (str): 视频输出目录
-        video_res (tuple): 视频分辨率
-        video_bitrate (int): 视频码率
-        video_trans_enable (bool): 视频是否已启用过渡效果
-        video_trans_time (float): 过渡效果时长
-        full_last_clip (bool): 最后一个片段是否需要拉长播放时间
-        use_hardware_acceleration (bool, 可选): 是否使用硬件加速（可能没有效果但也试试看（，默认为否）
-        acceleration_method (str, 可选): 硬件加速方法([h264_nvenc/amf/qsv]/libx264)，默认为软编 libx264
-        font_path (str, 可选): 使用的字体，默认为 UI 字体.
-
-    Returns:
-        Message: 视频生成结果
-        
-    Raises:
-        Message: 生成失败原因
-    """
-    print(f"正在合成完整视频")
-    try:
-        final_video = create_full_video_streaming(configs, resolution=video_res, font_path=font_path, 
-                                        auto_add_transition=video_trans_enable, 
-                                        trans_time=video_trans_time, 
-                                        full_last_clip=full_last_clip,
-                                        bitrate=video_bitrate)
-        if use_hardware_acceleration and acceleration_method is not None:
-            final_codec = f"{encoder_param.get('encoder', 'h264')}_{HARD_RENDER_METHOD[acceleration_method]['codec'] if use_hardware_acceleration else acceleration_method}"
-        else:
-            final_codec = "libx264"
-        final_video.write_videofile(os.path.join(video_output_path, f"{username}_Best50.mp4"), codec=final_codec,
-                                    fps=60, threads=8, preset=encoder_param.get('preset_type', 'fast'), bitrate=video_bitrate)
-        final_video.close()
-        return {"status": "success", "info": f"合成完整视频成功"}
-    except Exception as e:
-        print(f"Error: 合成完整视频时发生异常: {traceback.print_exc()}")
-        return {"status": "error", "info": f"合成完整视频时发生错误：{traceback.print_exc()}"}

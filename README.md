@@ -109,152 +109,164 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 ### 安装环境相关
 
-- `ModuleNotFoundError: No module named 'moviepy'`
+#### `ModuleNotFoundError: No module named 'moviepy'`
 
-    请检查是否配置好python环境且 ≥ 3.10，并安装 `requirements.txt` 的所有依赖。
+请检查是否配置好python环境且 ≥ 3.10，并安装 `requirements.txt` 的所有依赖。
 
-- `NameError: name 'sys' is not defined`
+#### `NameError: name 'sys' is not defined`
 
-    你可能手动清理了项目里的 `__pycache__` 文件夹（Release 不会打包此文件夹）
+你可能手动清理了项目里的 `__pycache__` 文件夹（Release 不会打包此文件夹）
 
-    - 需要时间进行编译，大概保留控制台 2 ~ 3 分钟左右重启程序即可
-    - 默认端口 8501，如果当前端口不是这个值，请检查是否还有未关闭的程序
+- 需要时间进行编译，大概保留控制台 2 ~ 3 分钟左右重启程序即可
+- 默认端口 8501，如果当前端口不是这个值，请检查是否还有未关闭的程序
 
-- 出现类似如下的报错：
+#### 出现类似如下的报错：
 
-    ```
-    OSError: [WinError 2] The system cannot find the file specified
-    
-    MoviePy error: the file 'ffmpeg.exe' was not found! Please install ffmpeg on your system, and make sure to set the path to the binary in the PATH environment variable
-    ```
+```
+OSError: [WinError 2] The system cannot find the file specified
 
-    检查python环境和`ffmpeg`是否安装正确，确保其路径已[添加到系统环境变量](https://blog.csdn.net/2401_82486820/article/details/143490683)
+MoviePy error: the file 'ffmpeg.exe' was not found! Please install ffmpeg on your system, and make sure to set the path to the binary in the PATH environment variable
+```
+
+检查 python 环境和`ffmpeg`是否安装正确，确保其路径已[添加到系统环境变量](https://blog.csdn.net/2401_82486820/article/details/143490683)
 
 
 ### 视频抓取相关
 
-- 网络链接问题
+#### “连接尝试失败”
 
-    ```
-    [WinError 10060] 由于连接方在一段时间后没有正确答复或连接的主机没有反应，连接尝试失败。
-    ```
+```
+[WinError 10060] 由于连接方在一段时间后没有正确答复或连接的主机没有反应，连接尝试失败。
+```
 
-    请检查网络连接。如果你使用代理，请检查是否在选择了代理开启的情况下没有打开代理，或代理服务是否正常。
+请检查网络连接。如果你使用代理，请检查是否在选择了代理开启的情况下没有打开代理，或代理服务是否正常。
 
 
-- 下载过程中出现 `httpx.RemoteProtocolError / SSLEOFError / urlopen error`：
+#### 下载过程中出现 `httpx.RemoteProtocolError / SSLEOFError / urlopen error`
 
-    ```
-    httpx.RemoteProtocolError: peer closed connection without sending complete message body
-    ------
-    <urlopen error [Errno 2] No such file or directory>
-    ------
-    ssl.SSLEOFError: EOF occurred in violation of protocol (_ssl.c:2423)
-    ```
+```
+httpx.RemoteProtocolError: peer closed connection without sending complete message body
+------
+<urlopen error [Errno 2] No such file or directory>
+------
+ssl.SSLEOFError: EOF occurred in violation of protocol (_ssl.c:2423)
+```
 
-    重新进入第三步下载页面，直接点击下载视频即可，支持断点续传。
+重新进入第三步下载页面，直接点击下载视频即可，支持断点续传。
 
-- 搜索和下载视频期间出现风控问题：
+#### 搜索和下载视频期间出现风控
 
-    - 使用youtube下载器时，被风控将输出如下错误：
+- 使用youtube下载器时，被风控将输出如下错误：
 
-    ```
-    This request was detected as a bot. Use use_po_token=True to view. 
-    ```
-    你使用的ip地址可能被youtube识别为机器人导致封禁，最简单的办法是尝试更换代理ip后重试。
+```
+This request was detected as a bot. Use use_po_token=True to view. 
+```
+你使用的ip地址可能被youtube识别为机器人导致封禁，最简单的办法是尝试更换代理ip后重试。
 
-    如果更改代理仍然无法解决问题，请尝试配置`PO_TOKEN`或`OAUTH_TOKEN`后抓取视频，这部分需要额外的环境配置和手动操作，请参考[使用自定义OAuth或PO Token](UseTokenGuide.md)。
+如果更改代理仍然无法解决问题，请尝试配置`PO_TOKEN`或`OAUTH_TOKEN`后抓取视频，这部分需要额外的环境配置和手动操作，请参考[使用自定义OAuth或PO Token](UseTokenGuide.md)。
 
-    - 使用bilibili下载器时，被风控将输出如下错误：
+- 使用bilibili下载器时，被风控将输出如下错误：
 
-    ```
-    搜索结果异常，请检查如下输出：'v_voucher': 'voucher_xxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxx'
-    ```
-    说明你未使用bilibili账号登录，或登录后遭到风控。
+```
+搜索结果异常，请检查如下输出：'v_voucher': 'voucher_xxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxx'
+```
+说明你未使用bilibili账号登录，或登录后遭到风控。
 
-    如果登陆账号后仍出现此问题，目前没有较好的解决办法，请考虑等待24h后再试。
+如果登陆账号后仍出现此问题，目前没有较好的解决办法，请考虑等待24h后再试。
 
-- 手动输入视频BV号或ID进行搜索时出现红色报错
+#### 手动输入视频BV号或ID进行搜索时出现红色报错
 
-    - 请尝试删除输入框开头的BV字母。
+- 请尝试删除输入框开头的BV字母。
 
 ### 配置填写相关
+#### 图片文件或视频文件不存在
 
-- 图片文件或视频文件不存在
+![alt text](md_res/qa_1.png)
 
-    ![alt text](md_res/qa_1.png)
+检查是否完成了1-3的图片生成以及视频下载全步骤？
 
-    检查是否完成了1-3的图片生成以及视频下载全步骤？
-    
-    如果确认已经完成并可以在本地文件夹中找到图片和视频，则按照以下步骤操作：
+如果确认已经完成并可以在本地文件夹中找到图片和视频，则按照以下步骤操作：
 
-    - 进入页面下方`危险区域`一栏
-    - 点击`强制刷新视频配置文件`按钮
+- 进入页面下方`危险区域`一栏
+- 点击`强制刷新视频配置文件`按钮
 
-    （注意：将重置已填写的所有评论，如果你在还未填写任何评论的时候遇到该问题，可以进行该操作。否则，请参考下一问）
+（注意：将重置已填写的所有评论，如果你在还未填写任何评论的时候遇到该问题，可以进行该操作。否则，请参考下一问）
 
-    ![alt text](md_res/qa_2.png)
+![alt text](md_res/qa_2.png)
 
 
-- Q：我先填写了部分评论，但是后来b30数据更新了，怎么更新评论？
+#### 我先填写了部分评论，但是后来 b30 数据更新了，怎么更新评论？
 
-    视频配置信息不会随b30数据的更新而自动更新，建议b30推分后建立一个新的存档。
-    如果确实需要复制部分旧存档的评论，请参考如下步骤：
+视频配置信息不会随b30数据的更新而自动更新，建议b30推分后建立一个新的存档。
+如果确实需要复制部分旧存档的评论，请参考如下步骤：
 
-    - 首先新建存档更新b30，在第1-3步将你的b30数据和视频搜索数据都更新到最新。
+- 首先新建存档更新b30，在第1-3步将你的b30数据和视频搜索数据都更新到最新。
 
-    - 保持当前编辑的页面不动，复制浏览器中的地址，打开一个新的页面，以加载历史存档。
-    
-    - 进入页面4-1并对比两个页面的信息以复制粘贴评论内容，手动还原评论和时长配置
-    
+- 保持当前编辑的页面不动，复制浏览器中的地址，打开一个新的页面，以加载历史存档。
+
+- 进入页面4-1并对比两个页面的信息以复制粘贴评论内容，手动还原评论和时长配置
+
 
 ### 视频生成相关
 
-- 提示无法读取某视频文件
+#### 提示无法读取某视频文件
 
-    ```
-    ffmpeg_read: ...\videos\downloads\xxx-x-xx.mp4, 3 bytes wanted but 6 bytes read at frame index 0 (ouf of a total of xx frames) 0.00 sec, Using the last valid frame instead.
-    ```
+```
+ffmpeg_read: ...\videos\downloads\xxx-x-xx.mp4, 3 bytes wanted but 6 bytes read at frame index 0 (ouf of a total of xx frames) 0.00 sec, Using the last valid frame instead.
+```
 
-    检查错误信息中输出的视频名称（如`xxxx-x-xx.mp4`），在`./videos/downloads`文件夹下检查是否存在该文件，且该视频是否可以正常播放。
+检查错误信息中输出的视频名称（如`xxxx-x-xx.mp4`），在`./videos/downloads`文件夹下检查是否存在该文件，且该视频是否可以正常播放。
+如果该视频无法播放，可能意味着下载过程中视频损坏。请删除该视频文件，重新进入第3步下载。
 
-    如果该视频无法播放，可能意味着下载过程中视频损坏。请删除该视频文件，重新进入第3步下载。
-    
-    如果重新下载后依然得到损坏的视频，那么该视频的在线媒体流可能存在问题，请考虑回到第2步，更换其他链接源。
-    
-    > 亦可手动获取对应的正确视频，替换到`./videos/downloads`文件夹下，请注意保持文件名一致。
+如果重新下载后依然得到损坏的视频，那么该视频的在线媒体流可能存在问题，请考虑回到第2步，更换其他链接源。
 
-- 视频生成过程中中断，出现：
+> 亦可手动获取对应的正确视频，替换到`./videos/downloads`文件夹下，请注意保持文件名一致。
 
-    ```
-    _ArrayMemoryError: Unable to allocate xxx MiB for an array with shape (1920, 1080, 3) and data type float64
-    ```
+#### 视频生成过程中中断，出现：
 
-    通常是ffmpeg没有分配足够内存导致的，由于b30视频通常较长且默认高清，部分设备可能会出现内存瓶颈。
+```
+_ArrayMemoryError: Unable to allocate xxx MiB for an array with shape (1920, 1080, 3) and data type float64
+```
 
-    请考虑：
-    
-    - 清理系统运行内存，关闭暂时不使用的后台程序重试
-    - 缩减预览时长，或降低视频分辨率（如果确实要降，请使用预设）
-    - 增加虚拟内存（参考[如何设置虚拟内存](https://www.bilibili.com/video/BV1a142197a9)），建议可以调整至32GB以上
+通常是ffmpeg没有分配足够内存导致的，由于 b30 视频通常较长且默认高清，部分设备可能会出现内存瓶颈。请考虑：
 
-- 视频生成过慢
+- 清理系统运行内存，关闭暂时不使用的后台程序重试
+- 缩减预览时长，或降低视频分辨率（如果确实要降，请使用预设）
+- 增加虚拟内存（参考[如何设置虚拟内存](https://www.bilibili.com/video/BV1a142197a9)），建议可以调整至 32GB 以上
 
-    取决于你设置的预览时长和设备性能，在每个片段10s的情况下，生成完整视频大概需要60-100分钟。
-    
-    如果设备性能不佳，请考虑缩减视频时长，或降低视频分辨率
-    （如果确实要降请使用预设，不推荐自定义，可能导致文字错位）
+#### 视频生成过慢
 
+取决于设置预览时长和设备性能，在每个片段 10s + （正确的）GPU 加速下，生成完整视频大概需要 5 分钟。
+- 请确保您在使用快速渲染时使用了对应您 GPU 品牌的编码器，选择错误的编码器将跳回（慢速）软件编码
 
-- 生成视频后出现 `OSError: [WinError 6] 句柄无效。` 错误
+如果设备性能不佳，请考虑缩减视频时长，或降低视频分辨率（请使用预设，不推荐自定义，可能导致文字错位）
 
-    ```
-    if _WaitForSingleObject(self._handle, 0) == _WAIT_OBJECT_0:
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    OSError: [WinError 6] 句柄无效。
-    ```
+#### 使用 GPU 加速生成
 
-    ffmpeg 没有正常关闭视频文件导致的，不影响最终视频生成，可以忽略。
+1. 打开您的生成器，选择一个已经编写完毕的存档，加载后直接选择最后一步【5. 合成视频】
+2. 在顶部确认您选择的存档是正确的，否则请在上方或管理存档页更换存档
+3. 打开您的任务管理器，转到“性能”页 `（如果你不知道 win11 哪个是性能页，点上面的三条杠，在展开的名字中寻找“性能”两个字）`
+4. 查看在此页最底下的地方是否存在可以被选中的 `GPU` 标签（也就是 GPU 0，GPU 1，GPU 2... 以此类推）
+    - 有些设备可能有多个 GPU 设备，优先看 NVIDIA / AMD `（因为它们多数情况下是以独立 GPU 安装到机器里的）`
+    - 如果您无法确定自己机器内 `AMD / Intel 设备` 是不是独立 GPU，可以询问搜索引擎、懂的人或者 AI 获取答案
+5. 点击这些标签，记下这些 `GPU` 的品牌，随后转回生成器，勾选 `使用 GPU 硬件加速`（如果你不知道其他参数怎么调就别动！）
+6. 在下面的三个单选项中，选择对应您刚刚记下的 `GPU` 品牌，随后展开最下面的 `选择渲染模式` 面板
+7. 选择 `快速渲染`，按需调整 `预设编码参数`，随后点击 `开始渲染` 并等待完成即可。
+    - 本生成器的 `标准渲染` 为原项目的 `快速渲染`，完整生成因排查发现有无法处理的 bug，故已经删除
+    - 使用非独显渲染可能会出现屏幕变黑的情况，此时请保存好存档，关闭生成器重启电脑后再次操作
+      - 多数是因为分配内存量过多导致图形异常所致，这种情况不会损坏您的电脑，只需正常重启即可。
+
+![按照对应 GPU 品牌选择对应的 GPU 加速](md_res/gpu_tutorial.png)
+
+#### 生成视频后出现 `OSError: [WinError 6] 句柄无效。` 错误
+
+```
+if _WaitForSingleObject(self._handle, 0) == _WAIT_OBJECT_0:
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [WinError 6] 句柄无效。
+```
+
+ffmpeg 没有正常关闭视频文件导致的，不影响最终视频生成，可以忽略。
 
 ---
 
@@ -270,11 +282,11 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 - `NO_BILIBILI_CREDENTIAL` ：使用bilibili下载器时，是否禁用bilibili账号登录，默认为`false`。
 
-    > 注意：使用bilibili下载器默认需要账号登录。不使用账号登录可能导致无法下载高分辨率视频，或受到风控
+    注意：使用bilibili下载器默认需要账号登录。不使用账号登录可能导致无法下载高分辨率视频，或受到风控
 
 - `USE_CUSTOM_PO_TOKEN, USE_AUTO_PO_TOKEN, USE_OAUTH, CUSTOMER_PO_TOKEN` ：设置使用youtube下载器抓取视频时的额外验证Token。
 
-    > 参考 [使用自定义 OAuth 或 PO Token](UseTokenGuide.md)
+    参考 [使用自定义 OAuth 或 PO Token](UseTokenGuide.md)
 
 - `SEARCH_MAX_RESULTS` ：搜索视频时，最多搜索到的视频数量。
 

@@ -270,7 +270,15 @@ with st.container(border=True):
                             ),
                             "clip_id": st.column_config.TextColumn(
                                 "剪辑 ID", width="small", required=True, default="PickUp_1",
-                                help="若添加歌曲，您只能以 PickUp_*(数字) 格式添加，此命名将用于左下角的播放曲目排名",
+                                help="""
+如果您需要在存档中添加歌曲：
+
+    （使用已有数据）您只能以 PickUp_*(数字) 格式添加；
+    （使用空白存档）按照 [类型]_[序号] 格式添加，如 Best_1
+    
+此命名将用于左下角的播放曲目排名。
+播放顺序为从下往上，请提前确保您的顺序正确（因为此表格不支持排序）
+                                """,
                                 pinned=True
                             ),
                             "play_count": st.column_config.NumberColumn(

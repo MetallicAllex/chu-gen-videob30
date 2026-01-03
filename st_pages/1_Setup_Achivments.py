@@ -411,6 +411,22 @@ if st.session_state.get('config_saved', False):
                 save_dir = os.path.dirname(current_paths['data_file'])
                 save_id = os.path.basename(save_dir)
                 os.makedirs(save_dir, exist_ok=True)
+                new_data = {
+                    "clip_id": "Best_1",
+                    "id": 1,
+                    "song_name": "koko",
+                    "artist": "先辈",
+                    "score": 114514,
+                    "rating": 1.919,
+                    "level": 8.1,
+                    "level_next": 8.2,
+                    "level_index": 1,
+                    "full_combo": None,
+                    "full_chain": None,
+                    "play_count": 0
+                }
+                with open(f'{save_dir}/b30_config.json', 'w', encoding='utf-8') as f:
+                    print(f'[{json.dumps(new_data, ensure_ascii=False)}]', file=f)
                 st.session_state.save_id = save_id
                 st.success(f"已新建空白存档！用户名：{username}，存档时间：{save_id}", icon="✅")
         
