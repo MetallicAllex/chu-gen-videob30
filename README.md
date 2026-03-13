@@ -39,13 +39,13 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 数据源支持情况：
 
-- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取你的 Best50 数据
+- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取 Best50 数据
 
-- [x] [落雪查分器](https://maimai.lxns.net/)：您需要提供好友码用于获取 Best50 数据
+- [x] [落雪查分器](https://maimai.lxns.net/)：您需要提供好友码，将用于开发者接口中获取 Best50 数据
 
-- [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：因缺少测试样本，我们目前无法支持此数据源
+<!-- - [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：~~因缺少测试样本，我们目前无法支持此数据源~~ -->
 
-<!-- 由于 verse 修改 Rating 机制为 b30 + [b20](https://wikiwiki.jp/chunithmwiki/%E3%83%AC%E3%83%BC%E3%83%86%E3%82%A3%E3%83%B3%E3%82%B0%E3%83%BBOVER%20POWER#h3db37e3)，加上 -->
+- [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：对应的清洗接口已编写完成，剩余上传区域设计
 
 流媒体源支持情况：
 
@@ -176,7 +176,7 @@ This request was detected as a bot. Use use_po_token=True to view.
 
 #### 手动输入视频BV号或ID进行搜索时出现红色报错
 
-- 请尝试删除输入框开头的BV字母。
+- 请尝试删除输入框开头的BV字母，或勾选“直接指定”。
 
 ### 配置填写相关
 #### 图片文件或视频文件不存在
@@ -247,14 +247,14 @@ _ArrayMemoryError: Unable to allocate xxx MiB for an array with shape (1920, 108
 2. 在顶部确认您选择的存档是正确的，否则请在上方或管理存档页更换存档
 3. 打开您的任务管理器，转到“性能”页 `（如果你不知道 win11 哪个是性能页，点上面的三条杠，在展开的名字中寻找“性能”两个字）`
 4. 查看在此页最底下的地方是否存在可以被选中的 `GPU` 标签（也就是 GPU 0，GPU 1，GPU 2... 以此类推）
-    - 有些设备可能有多个 GPU 设备，优先看 NVIDIA / AMD `（因为它们多数情况下是以独立 GPU 安装到机器里的）`
+    - 有些设备可能有多个 GPU，优先看 NVIDIA / AMD `（它们多数情况是以独立 GPU 安装到机器的）`
     - 如果您无法确定自己机器内 `AMD / Intel 设备` 是不是独立 GPU，可以询问搜索引擎、懂的人或者 AI 获取答案
 5. 点击这些标签，记下这些 `GPU` 的品牌，随后转回生成器，勾选 `使用 GPU 硬件加速`（如果你不知道其他参数怎么调就别动！）
 6. 在下面的三个单选项中，选择对应您刚刚记下的 `GPU` 品牌，随后展开最下面的 `选择渲染模式` 面板
 7. 选择 `快速渲染`，按需调整 `预设编码参数`，随后点击 `开始渲染` 并等待完成即可。
-    - 本生成器的 `标准渲染` 为原项目的 `快速渲染`，完整生成因排查发现有无法处理的 bug，故已经删除
-    - 使用非独显渲染可能会出现屏幕变黑的情况，此时请保存好存档，关闭生成器重启电脑后再次操作
-      - 多数是因为分配内存量过多导致图形异常所致，这种情况不会损坏您的电脑，只需正常重启即可。
+    - 本生成器的 `标准渲染` 为原项目的 `快速渲染`，完整生成因发现无法处理的 bug，故已删除
+    - 渲染时屏幕可能会变黑，如果生成中断，请保存好存档，关闭生成器并重启您的电脑后再次操作
+      - 多数是因为分配内存量过多导致显示异常所致，这种情况不会损坏您的电脑，只需正常重启即可。
 
 ![按照对应 GPU 品牌选择对应的 GPU 加速](md_res/gpu_tutorial.png)
 
@@ -376,7 +376,7 @@ ffmpeg 没有正常关闭视频文件导致的，不影响最终视频生成，�
           "score": 1004306,
           "rating": 15.8306,
           "full_combo": null,
-          "main_image": "b50_datas\\test\\20250327_162029\\images\\Best_30.png",
+          "main_image": "b30_datas\\test\\20250327_162029\\images\\Best_30.png",
           "video": "videos\\downloads\\678-3.mp4",
           "duration": 24,
           "start": 36,
@@ -393,4 +393,4 @@ ffmpeg 没有正常关闭视频文件导致的，不影响最终视频生成，�
 
 - [bilibili-api](https://github.com/Nemo2011/bilibili-api) 
 
-- [mai-gen-Vb50 ](https://github.com/Nick-bit233/mai-gen-videob50)原始项目
+- [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 原始项目

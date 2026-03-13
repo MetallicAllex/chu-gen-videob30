@@ -144,6 +144,11 @@ ENV/
 env.bak/
 venv.bak/
 b50/
+st_pages/sortable-code.txt
+st_pages/Custom_Video_Style_Config.py
+st_pages/2_Search_For_Videoes_old.py
+utils/video_crawler_old.py
+utils/TextRenderer.py
 
 # Spyder project settings
 .spyderproject
@@ -188,4 +193,4 @@ ffmpeg.exe
 start.bat
 ffmpeg2.exe
 global_config.yaml
-chu-gen-videob30_v0.5.zip
+chu-gen-videob30_v0.5-bugfix4.zip

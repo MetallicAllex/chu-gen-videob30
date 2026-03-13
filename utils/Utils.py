@@ -1,6 +1,7 @@
-import json, requests, hashlib, requests, json, os, base64, datetime
+import json, requests, hashlib, requests, json, os, base64, datetime, subprocess, re
 from pathlib import Path
 from PIL import Image
+from utils.PageUtils import *
 
 # ========== 类型定义 ==========
 class Utils:
@@ -8,7 +9,7 @@ class Utils:
         UserId = InputUserID
         if UserId != 0:
             try:
-                with open(f"./b30_datas/{UserId}_b30.json") as file:
+                with open(f"./b30_datas/{UserId}/b30_raw.json") as file:
                     UserB30Data = json.load(file)
             except FileNotFoundError:
                 print("错误：未找到 JSON 文件。")
@@ -19,7 +20,7 @@ class Utils:
 
 def format_time_difference(seconds):
     """
-    格式化时间差，隐藏为0的单位
+    格式化时间差，隐藏为 0 的单位
     """
     if seconds < 1:
         return f"{seconds*1000:.1f}ms"
@@ -31,7 +32,7 @@ def format_time_difference(seconds):
     parts = []
     
     if hours > 0:
-        parts.append(f"{hours} 小时")
+        parts.append(f" {hours} 小时")
     if minutes > 0:
         parts.append(f" {minutes} 分")
     if seconds_remaining > 0 or not parts:  # 如果没有其他单位，至少显示秒
@@ -74,15 +75,12 @@ def add_layer(base_image, layer_image, position=(0, 0), opacity=1.0):
 
 def get_keyword(downloader_type, title_name, level_index):
     if not level_index:
-        print(f"警告: 谱面{title_name}具有未指定的难度！")
+        print(f"警告: 谱面【{title_name}】具有未指定的难度！")
     return (
         f"{title_name} {level_index} (譜面確認) [CHUNITHM チュウニズム]"
         if downloader_type == "youtube"
         else f"【CHUNITHM/中二节奏】谱面确认 {title_name} {level_index}"
     )
-
-import subprocess
-import re
 
 def get_ffmpeg_version():
     try:
@@ -103,10 +101,6 @@ def get_ffmpeg_version():
         return "FFmpeg 未安装或不在 PATH 中"
     except subprocess.CalledProcessError as e:
         return f"命令执行错误: {e}"
-
-# # 使用示例
-# version = get_ffmpeg_version()
-# print(f"FFmpeg 版本: {version}")
 
 def get_b50_data_from_fish(username):
     url = "https://www.diving-fish.com/api/chunithmprober/query/player"
@@ -130,12 +124,7 @@ def get_b50_data_from_fish(username):
         return {"error": f"获取数据失败：{response.status_code}"}
 
 def get_b50_data_from_lxns(friend_code):
-    # url = f"https://1315228137-5e9bxr0gaf.ap-guangzhou.tencentscf.com?game=chunithm&player_id={friend_code}"
     url = f"https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run?source=lxns&game=chunithm&query=best&friend_code={friend_code}"
-    # headers = {
-    #     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    #     "X-User-Token": friend_code
-    # }
     
     try:
         response = requests.get(url, timeout=10)
@@ -197,27 +186,27 @@ def should_update_metadata(threshold_hours=24):
     
     # 如果配置文件不存在，则创建并立即返回True
     if not config_file.exists():
-        with open(config_file, "w") as f:
-            json.dump({"last_update": current_time.isoformat()}, f)
+        # with open(config_file, "w") as f:
+        #     json.dump({"last_update": current_time.isoformat()}, f)
+        save_config(config_file, {"last_update": current_time.isoformat()})
         return True
     
     # 读取上次更新时间
     try:
-        with open(config_file, "r") as f:
-            data = json.load(f)
-            last_update = datetime.datetime.fromisoformat(data.get("last_update", "2000-01-01T00:00:00"))
+        data = load_config(config_file)
+        last_update = datetime.datetime.fromisoformat(data.get("last_update", "2000-01-01T00:00:00"))
     except (json.JSONDecodeError, ValueError):
         # 文件损坏或格式错误，重新创建
-        with open(config_file, "w") as f:
-            json.dump({"last_update": current_time.isoformat()}, f)
+        # with open(config_file, "w") as f:
+        #     json.dump({"last_update": current_time.isoformat()}, f)
+        save_config(config_file, {"last_update": current_time.isoformat()})
         return True
     
     # 计算时间差
     time_diff = current_time - last_update
     if time_diff.total_seconds() / 3600 >= threshold_hours:
         # 更新时间戳
-        with open(config_file, "w") as f:
-            json.dump({"last_update": current_time.isoformat()}, f)
+        save_config(config_file, {"last_update": current_time.isoformat()})
         return True
     
     return False
@@ -245,31 +234,22 @@ def _fetch_music_data(name, url, filepath, transformer=None):
             data = transformer(data)
 
         if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
-            with open(filepath, "w", encoding="utf-8") as file:
-                json.dump(data, file, ensure_ascii=False, indent=4)
+            save_config(filepath, data)
             print(f"✅ （{name}）已下载所需的谱面数据[{json_hash(data)}]")
             return
 
-        with open(filepath, "r", encoding="utf-8") as file:
-            local_data = json.load(file)
+        local_data = load_config(filepath)
 
         if json_hash(data) != json_hash(local_data):
-            with open(filepath, "w", encoding="utf-8") as file:
-                json.dump(data, file, ensure_ascii=False, indent=4)
-            print(f"🔄 （{name}）谱面数据成功更新[{json_hash(data)}]")
+            save_config(filepath, data)
+            print(f"🔄［{name}］谱面数据成功更新[{json_hash(data)}]")
         else:
-            print(f"☑️ （{name}）谱面数据已是最新[{json_hash(local_data)}]")
+            print(f"☑️［{name}］谱面数据已是最新[{json_hash(local_data)}]")
 
     except Exception as e:
-        print(f"❌ （{name}）获取谱面数据时出错：{e}")
+        print(f"❌［{name}］获取谱面数据时出错：{e}")
 
 def fetch_music_data_with_cache(threshold_hours=24):
-    """
-    带缓存检查的音乐数据获取函数
-    
-    Args:
-        threshold_hours: 缓存时间阈值（小时）
-    """
     # 检查是否需要更新
     if not should_update_metadata(threshold_hours):
         print("⏩ 未达到更新阈值，跳过数据更新")
@@ -310,12 +290,12 @@ def fetch_music_data_with_cache(threshold_hours=24):
         transformer=transformer
     )
     
-    print("✅ 音乐数据更新完成")
+    print("✅ 谱面数据更新完成")
 
 # 保留原有的 fetch_music_data 函数用于直接调用（不检查缓存）
 def fetch_music_data():
     """
-    直接获取音乐数据（不检查缓存时间）
+    直接获取谱面数据（不检查缓存时间）
     """
     _fetch_music_data(
         name="国服",

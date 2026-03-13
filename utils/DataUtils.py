@@ -1,12 +1,12 @@
-import json, threading, random, os, time, random
-import streamlit as st
 import pandas as pd
-from utils.Utils import music_info_path, jp_music_info_path
+import streamlit as st
+from utils.PageUtils import *
+import json, random, os, random
 from concurrent.futures import ThreadPoolExecutor
-from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE
-from utils.Utils import get_b50_data_from_lxns, get_b50_data_from_fish, get_keyword
+from utils.Utils import music_info_path, jp_music_info_path
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
-from utils.Variables import REVERSE_LEVEL_LABELS
+from utils.Utils import get_b50_data_from_lxns, get_b50_data_from_fish, get_keyword
+from utils.Variables import LEVEL_LABELS, REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE, CHUNI_COMBO_TYPES
 
 def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, best_or_new: str):
     """
@@ -14,7 +14,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
     
     Args:
         raw_data: 请求获取的原始数据
-        source_type(str): 数据源类型：[水鱼或落雪]
+        source_type(str): 数据源类型：[水鱼 / 落雪 / 国际服]
         b50_raw_file: Best50 原始数据存储文件名
         b50_data_file: Best50 清洗数据存储文件名
         best_or_new(str): 数据类型: [全都要(b30 + n20), 仅新曲(n20), 仅旧曲(b30)]
@@ -39,11 +39,8 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
     #         print(f"r10 数据长度: {len(raw_data['records'].get('r10', []))}")
 
     # 1. 加载本地曲目数据库
-    with open(music_info_path, 'r', encoding='utf-8') as f:
-        song_db = json.load(f)
-    
-    with open(jp_music_info_path, 'r', encoding='utf-8') as j:
-        jp_song_db = json.load(j)
+    song_db = load_config(music_info_path)
+    jp_song_db = load_config(jp_music_info_path)
 
     # 2. 根据数据源类型提取字段映射规则
     field_map = {
@@ -67,6 +64,17 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
             "rating": "ra",
             "fc": "fc",
             "fchain": None,
+            "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
+        },
+        "intr": {
+            "id": "idx",
+            "song_name": "title", 
+            "level": None,
+            "level_index": "difficulty", # 下面已经处理这个字段的信息了，这里不需要处理
+            "score": "score",
+            "rating": None,
+            "fc": CHUNI_COMBO_TYPES[2] if "isAllJustice" else (CHUNI_COMBO_TYPES[1] if "isFullCombo" else CHUNI_COMBO_TYPES[0]),
+            "fchain": "fullChainLv",
             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
         }
     }
@@ -126,17 +134,15 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
     if len(b50_data) == 0:
         print("错误：无法提取到任何有效数据")
         # 保存原始数据用于调试
-        with open(b50_raw_file, 'w', encoding='utf-8') as f:
-            json.dump(raw_data, f, ensure_ascii=False, indent=4)
+        save_config(b50_raw_file, raw_data)
         return []
 
     # 4. 缓存原始数据
-    with open(b50_raw_file, 'w', encoding='utf-8') as f:
-        json.dump(raw_data, f, ensure_ascii=False, indent=4)
+    save_config(b50_raw_file, raw_data)
 
     # 5. 多线程处理每条曲目数据
     processed_data = []
-    print_lock = threading.Lock()
+    # print_lock = threading.Lock()
     
     def process_song(song, i):
         try:
@@ -161,7 +167,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
                 "rating": song[fields["rating"]],
                 "level": song[fields["level"]] if fields["level"] is not None else None,
                 "level_next": None,
-                "level_index": song[fields["level_index"]],
+                "level_index": LEVEL_LABELS[song[fields["level_index".upper()]]] if source_type == "intr" else song[fields["level_index"]],
                 "full_combo": song.get(fields["fc"]) if fields["fc"] is not None else None,
                 "full_chain": song.get(fields["fchain"]) if fields["fchain"] is not None else None,
                 "play_count": None
@@ -169,10 +175,10 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
 
             print(f"【处理后】曲目基础信息: {processed_song['song_name']} - ID: {processed_song['id']}")
 
-            # 从本地数据库匹配曲目信息
+            # 从国服数据库匹配曲目信息
             song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
-            if song_info:
-                print(f"找到本地数据库匹配: {song_info['title']}")
+            if song_info or source_type != "intr":
+                print(f"检索到国服数据库匹配: {song_info['title']}")
                 processed_song["artist"] = song_info["artist"]
                 for diff in song_info.get("difficulties", []):
                     if diff.get("difficulty") == processed_song["level_index"]:
@@ -181,9 +187,9 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
                         print(f"更新难度等级: {processed_song['level']}")
                         break
                 else:
-                    print(f"警告：【{processed_song['song_name']}】未找到 {processed_song['level_index']} 难度")
+                    print(f"警告：［{processed_song['song_name']}］未找到 {processed_song['level_index']} 难度")
             else:
-                print(f"警告：未找到【{processed_song['song_name']}】的信息")
+                print(f"警告：未找到［{processed_song['song_name']}］的信息")
 
             # 从日服数据库匹配日服曲目信息
             jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
@@ -221,13 +227,12 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
             if result := future.result():
                 processed_data.append(result)
 
-    print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===\n若需要添加 PickUp 曲目，请按照 b30_config.json 中的格式编写")
+    print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===\n若需要添加 PickUp 曲目，请按照 b50_config.json 中的格式编写")
     # 6. 保存处理后的数据
-    with open(b50_data_file, 'w', encoding='utf-8') as f:
-        json.dump(processed_data, f, ensure_ascii=False, indent=4)
+    save_config(b50_data_file, processed_data)
     return processed_data
 
-def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
+def gen_video_config(b50_data, images_path, videoes_path, output_file,
                             clip_start_interval, clip_play_time, default_comment_placeholders):
     """生成视频配置文件，合并了 `st_gen_resource_config` 和 `gene_resource_config`
     
@@ -258,6 +263,7 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
         "id": "intro_1",
         "duration": 10,
         "text": "【请填写前言部分】" if default_comment_placeholders else "",
+        "bg_page": False
         # "version": "LUMINOUS"
     }
 
@@ -265,11 +271,11 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
         "id": "ending_1",
         "duration": 10,
         "text": "【请填写后记部分】" if default_comment_placeholders else "",
+        "bg_page": False
         # "version": "LUMINOUS"
     }
 
     video_config_data = {
-        "enable_re_modify": False,
         "intro": [intro_clip_data],
         "ending": [ending_clip_data],
         "main": [],
@@ -323,26 +329,25 @@ def st_gen_resource_config(b50_data, images_path, videoes_path, output_file,
             "duration": duration,
             "start": start,
             "end": end,
-            "text": "【请填写 Best50 评价（不支持显示 Emoji，如需要请在剪辑时另外添加）】" if default_comment_placeholders else "",
+            "text": "【请填写 Best50 评价（不支持显示 Emoji）】" if default_comment_placeholders else "",
+            # "skip": False
         }
         main_clips.append(main_clip_data)
 
     # 倒序排列（b30在前，b1在后）
-    main_clips.reverse()
+    # main_clips.reverse() # 此行代码已在生成图像的步骤被代替
 
     video_config_data["main"] = main_clips
 
     # 写入到输出文件
-    with open(output_file, 'w', encoding="utf-8") as file:
-        json.dump(video_config_data, file, ensure_ascii=False, indent=4)
-
+    save_config(output_file, video_config_data)
+    
     return video_config_data
 
 def load_config_with_types(file_path):
     """加载配置并确保正确的数据类型"""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        data = load_config(file_path)
         
         # 数据类型转换
         for item in data:
@@ -395,8 +400,7 @@ def save_config_with_types(file_path, data):
             data_to_save.append(cleaned_item)
         
         # 保存为JSON，确保null值正确序列化
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        save_config(file_path, data_to_save)
         
         return True
     except Exception as e:
@@ -474,7 +478,7 @@ def search_one_video(downloader, song_data):
     videos = downloader.search_video(keyword)
 
     if len(videos) == 0:
-        output_info = f"Error: 没有找到{title_name}-({level_index})的视频"
+        output_info = f"错误：没有找到{title_name}-({level_index})的视频"
         # output_info = f"Error: 没有找到{title_name}-{difficulty_name}({level_index})-{type}的视频"
         print(output_info)
         song_data['video_info_list'] = []
@@ -489,30 +493,27 @@ def search_one_video(downloader, song_data):
     song_data['video_info_match'] = videos[match_index]
     return song_data, output_info
 
-
-def search_b30_videos(downloader, b50_data, b50_data_file, search_wait_time=(0,0)):
-    global search_max_results, downloader_type
-
-    i = 0
-    for song in b50_data:
-        i += 1
-        # Skip if video info already exists and is not empty
-        if 'video_info_match' in song and song['video_info_match']:
-            print(f"跳过({i}/30): {song['title']} ，已储存有相关视频信息")
-            continue
-        
-        print(f"正在搜索视频({i}/30): {song['title']}")
-        song_data = search_one_video(downloader, song)
-
-        # 每次搜索后都写入b50_data_file
-        with open(b50_data_file, "w", encoding="utf-8") as f:
-            json.dump(b50_data, f, ensure_ascii=False, indent=4)
-        
-        # 等待几秒，以减少被检测为bot的风险
-        if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
-            time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
+# def download_one_video(downloader, song, video_download_path, high_res=False):
+#     """同步版本的视频下载函数"""
+#     clip_name = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
+#     video_path = os.path.join(video_download_path, f"{clip_name}.mp4")
     
-    return b50_data
+#     # 同步检查缓存
+#     if os.path.exists(video_path):
+#         message = f"已找到【{song['song_name']}】的缓存: {clip_name}"
+#         print(message.encode('gbk', errors='replace').decode('gbk'))
+#         return {"status": "skip", "info": message}
+    
+#     # 原有下载逻辑保持不变
+#     if 'video_info_match' not in song or not song['video_info_match']:
+#         print(f"错误: 没有【{song['title']}-{song['level_label']}】的视频信息")
+#         return {"status": "error", "info": f"错误: 没有【{song['title']}-{song['level_label']}】的视频信息"}
+    
+#     video_info = song['video_info_match']
+#     v_id = video_info['id'] 
+#     downloader.download_video(v_id, clip_name, video_download_path, high_res=high_res)
+    
+#     return {"status": "success", "info": f"下载【{song['song_name']}】（{clip_name}）完成"}
 
 def download_one_video(downloader, song, video_download_path, high_res=False):
     """同步版本的视频下载函数"""
@@ -532,7 +533,12 @@ def download_one_video(downloader, song, video_download_path, high_res=False):
     
     video_info = song['video_info_match']
     v_id = video_info['id'] 
-    downloader.download_video(v_id, clip_name, video_download_path, high_res=high_res)
+    
+    # 获取分P索引（默认为 0）
+    p_index = video_info.get('p_index', 0)
+    
+    # 修复：添加 p_index 参数
+    downloader.download_video(v_id, clip_name, video_download_path, high_res=high_res, p_index=p_index)  # 添加 p_index
     
     return {"status": "success", "info": f"下载【{song['song_name']}】（{clip_name}）完成"}
 

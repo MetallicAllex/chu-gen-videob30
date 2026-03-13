@@ -45,34 +45,15 @@ def get_splited_text(text, text_max_bytes=70):
     
     return lines
 
-# def blur_image(image_path, blur_radius=5):
-#     """
-#     对图片进行高斯模糊处理
-    
-#     Args:
-#         image_path (str): 图片路径
-#         blur_radius (int): 模糊半径，默认为10
-        
-#     Returns:
-#         numpy.ndarray: 模糊处理后的图片数组
-#     """
-#     try:
-#         pil_image = Image.open(image_path)
-#         blurred_image = pil_image.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-#         # 将模糊后的图片转换为 numpy 数组
-#         return np.array(blurred_image)
-#     except Exception as e:
-#         print(f"Warning: 图片模糊处理失败 - {str(e)}")
-#         return np.array(Image.open(image_path))
-
 def create_blank_image(width, height, color=(0, 0, 0, 0)):
     """
-    创建一个透明的图片
+    创建一张透明图
     """
     # 创建一个RGBA模式的空白图片
-    image = Image.new('RGBA', (width, height), color)
-    # 转换为numpy数组，moviepy需要这种格式
-    return np.array(image)
+    # image = Image.new('RGBA', (width, height), color)
+    # 创建一个RGBA模式的空白图片，转换为numpy数组并返回（moviepy 需要这种格式）
+    return np.array(Image.new('RGBA', (width, height), color))
+    # return np.array(image)
 
 def FrameLoader(level_index: int = 0):
     with Image.open(f"{image_root_path}/Frames/{level_index}.png") as _frame:
@@ -288,7 +269,7 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
         Draw.text(text_pos, text, fill=font_color, font=Font)
         return image
 
-def generate_single_image(record_detail: dict, output_path, prefix, index):
+def generate_single_image(record_detail: dict, style_config: dict, output_path, prefix, index: int):
     """
     生成单个 Best50 成绩记录图。
 
@@ -304,18 +285,23 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
             - clip_id (str): 标识符
             - level (float): 当前定数
             - level_next (float): 下版本定数
+        style_config (dict): 元素坐标，用于读取 customization.json 文件
         output_path (str): 输出目录
         prefix (str): 文件名前缀
         index (int): 索引编号
         verse_mode (bool): 是否显示定数变化模式
 
     Returns:
-        None
+        file: Best50 图像
     """
     background = None
+    position = style_config['position']['image']
+    size = style_config['size']
+    color = style_config['color']
+    max_width = style_config['maxWidth']
     try:
         assert record_detail['level_index'] in range(0, 5)
-        image_base_path = os.path.join(os.getcwd(), f"{image_root_path}/content_base_chunithm_verse.png")
+        image_base_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
         with Image.open(image_base_path) as background:
             background = background.convert("RGBA")
             assert background.size == (1920, 1080)
@@ -324,21 +310,30 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
             temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
             
             # 边框
+            # frame_pos = (65, 32)
+            frame_pos = position['frame']
             frame = FrameLoader(record_detail['level_index'])
             # 确保frame是RGBA模式
             if frame.mode != 'RGBA':
                 frame = frame.convert('RGBA')
-            temp_img.paste(frame, (65, 32), frame)
+            temp_img.paste(frame, frame_pos, frame)
             
             # 等级
+            # level_pos = (100, 884) # x 坐标 + 4（发现已偏移 4px）
+            level_pos = position['level']['integer']
             level = LevelLoader(record_detail['level'], record_detail['level_next'])
             if level.mode != 'RGBA':
                 level = level.convert('RGBA')
-            temp_img.paste(level, (98, 884), level)
+            temp_img.paste(level, level_pos, level)
             
             # 定数
-            cur_pos = (1562, 1018)
-            next_pos = (1756, 1018)
+            # cur_pos = (1562, 1018)
+            # next_pos = (1756, 1018)
+            cur_pos = position['level']['current']
+            next_pos = position['level']['next']
+            cur_color = color['level']['current']
+            next_color = color['level']['next']
+            # 成绩数据
             cur_level = record_detail['level']
             next_level = record_detail['level_next']
             cur_text = str(cur_level)
@@ -361,47 +356,54 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
                                  font_size=45, font_color=(77, 77, 77), h_align="center")
             
             # 分数
-            score_pos = (706, 958)
+            # score_pos = (706, 958)
+            score_pos = position['score']
             score = ScoreLoader(record_detail["score"])
             if score.mode != 'RGBA':
                 score = score.convert('RGBA')
             temp_img.paste(score, score_pos, score)
 
             # Rating
-            rating_pos = (1216, 980)
+            # rating_pos = (1216, 980)
+            rating_pos = position['rating']
             rating = RatingLoader(record_detail["rating"])
             if rating.mode != 'RGBA':
                 rating = rating.convert('RGBA')
             temp_img.paste(rating, rating_pos, rating)
 
             # Combo
-            combo_pos = (424, 971)
+            # combo_pos = (424, 971)
+            combo_pos = position['combo']
             combo_status = ComboStatusLoader(record_detail['full_combo'], record_detail['score']).resize([243, 40], Resampling.LANCZOS)
             if combo_status.mode != 'RGBA':
                 combo_status = combo_status.convert('RGBA')
             temp_img.paste(combo_status, combo_pos, combo_status)
 
             # Chain
-            chain_pos = (423, 1015)
+            # chain_pos = (423, 1015)
+            chain_pos = position['chain']
             chain_status = ChainStatusLoader(record_detail['full_chain']).resize([243, 40], Resampling.LANCZOS)
             if chain_status.mode != 'RGBA':
                 chain_status = chain_status.convert('RGBA')
             temp_img.paste(chain_status, chain_pos, chain_status)
 
             # 标题
-            title_pos = (234, 876)
+            # title_pos = (234, 876)
+            title_pos = position['title']
             temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=900,
                                  font_path=title_font_path, font_size=48,
                                  font_color=(26, 0, 84), h_align="left")
             
             # 曲师
-            artist_pos = (234, 936)
+            # artist_pos = (234, 936)
+            artist_pos = position['artist']
             temp_img = TextDraw(temp_img, record_detail['artist'], artist_pos, max_width=420,
                                  font_path=title_font_path, font_size=36,
                                  font_color=(26, 0, 84), h_align="left")
             
             # Best 序号
-            best_pos = (245, 1017)
+            # best_pos = (245, 1017)
+            best_pos = position['best']
             temp_img = TextDraw(temp_img, f"{prefix} #{index}", best_pos, max_width=200,
                                 font_path=title_font_path, font_size=28,
                                 font_color=(255, 255, 255), h_align="center")
@@ -416,22 +418,25 @@ def generate_single_image(record_detail: dict, output_path, prefix, index):
                 # 载入游玩次数背景图标
                 play_count_base_path = os.path.join(os.getcwd(), f"{image_root_path}/Playcount/PlayCountBase.png")
                 with Image.open(play_count_base_path) as play_count_base:
+                    # play_count_base_pos = (1170, 840)
+                    play_count_base_pos = position['playCount']['base']
                     if play_count_base.mode != 'RGBA':
                         play_count_base = play_count_base.convert('RGBA')
-                    temp_img.paste(play_count_base, (1170, 840), play_count_base)
+                    temp_img.paste(play_count_base, play_count_base_pos, play_count_base)
                 
                 # 绘制游玩次数文字
-                text_central_position = (1350, 860)
+                # text_central_pos = (1359, 865)
+                text_central_pos = position['playCount']['text']
                 play_count_text = str(PlayCount)
-                temp_img = TextDraw(temp_img, play_count_text, text_central_position,
-                                   font_path=title_font_path, font_size=24,
-                                   font_color=(255, 152, 0), h_align="center")
+                temp_img = TextDraw(temp_img, play_count_text, text_central_pos,
+                                   font_path=title_font_path, font_size=30,
+                                   font_color=(248, 34, 117), h_align="center")
             
             # 将temp_img合成到background上
             background = Image.alpha_composite(background, temp_img)
     except Exception as e:
             print(f"在生成图像时出现错误：{e}")
             print(traceback.format_exc())
-            background = Image.new('RGBA', (1520, 500), (0, 0, 0, 255))
+            background = Image.new('RGBA', background.size, (0, 0, 0, 255))
     finally:
         background.save(os.path.join(output_path, f"{prefix}_{index}.png"))

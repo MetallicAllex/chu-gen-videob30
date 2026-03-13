@@ -31,7 +31,7 @@ with col1:
     }
     </style>
     """, unsafe_allow_html=True)
-    st.image("md_res/icon.png", width=300)
+    st.image("md_res/icon.png", width=400)
     
 with col2:
     st.markdown("""
@@ -101,19 +101,20 @@ with col2:
     </div>
     
     <div style="text-align: left; margin-top: 15px;">
-        <div class="version-info">版本：<span style="font-weight: bold;">[基于 mai-gen-videob30 修改] v0.5-bugfix4</span></div>
-        <div class="guide-info">请按照引导操作以生成您的 Best30 视频。</div>
+        <div class="version-info">当前版本为：<span style="font-weight: bold;">[基于 mai-gen-videob30 修改] v0.6</span></div>
+        <div class="guide-info">请按照引导步骤进行操作，以生成您的 Best30 视频。</div>
     </div>
     """, unsafe_allow_html=True)
-    st.write(f"ffmpeg 版本：`{get_ffmpeg_version()}`")
+    st.write("使用过程遇到任何问题，前往 [GitHub 发起 issue](https://github.com/MetallicAllex/chu-gen-videob30/issues) 或 [加入 QQ 群](https://qm.qq.com/q/nFriOm4ZlS) 反馈")
+    # st.write(f"当前使用的 FFmpeg 版本为 `{get_ffmpeg_version()}`")
     # st.markdown("请按照下列引导步骤操作，以生成您的 Best30 视频。")
 
-st.info("""
-        在开始使用前，请先阅读以下注意事项：
-        - 缓存数据均保存在本地，如在编辑过程中意外退出，可加载已有存档继续编辑。
-        - 使用时请不要随意刷新，这可能会导致索引丢失。
-            - 发生此情况时，请重新加载存档并检查数据完整性。""", icon="ℹ️")
-st.success("使用过程中遇到任何问题，前往 [GitHub 发起 issue](https://github.com/MetallicAllex/chu-gen-videob30/issues) 或 [加入 QQ 群](https://qm.qq.com/q/nFriOm4ZlS) 反馈", icon="✅")
+    st.info("""
+            在开始使用前，请阅读以下注意事项：（1080p+ 屏幕建议缩放 125% 使用）
+            - 缓存数据均保存在本地，如在编辑过程中意外退出，可加载已有存档继续编辑。
+            - 使用时请不要随意刷新，这可能会导致索引丢失。
+                - 发生此情况时，请重新加载存档并检查数据完整性。""", icon="ℹ️")
+# st.success("使用过程中遇到任何问题，前往 [GitHub 发起 issue](https://github.com/MetallicAllex/chu-gen-videob30/issues) 或 [加入 QQ 群](https://qm.qq.com/q/nFriOm4ZlS) 反馈", icon="✅")
 # st.error("""
 #          【落雪用户】本项目中部分操作会涉及您的查分器 Token，请注意以下四点：
 #          - 该密钥对你查分器账号绑定的游戏数据拥有完全访问权限
@@ -124,9 +125,10 @@ st.success("使用过程中遇到任何问题，前往 [GitHub 发起 issue](htt
 metadata_status = os.path.exists(music_info_path) and os.path.exists(jp_music_info_path)
 if not metadata_status:
     st.warning("""
-               注意！您的包体（目前）未拥有谱面数据
-               - 刚下载的新包体**默认未携带谱面数据**，请先下载后再开始
+               注意！您的包体（目前）未拥有谱面数据。
+               - 刚下载的新包体**默认未携带谱面数据**，请先下载
                - **已经使用过但未存在谱面数据**，可能是被误删除，请重新下载
+                 - 请于下方的 **（附加设置）下载或更新谱面数据** 中操作
                """, icon="⚠️")
     
 col1, col2 = st.columns([.45, 1], vertical_alignment="center")
@@ -134,17 +136,18 @@ with col1:
     st.write("准备好时，单击右边按钮开始")
 
 with col2:
-    if st.button("开始使用", icon="▶️", disabled=not metadata_status, help="请确保您已拥有谱面数据", use_container_width=True):
+    if st.button("开始使用", icon="▶️", disabled=not metadata_status, help="请确保您已拥有谱面数据", width='stretch'):
         st.switch_page("st_pages/1_Setup_Achivments.py")
 
 st.divider()
-with st.expander("附加选项（谱面数据更新）"):
+with st.expander("（附加设置）下载或更新谱面数据", icon="🔄️"):
     st.warning("""
-               若谱面数据不正确或已经修改（如游戏更新添加了新数据等），请及时更新
-               - 此时间是基于生成器上次启动时间计算的，请以实际为准。
+               若未拥有谱面数据，不正确或已修改（如添加了新歌曲等），请及时更新
+               - 此时间基于生成器上次启动时间计算，请以实际为准。
                """, icon="⚠️")
     update_status = should_update_metadata(24)
-    update_help_text = "最近更新在 24 小时内" if update_status == False else "最近更新时间已超 24 小时"
+    update_hint = "是在 24 小时内" if update_status == False else "已超 24 小时"
+    st.info(f"您上次完成更新的时间{update_hint}", icon="ℹ️")
     # col1, col2 = st.columns(2, vertical_alignment="center")
     # with col1:
     #     if update_status == False:
@@ -152,7 +155,7 @@ with st.expander("附加选项（谱面数据更新）"):
     #     else:
     #         st.error("最近一次更新已超过 24 小时", icon="⚠️")
     # with col2:
-    if st.button(f"更新谱面数据（{update_help_text}）", help=update_help_text, icon="🔄️", use_container_width=True):
+    if st.button(f"更新谱面数据", icon="🔄️", width='stretch'):
         fetch_music_data()
         st.toast("谱面数据更新完成！3 秒后刷新", icon="✅")
         time.sleep(3)

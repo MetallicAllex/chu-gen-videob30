@@ -5,67 +5,10 @@ from utils.PageUtils import *
 from utils.PathUtils import *
 from utils.DataUtils import *
 
-def convert_old_files(folder, username, save_paths):
-    """
-    遍历文件夹下的所有json文件，将文件名中包含用户名的旧文件名转换为不包含用户名的格式。
-    例如，将 "xxx_xxx_{username}_xxx.json" 重命名为 "xxx_xxx_xxx.json"。
-    """
-    files_to_rename = []
-    patterns = [
-        f"*_{username}_*.json",
-        f"{username}_*.json",
-        f"*_{username}.json"
-    ]
-    
-    for pattern in patterns:
-        files_to_rename.extend(glob.glob(os.path.join(folder, pattern)))
-    
-    files_to_rename = list(set(files_to_rename))  # 去重
-    if not files_to_rename:
-        print("未找到需要转换的文件。")
-
-    for old_filename in files_to_rename:
-        basename = os.path.basename(old_filename)
-        # 移除.json后缀
-        name_without_ext = os.path.splitext(basename)[0]
-        
-        # 直接替换文件名中的用户名部分
-        if name_without_ext.endswith(f"_{username}"):
-            new_name = name_without_ext[:-len(f"_{username}")]
-        elif name_without_ext.startswith(f"{username}_"):
-            new_name = name_without_ext[len(f"{username}_"):]
-        else:
-            new_name = name_without_ext.replace(f"_{username}_", "_")
-        
-        # 添加回.json后缀
-        new_name = f"{new_name}.json"
-        new_filename = os.path.join(folder, new_name)
-        
-        if new_filename != old_filename:
-            os.rename(old_filename, new_filename)
-            print(f"重命名完成: {basename} -> {new_name}")
-        else:
-            print(f"跳过文件: {basename} (无需修改)")
-    st.success("文件名转换完成！", icon="✅")
-
-    # 修改video_configs文件中的image path
-    video_config_file = save_paths['video_config']
-    print(video_config_file)
-    if not os.path.exists(video_config_file):
-        st.error("未找到video_config文件！请检查是否已将完整旧版数据文件复制到新的文件夹！", icon="❌")
-        return
-    try:
-        video_config = load_config(video_config_file)
-        main_clips = video_config['main']
-        for each in main_clips:
-            id = each['id']
-            __image_path = os.path.join(save_paths['image_dir'], id + ".png")
-            __image_path = os.path.normpath(__image_path)
-            each['main_image'] = __image_path
-        save_config(video_config_file, video_config)          
-        st.success("配置信息转换完成！", icon="✅")
-    except Exception as e:
-        st.error(f"转换video_config文件时发生错误: {e}", icon="⚠️")
+st.set_page_config(
+    page_title="获取 / 管理 Best50 成绩与存档",
+    page_icon="💾",
+)
 
 st.header("获取 / 管理 Best50 成绩与存档")
 
@@ -80,9 +23,8 @@ def read_raw_username(username):
     userinfo_file = os.path.join(get_user_base_dir(username), "user_info.json")
     # 优先从新系统读取
     if os.path.exists(userinfo_file):
-        with open(userinfo_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data.get("legacy_raw_username", data.get("username", username))
+        data = load_config(userinfo_file)
+        return data.get("legacy_raw_username", data.get("username", username))
 
 # 初始化会话状态
 if 'use_lxns' not in st.session_state:
@@ -126,7 +68,7 @@ with st.container(border=True):
         with col2:
             if st.session_state.get('config_saved', False):
                 # 已保存配置，显示更新按钮
-                if st.button("更新好友码", use_container_width=True):
+                if st.button("更新好友码", width='stretch'):
                     if not friend_code.strip():
                         st.toast("请输入好友码", icon="❌")
                     elif int(friend_code[:2]) == 99 or int(friend_code[:2]) != 10:
@@ -136,14 +78,11 @@ with st.container(border=True):
                         if username:
                             userinfo_file = os.path.join(get_user_base_dir(username), "user_info.json")
                             if os.path.exists(userinfo_file):
-                                with open(userinfo_file, 'r', encoding='utf-8') as f:
-                                    user_info = json.load(f)
+                                user_info = load_config(userinfo_file)
                                 
                                 # 更新好友码
-                                user_info["friend_code"] = friend_code.strip()
-                                
-                                with open(userinfo_file, 'w', encoding='utf-8') as f:
-                                    json.dump(user_info, f, indent=2, ensure_ascii=False)
+                                user_info["friend_code"] = friend_code.strip()                                
+                                save_config(userinfo_file, user_info)
                                 
                                 st.session_state.friend_code = friend_code.strip()
                                 st.toast("好友码已更新！", icon="✅")
@@ -153,7 +92,7 @@ with st.container(border=True):
                             st.toast("未找到用户名", icon="❌")
     
     # 显示"确定"按钮（无论是否勾选落雪查分器）
-    if st.button("确定", use_container_width=True):
+    if st.button("确定", width='stretch'):
         if not input_username:
             st.error("用户名不能为空！", icon="❌")
             st.session_state.config_saved = False
@@ -170,8 +109,7 @@ with st.container(border=True):
             
             # 如果用户信息文件已存在，先加载现有数据
             if os.path.exists(userinfo_file):
-                with open(userinfo_file, 'r', encoding='utf-8') as f:
-                    user_info = json.load(f)
+                user_info = load_config(userinfo_file)
             
             # 更新用户信息
             user_info["username"] = username
@@ -188,8 +126,7 @@ with st.container(border=True):
                 user_info["friend_code"] = ""
             
             # 保存用户信息
-            with open(userinfo_file, 'w', encoding='utf-8') as f:
-                json.dump(user_info, f, indent=2, ensure_ascii=False)
+            save_config(userinfo_file, user_info)
             
             st.toast("用户信息已保存！", icon="✅")
             st.session_state.update({
@@ -212,9 +149,8 @@ def update_b50(update_function, secret_identifier, save_paths, data_type):
             # 次之从user_info.json获取
             user_info_path = os.path.join(get_user_base_dir(secret_identifier), "user_info.json")
             if os.path.exists(user_info_path):
-                with open(user_info_path, 'r', encoding='utf-8') as f:
-                    return json.load(f).get("username", "用户")
-                    
+                user_info = load_config(user_info_path)
+                return user_info.get("username", "用户")
             return "用户"  # 最终回退
 
         safe_name = get_safe_display_name()
@@ -223,7 +159,7 @@ def update_b50(update_function, secret_identifier, save_paths, data_type):
         b50_data = update_function(save_paths['raw_file'], save_paths['data_file'], secret_identifier, data_type)
         
         # 3. 绝对安全显示
-        st.success(f"已获取 {safe_name} 的游戏数据：{os.path.dirname(save_paths['data_file'])}")
+        st.success(f"已获取 {safe_name} 的游戏数据", icon="✅")
         st.session_state.data_updated_step1 = True
         return b50_data
 
@@ -245,7 +181,7 @@ def delete_save_data(username, save_id):
     st.warning("将清除所有已生成 Best50 底图和视频，且不可撤销！", icon="⚠️")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("是的！我要删除它！", icon="✔️", use_container_width=True):
+        if st.button("是的！我要删除它！", icon="✔️", width='stretch'):
             # 迭代地删除文件夹version_dir下的所有文件和子文件夹
             for root, dirs, files in os.walk(version_dir, topdown=False):
                 for name in files:
@@ -256,7 +192,7 @@ def delete_save_data(username, save_id):
             st.toast(f"已删除存档【{username} - {save_id}】", icon="✅")
             st.rerun()
     with col2:
-        if st.button("不了，也许哪天会用？", icon="✖️", use_container_width=True):
+        if st.button("不了，也许哪天会用？", icon="✖️", width='stretch'):
             st.rerun()
 
 def load_user_info(username):
@@ -264,15 +200,14 @@ def load_user_info(username):
     user_info_path = os.path.join(get_user_base_dir(username), "user_info.json")
     if os.path.exists(user_info_path):
         try:
-            with open(user_info_path, "r", encoding="utf-8") as f:
-                user_info = json.load(f)
-                # 更新 session_state
-                st.session_state.update({
-                    "username": user_info.get("username", username),
-                    "friend_code": user_info.get("friend_code", ""),
-                    "use_lxns": bool(user_info.get("friend_code", "")),  # 如果有好友码，默认勾选使用落雪查分器
-                })
-                return True
+            user_info = load_config(user_info_path)
+            # 更新 session_state
+            st.session_state.update({
+                "username": user_info.get("username", username),
+                "friend_code": user_info.get("friend_code", ""),
+                "use_lxns": bool(user_info.get("friend_code", "")),  # 如果有好友码，默认勾选使用落雪查分器
+            })
+            return True
         except Exception as e:
             st.error(f"加载用户信息失败: {e}", icon="❌")
             return False
@@ -292,11 +227,11 @@ if st.session_state.get('config_saved', False):
             selected_save_id = st.selectbox(
                 "选择一份已保存的存档",
                 versions,
-                format_func=lambda x: f"{username} - {x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
+                format_func=lambda x: f"{x} ({datetime.strptime(x.split('_')[0], '%Y%m%d').strftime('%Y 年 %m 月 %d 日')})"
             )
             col1, col2, col3 = st.columns(3, gap="small")
             with col1:
-                if st.button("加载此存档", icon="▶️", use_container_width=True):
+                if st.button("加载此存档", icon="▶️", width='stretch'):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
                         if load_user_info(username):
@@ -310,14 +245,14 @@ if st.session_state.get('config_saved', False):
                         st.error("未指定有效的存档路径！", icon="❌")
             with col2:
                 version_dir = get_user_version_dir(username, selected_save_id)
-                if st.button("打开文件夹", icon="📂", help=version_dir, use_container_width=True):
+                if st.button("打开文件夹", icon="📂", help=version_dir, width='stretch'):
                     if os.path.exists(version_dir):
                         absolute_path = os.path.abspath(version_dir)
                     else:
                         absolute_path = os.path.abspath(os.path.dirname(version_dir))
                     open_file_explorer(absolute_path)
             with col3:
-                if st.button("删除存档", icon="🗑️", use_container_width=True):
+                if st.button("删除存档", icon="🗑️", width='stretch'):
                     delete_save_data(username, selected_save_id)
 
     else:
@@ -354,7 +289,7 @@ if st.session_state.get('config_saved', False):
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("从落雪查分器获取", help="您的包体未拥有谱面数据，请回到首页下载！" if not metadata_status else "将使用您的好友码作为验证参数向代理请求游戏数据",
-                             icon="❄️", use_container_width=True, disabled=not metadata_status):
+                             icon="❄️", width='stretch', disabled=not metadata_status):
                     if not st.session_state.get("friend_code"):
                         st.error("未设置好友码！请在上方勾选'我使用落雪查分器'并输入您的好友码。", icon="❌")
                     else:
@@ -376,7 +311,7 @@ if st.session_state.get('config_saved', False):
                             st.error(f"获取数据时发生错误: {e}", icon="❌")
             with col2:
                 if st.button("从水鱼查分器获取", help="您的包体未拥有谱面数据，请回到首页下载！" if not metadata_status else "将使用您的用户名作为查询参数",
-                             icon="🐟", use_container_width=True, disabled=not metadata_status):
+                             icon="🐟", width='stretch', disabled=not metadata_status):
                     current_paths = get_data_paths(username, timestamp=None)
                     save_dir = os.path.dirname(current_paths['data_file'])
                     save_id = os.path.basename(save_dir)
@@ -397,6 +332,8 @@ if st.session_state.get('config_saved', False):
                     - 将其放在您的用户目录【{username}】下
                     - 点击 “解析原始数据” 以开始解析
                     """, icon="ℹ️")
+            st.file_uploader("上传您的 Best30 数据", type="json", accept_multiple_files=False,
+                             help="您的包体（目前）未拥有谱面数据，请回到首页下载！" if not metadata_status else "此数据需从 CHUNITHM-NET 中使用特定方法下载", disabled=not metadata_status)
             st.warning("目前需要提供测试样本以用于测试，因此此功能仍在重新开发", icon="⚠️")
 
 
@@ -405,7 +342,7 @@ if st.session_state.get('config_saved', False):
             st.markdown("或者，您也可以")
         
         with col2:
-            if st.button("新建空白存档", key="int_create_new_save", icon="📄", use_container_width=True, disabled=not metadata_status,
+            if st.button("新建空白存档", key="int_create_new_save", icon="📄", width='stretch', disabled=not metadata_status,
                          help="您的包体（目前）未拥有谱面数据，请回到首页下载！" if not metadata_status else "如果您目前没有可用于生成存档的数据，可生成空白存档（作为占位）"):
                 current_paths = get_data_paths(username, timestamp=None)
                 save_dir = os.path.dirname(current_paths['data_file'])
@@ -437,7 +374,7 @@ if st.session_state.get('config_saved', False):
             st.write("确认数据无误后，前往下一步准备生成底图。")
         
         with col2:
-            if st.button("下一步", icon="➡️", help="您需要获取谱面数据后才能继续，因为您的存档依靠此数据生成" if not metadata_status else "", use_container_width=True, disabled=not metadata_status):
+            if st.button("下一步", icon="➡️", help="您需要获取谱面数据后才能继续，因为您的存档依靠此数据生成" if not metadata_status else "", width='stretch', disabled=not metadata_status):
                 st.switch_page("st_pages/Generate_Pic_Resources.py")
 else:
     st.warning("请先确定用户名！", icon="⚠️")

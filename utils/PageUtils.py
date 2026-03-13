@@ -33,7 +33,7 @@ def write_global_config(config):
 def get_video_duration(video_path):
     """Returns the duration of a video file in seconds"""
     try:
-        with VideoFileClip(video_path) as clip:
+        with VideoFileClip(video_path, audio=False) as clip:
             return clip.duration
     except Exception as e:
         print(f"Error getting video duration: {e}")
