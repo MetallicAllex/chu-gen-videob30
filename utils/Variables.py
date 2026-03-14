@@ -9,10 +9,14 @@ font_path = f"{root_path}/fonts"
 bgclips_path = f"{root_path}/BgClips"
 audios_path = f"{root_path}/Audios"
 image_root_path = f"{root_path}/images"
+combo_img_path = f"{image_root_path}/ComboStatus"
 comment_font_path = f"{font_path}/FOT_NewRodin_Pro_EB.otf"
 ui_font_path = f"{font_path}/SOURCEHANSANSSC-BOLD.OTF"
 title_font_path = f"{font_path}/SweiBellLegCJKsc-Black.ttf"
 level_font_path = f"{font_path}/NimbusSanL-Bol.otf"
+# 曲目列表
+music_info_path = './music_datasets/all_music_infos.json'
+jp_music_info_path = './music_datasets/jp_songs_info.json'
 
 # 难度等级映射关系
 REVERSE_LEVEL_LABELS = {

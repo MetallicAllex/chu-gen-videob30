@@ -1,12 +1,16 @@
 import pandas as pd
 import streamlit as st
-from utils.PageUtils import *
-import json, random, os, random
+from pathlib import Path
+from datetime import datetime
+from utils.PathUtils import *
+import json, random, os, base64, hashlib, requests
 from concurrent.futures import ThreadPoolExecutor
-from utils.Utils import music_info_path, jp_music_info_path
-from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
-from utils.Utils import get_b50_data_from_lxns, get_b50_data_from_fish, get_keyword
+from utils.Variables import music_info_path, jp_music_info_path
+from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader, get_keyword
 from utils.Variables import LEVEL_LABELS, REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE, CHUNI_COMBO_TYPES
+
+
+
 
 def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, best_or_new: str):
     """
@@ -39,8 +43,8 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
     #         print(f"r10 数据长度: {len(raw_data['records'].get('r10', []))}")
 
     # 1. 加载本地曲目数据库
-    song_db = load_config(music_info_path)
-    jp_song_db = load_config(jp_music_info_path)
+    song_db = load_config(music_info_path, use_cache=True)
+    jp_song_db = load_config(jp_music_info_path, use_cache=True)
 
     # 2. 根据数据源类型提取字段映射规则
     field_map = {
@@ -347,7 +351,7 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
 def load_config_with_types(file_path):
     """加载配置并确保正确的数据类型"""
     try:
-        data = load_config(file_path)
+        data = load_config(file_path, use_cache=True, cache_time=60)
         
         # 数据类型转换
         for item in data:
@@ -553,7 +557,309 @@ def st_init_cache_pathes():
         if not os.path.exists(path):
             os.makedirs(path)
 
-# if __name__ == "__main__":
-#     img_path = "jackets/maimaidx/Jacket_1103.jpg"
-#     img = download_image_data(img_path)
-#     img.show()
+def sort_video_files(files):
+    """
+    严格检查：只允许完全符合 '数字_描述.mp4' 格式的文件
+    不合格的文件会被跳过并记录警告
+    """
+    sorted_files = []
+    encountered_numbers = set()
+    skipped_files = []
+    
+    # print(f"开始严格检查文件列表: {files}")
+    
+    for filename in files:
+        # print(f"检查文件: '{filename}'")
+        
+        try:
+            # 1. 检查文件扩展名
+            if not filename.endswith('.mp4'):
+                raise ValueError(f"文件扩展名不是 .mp4")
+            
+            # 2. 分离基础名称和扩展名
+            base_name = os.path.splitext(filename)[0]
+            
+            # 3. 检查是否包含下划线
+            if '_' not in base_name:
+                raise ValueError(f"文件名缺少下划线分隔符")
+            
+            # 4. 提取数字部分
+            parts = base_name.split('_')
+            number_str = parts[0]
+            
+            # 5. 检查数字部分是否纯数字
+            if not number_str.isdigit():
+                raise ValueError(f"数字部分包含非数字字符")
+            
+            # 6. 转换为数字
+            number = int(number_str)
+            
+            # 7. 检查描述部分是否合法（不能包含空格、副本等）
+            description = '_'.join(parts[1:])  # 剩余部分作为描述
+            if any(char in description for char in [' ', '-', '副本', 'copy']):
+                raise ValueError(f"描述部分包含非法字符")
+            
+            # 8. 检查数字是否重复
+            if number in encountered_numbers:
+                raise ValueError(f"发现重复的片段编号 {number}")
+            
+            # 9. 所有检查通过，添加到列表
+            sorted_files.append((number, filename))
+            encountered_numbers.add(number)
+            # print(f"文件通过检查: {filename} -> 编号 {number}")
+            
+        except (ValueError, IndexError) as e:
+            # print(f"跳过: {filename} - {e}")
+            skipped_files.append((filename, str(e)))
+    
+    # 如果没有找到任何合格文件
+    if not sorted_files:
+        raise ValueError(f"没有找到任何符合格式的视频文件！跳过的文件: {skipped_files}")
+    
+    # 报告跳过的文件
+    if skipped_files:
+        print(f"［信息］跳过了 {len(skipped_files)} 个不符合格式的文件：")
+        for filename, reason in skipped_files:
+            print(f"  - {filename}: {reason}")
+    
+    # 按数字排序
+    sorted_files.sort(key=lambda x: x[0])
+    # print(f"排序后的合格文件: {sorted_files}")
+    
+    # 检查数字序列是否连续
+    numbers = [num for num, _ in sorted_files]
+    expected_sequence = list(range(numbers[0], numbers[0] + len(numbers)))
+    
+    if numbers != expected_sequence:
+        missing_numbers = set(expected_sequence) - set(numbers)
+        if missing_numbers:
+            raise ValueError(f"片段编号不连续！缺失的编号: {sorted(missing_numbers)}。当前合格文件: {[f for _, f in sorted_files]}")
+        else:
+            raise ValueError(f"片段编号序列异常！当前: {numbers}，期望: {expected_sequence}")
+    
+    result = [filename for _, filename in sorted_files]
+    # print(f"最终通过的文件 ({len(result)} 个): {result}")
+    return result
+
+def get_b50_data_from_fish(username):
+    url = "https://www.diving-fish.com/api/chunithmprober/query/player"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "username": username,
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+
+    if response.status_code == 200:
+        return response.json()
+    elif response.status_code == 400:
+        return {"error": "未搜索到此用户"}
+    elif response.status_code == 403:
+        return {"error": "查询被拒绝，请检查您是否已关闭【允许其他人查询您的成绩】"}
+    else:
+        return {"error": f"获取数据失败：{response.status_code}"}
+
+def get_b50_data_from_lxns(friend_code):
+    url = f"https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run?source=lxns&game=chunithm&query=best&friend_code={friend_code}"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # 自动处理 4xx/5xx 错误
+        data = response.json()
+        
+        # 检查业务逻辑错误（如 success=false）
+        if not data.get("success", True):
+            raise Exception(f"落雪 API 返回错误: {data.get('error')}")
+        
+        return data
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            raise Exception("好友码无效，请检查您的好友码是否输入正确") from e
+        else:
+            raise Exception(f"API 请求失败: {e.response.status_code}") from e
+    except Exception as e:
+        raise Exception(f"获取数据时发生意外错误: {str(e)}") from e
+
+# API 端点
+url_cn = "https://maimai.lxns.net/api/v0/chunithm/song/list"
+url = "aHR0cHM6Ly9yZWl3YS5mNS5zaS9jaHVuaXJlY19hbGwuanNvbg=="
+
+# 文件路径
+
+# 创建目录
+os.makedirs(os.path.dirname(music_info_path), exist_ok=True)
+
+def json_hash(obj):
+    """生成 JSON 对象的 md5 哈希"""
+    return hashlib.md5(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
+
+def safe_decode(content: bytes) -> str:
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return content.decode("utf-8")
+
+def should_update_metadata(threshold_hours=24):
+    """
+    检查是否需要更新乐曲元数据
+    
+    Args:
+        threshold_hours: 更新的时间阈值（小时）
+        
+    Returns:
+        bool: 是否需要更新
+    """
+    # 在用户目录下创建配置目录
+    config_dir = Path.home() / ".chu-gen-videob30"
+    config_dir.mkdir(exist_ok=True)
+    
+    config_file = config_dir / "metadata_update.json"
+    
+    current_time = datetime.datetime.now()
+    
+    # 如果配置文件不存在，则创建并立即返回True
+    if not config_file.exists():
+        # with open(config_file, "w") as f:
+        #     json.dump({"last_update": current_time.isoformat()}, f)
+        save_config(config_file, {"last_update": current_time.isoformat()})
+        return True
+    
+    # 读取上次更新时间
+    try:
+        data = load_config(config_file)
+        last_update = datetime.datetime.fromisoformat(data.get("last_update", "2000-01-01T00:00:00"))
+    except (json.JSONDecodeError, ValueError):
+        # 文件损坏或格式错误，重新创建
+        # with open(config_file, "w") as f:
+        #     json.dump({"last_update": current_time.isoformat()}, f)
+        save_config(config_file, {"last_update": current_time.isoformat()})
+        return True
+    
+    # 计算时间差
+    time_diff = current_time - last_update
+    if time_diff.total_seconds() / 3600 >= threshold_hours:
+        # 更新时间戳
+        save_config(config_file, {"last_update": current_time.isoformat()})
+        return True
+    
+    return False
+
+def _fetch_music_data(name, url, filepath, transformer=None):
+    """
+    获取并更新音乐数据
+    
+    Args:
+        name: 数据源名称
+        url: 数据源URL
+        filepath: 本地存储路径
+        transformer: 数据转换函数
+    """
+    try:
+        response = requests.get(url)
+        if response.status_code != 200:
+            print(f"❌ 获取谱面数据失败，状态码 {response.status_code}")
+            return
+
+        raw_data = safe_decode(response.content)
+        data = json.loads(raw_data)
+        # print(f"📦 （{name}）返回内容预览：\n{raw_data[:200]}")
+        if transformer:
+            data = transformer(data)
+
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            save_config(filepath, data)
+            print(f"✅ （{name}）已下载所需的谱面数据[{json_hash(data)}]")
+            return
+
+        local_data = load_config(filepath)
+
+        if json_hash(data) != json_hash(local_data):
+            save_config(filepath, data)
+            print(f"🔄［{name}］谱面数据成功更新[{json_hash(data)}]")
+        else:
+            print(f"☑️［{name}］谱面数据已是最新[{json_hash(local_data)}]")
+
+    except Exception as e:
+        print(f"❌［{name}］获取谱面数据时出错：{e}")
+
+def fetch_music_data_with_cache(threshold_hours=24):
+    # 检查是否需要更新
+    if not should_update_metadata(threshold_hours):
+        print("⏩ 未达到更新阈值，跳过数据更新")
+        return
+    
+    print("🔄 开始更新音乐数据...")
+    
+    # 更新国服数据
+    _fetch_music_data(
+        name="国服",
+        url=url_cn,
+        filepath=music_info_path,
+        transformer=lambda d: d.get("songs", [])
+    )
+
+    # 难度映射配置
+    difficulty_map = {
+        "BAS": "BASIC",
+        "ADV": "ADVANCED",
+        "EXP": "EXPERT",
+        "MAS": "MASTER",
+        "ULT": "ULTIMA"
+    }
+
+    def transformer(data):
+        for song in data:
+            if "data" in song:
+                song["data"] = {
+                    difficulty_map.get(k, k): v for k, v in song["data"].items()
+                }
+        return data
+    
+    # 更新日服数据
+    _fetch_music_data(
+        name="日服",
+        url=base64.b64decode(url),
+        filepath=jp_music_info_path,
+        transformer=transformer
+    )
+    
+    print("✅ 谱面数据更新完成")
+
+# 保留原有的 fetch_music_data 函数用于直接调用（不检查缓存）
+def fetch_music_data():
+    """
+    直接获取谱面数据（不检查缓存时间）
+    """
+    _fetch_music_data(
+        name="国服",
+        url=url_cn,
+        filepath=music_info_path,
+        transformer=lambda d: d.get("songs", [])
+    )
+
+    difficulty_map = {
+        "BAS": "BASIC",
+        "ADV": "ADVANCED",
+        "EXP": "EXPERT",
+        "MAS": "MASTER",
+        "ULT": "ULTIMA"
+    }
+
+    def transformer(data):
+        for song in data:
+            if "data" in song:
+                song["data"] = {
+                    difficulty_map.get(k, k): v for k, v in song["data"].items()
+                }
+        return data
+    
+    _fetch_music_data(
+        name="日服",
+        url=base64.b64decode(url),
+        filepath=jp_music_info_path,
+        transformer=transformer
+    )

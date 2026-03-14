@@ -1,8 +1,7 @@
-import time, os, json, traceback
 import streamlit as st
+import time, os, traceback
 from datetime import datetime
-from utils.PageUtils import *
-from utils.PathUtils import get_data_paths, get_user_versions
+from utils.PathUtils import *
 from utils.DataUtils import gen_video_config
 from utils.Variables import REVERSE_LEVEL_LABELS
 

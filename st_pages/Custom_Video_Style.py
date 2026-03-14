@@ -1,13 +1,9 @@
-import os, shutil
-import time
 import streamlit as st
-
-# 导入工具函数
-from utils.PageUtils import *
+import os, shutil, time
 from utils.PathUtils import *
 from utils.ImageUtils import generate_single_image
-from utils.Variables import root_path, bgclips_path, audios_path, image_root_path
 from utils.VideoUtils import get_video_preview_frame
+from utils.Variables import root_path, bgclips_path, audios_path, image_root_path
 
 # 页面标题
 st.set_page_config(
@@ -233,11 +229,11 @@ with custom_col1:
                     st.session_state.bg_image_upload_info = None
                 
                 # 检查备份文件是否存在
-                bg_image_bak_path = os.path.join(f"{image_root_path}\\Base\content", "content_base-bak.png")
+                bg_image_bak_path = os.path.join(f"{image_root_path}/Base/content", "content_base-bak.png")
                 has_bg_image_backup = os.path.exists(bg_image_bak_path)
                 
                 # 显示当前图片信息
-                current_bg_image_path = os.path.join(f"{image_root_path}\\Base\content", "content_base.png")
+                current_bg_image_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
                 if current_bg_image_path and os.path.exists(current_bg_image_path):
                     st.image(current_bg_image_path, caption="素材预览窗") # 添加窗口预览
                     bginfo_col1, bginfo_col2 = st.columns([.45, .55])
@@ -790,10 +786,8 @@ with st.expander("画面坐标参数", icon="📝"):
     
     col1, col2, col3, col4 = st.columns(4, vertical_alignment="center")
     with col1:
-        if st.button("💾 保存所有修改", use_container_width=True, disabled=sel_preset_style != "自定义"):
+        if st.button("💾 保存所有修改", width='stretch', disabled=sel_preset_style != "自定义"):
             try:
-                # custom_config_path = os.path.join(custom_dir, "customization.json")
-                
                 # 备份当前文件（可选）
                 if os.path.exists(custom_dir):
                     backup_path = custom_dir + ".bak"
@@ -809,7 +803,7 @@ with st.expander("画面坐标参数", icon="📝"):
                 st.error(f"保存失败：{str(e)}", icon="❌")
     
     with col2:
-        if st.button("🔄 恢复默认配置", use_container_width=True, disabled=sel_preset_style != "自定义"):
+        if st.button("🔄 恢复默认配置", width='stretch', disabled=sel_preset_style != "自定义"):
             try:
                 custom_config_path = os.path.join(custom_dir, "customization.json")
                 
@@ -833,7 +827,7 @@ with st.expander("画面坐标参数", icon="📝"):
                 st.error(f"❌ 恢复失败：{str(e)}")
     
     with col3:
-        if st.button("刷新坐标数据", use_container_width=True, icon="🔄"):
+        if st.button("刷新坐标数据", width='stretch', icon="🔄"):
             try:
                 # 1. 清理所有相关的 session_state 键（这些是输入框存储的值）
                 keys_to_clear = []
@@ -865,7 +859,22 @@ with st.expander("画面坐标参数", icon="📝"):
                 st.error(f"刷新失败：{str(e)}", icon="❌")
         
     with col4:
-        preview_btn = st.button("生成预览图", type="primary", help="⚠️ 修改配置后，需要先保存，再重新生成 Best50 图像才能看到效果", use_container_width=True, icon="🖼️")
+        preview_btn = st.button("生成预览图", type="primary", help="⚠️ 修改配置后，需要先保存，再重新生成 Best50 图像才能看到效果", width='stretch', icon="🖼️")
+
+data_templates = {
+        "clip_id": "PickUp_1",
+        "id": 9191,
+        "song_name": "神鳴",
+        "artist": "Rígr feat. 光吉猛修",
+        "score": 1010000,
+        "rating": 17.75,
+        "level": 15.6,
+        "level_next": 15.6,
+        "level_index": 3,
+        "full_combo": "alljustice",
+        "full_chain": None,
+        "play_count": None
+    }
 
 test_str = """
 啊🤪～啊🤪～啊咦😬啊咦😬啊→啊↑啊↓😨啊😰～嗯💥哎哎🤗哎哦哎嗯😋～哦哎🥳爱爱爱爱爱😍
@@ -874,7 +883,7 @@ test_str = """
 def update_preview_image(placeholder, test_str):
     thumbnails_dir = f"{root_path}/thumbnails"
     b50_datas = load_config(current_paths['data_file'])
-    generate_single_image(b50_datas[0], custom_data, thumbnails_dir, "NEW", 1)
+    generate_single_image(b50_datas[0], custom_data, thumbnails_dir, "TEST", 1)
     with placeholder:
         st.image(f"{thumbnails_dir}/TEST_1.png")
 
@@ -897,11 +906,11 @@ st.info("""
 # st.divider()
 col_nav1, col_nav2 = st.columns(2)
 with col_nav1:
-    if st.button("⬅️ 返回首页", use_container_width=True):
+    if st.button("⬅️ 返回首页", width='stretch'):
         st.switch_page("st_pages/0_homepage.py")
 
 with col_nav2:
-    if st.button("🎬 继续视频生成", use_container_width=True):
+    if st.button("🎬 继续视频生成", width='stretch'):
         # 根据当前流程决定跳转到哪个页面
         if st.session_state.get('data_updated_step1', False):
             st.switch_page("st_pages/Generate_Pic_Resources.py")

@@ -4,9 +4,10 @@ from datetime import datetime
 from queue import Queue, Empty
 import os, threading, subprocess, time
 from typing import Any, Dict, List, Tuple
-from utils.Utils import format_time_difference
+from utils.DataUtils import sort_video_files
+from utils.PageUtils import format_time_difference
 from utils.ImageUtils import create_blank_image, get_splited_text
-from utils.Variables import HARD_RENDER_METHOD, bgclips_path, image_root_path, root_path, REVERSE_LEVEL_LABELS
+from utils.Variables import HARD_RENDER_METHOD, bgclips_path, image_root_path, audios_path, REVERSE_LEVEL_LABELS
 from moviepy import ColorClip, VideoFileClip, ImageClip, TextClip, AudioFileClip, CompositeVideoClip, vfx, afx
 
 def normalize_audio_volume(clip, target_dbfs=-20):
@@ -70,7 +71,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
     bg_image = ImageClip(f"{image_root_path}\\Base\intro\IntroBase.png").with_duration(clip_config['duration'])
     bg_image = bg_image.with_effects([vfx.Resize(width=resolution[0])])
 
-    bg_video = VideoFileClip(f"{root_path}/BgClips/bg.mp4")
+    bg_video = VideoFileClip(f"{bgclips_path}/bg.mp4")
     bg_video = bg_video.with_effects([
         vfx.Loop(duration=clip_config['duration']), 
         vfx.MultiplyColor(0.5),
@@ -160,7 +161,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
         size=resolution, use_bgclip=True)
         
     # 添加音频
-    bg_audio = AudioFileClip(f"{root_path}/Audios/bgm.mp3")
+    bg_audio = AudioFileClip(f"{audios_path}/bgm.mp3")
     bg_audio = bg_audio.with_effects([afx.AudioLoop(duration=clip_config['duration'])])
     composite_clip = composite_clip.with_audio(bg_audio)
     
@@ -200,7 +201,7 @@ def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_pa
     start_time = clip_config['start']
     
     # 文件路径
-    bg_video_path = os.path.abspath(f"{root_path}/BgClips/bg.mp4").replace('\\', '/')
+    bg_video_path = os.path.abspath(f"{bgclips_path}/bg.mp4").replace('\\', '/')
     main_image_path = os.path.abspath(clip_config.get('main_image', '')).replace('\\', '/') if clip_config.get('main_image') else ''
     video_path = os.path.abspath(clip_config.get('video', '')).replace('\\', '/') if clip_config.get('video') else ''
     
@@ -514,7 +515,7 @@ def create_video_segment_classic(clip_config, resolution, font_path, text_size=N
         text_size = int(base_text_size * resolution[1] / 1080)
     
     # 1. 背景层
-    bg_video = VideoFileClip(f"{root_path}/BgClips/bg.mp4")
+    bg_video = VideoFileClip(f"{bgclips_path}/bg.mp4")
     bg_video = bg_video.with_effects([
         vfx.Loop(duration=clip_config['duration']), 
         vfx.MultiplyColor(0.5),
@@ -630,90 +631,6 @@ def get_video_preview_frame(clip_config, style_config, resolution, part="intro")
     frame = preview_clip.get_frame(t=1)
     pil_img = Image.fromarray(frame.astype("uint8"))
     return pil_img
-
-def sort_video_files(files):
-    """
-    严格检查：只允许完全符合 '数字_描述.mp4' 格式的文件
-    不合格的文件会被跳过并记录警告
-    """
-    sorted_files = []
-    encountered_numbers = set()
-    skipped_files = []
-    
-    # print(f"开始严格检查文件列表: {files}")
-    
-    for filename in files:
-        # print(f"检查文件: '{filename}'")
-        
-        try:
-            # 1. 检查文件扩展名
-            if not filename.endswith('.mp4'):
-                raise ValueError(f"文件扩展名不是 .mp4")
-            
-            # 2. 分离基础名称和扩展名
-            base_name = os.path.splitext(filename)[0]
-            
-            # 3. 检查是否包含下划线
-            if '_' not in base_name:
-                raise ValueError(f"文件名缺少下划线分隔符")
-            
-            # 4. 提取数字部分
-            parts = base_name.split('_')
-            number_str = parts[0]
-            
-            # 5. 检查数字部分是否纯数字
-            if not number_str.isdigit():
-                raise ValueError(f"数字部分包含非数字字符")
-            
-            # 6. 转换为数字
-            number = int(number_str)
-            
-            # 7. 检查描述部分是否合法（不能包含空格、副本等）
-            description = '_'.join(parts[1:])  # 剩余部分作为描述
-            if any(char in description for char in [' ', '-', '副本', 'copy']):
-                raise ValueError(f"描述部分包含非法字符")
-            
-            # 8. 检查数字是否重复
-            if number in encountered_numbers:
-                raise ValueError(f"发现重复的片段编号 {number}")
-            
-            # 9. 所有检查通过，添加到列表
-            sorted_files.append((number, filename))
-            encountered_numbers.add(number)
-            # print(f"文件通过检查: {filename} -> 编号 {number}")
-            
-        except (ValueError, IndexError) as e:
-            # print(f"跳过: {filename} - {e}")
-            skipped_files.append((filename, str(e)))
-    
-    # 如果没有找到任何合格文件
-    if not sorted_files:
-        raise ValueError(f"没有找到任何符合格式的视频文件！跳过的文件: {skipped_files}")
-    
-    # 报告跳过的文件
-    if skipped_files:
-        print(f"［信息］跳过了 {len(skipped_files)} 个不符合格式的文件：")
-        for filename, reason in skipped_files:
-            print(f"  - {filename}: {reason}")
-    
-    # 按数字排序
-    sorted_files.sort(key=lambda x: x[0])
-    # print(f"排序后的合格文件: {sorted_files}")
-    
-    # 检查数字序列是否连续
-    numbers = [num for num, _ in sorted_files]
-    expected_sequence = list(range(numbers[0], numbers[0] + len(numbers)))
-    
-    if numbers != expected_sequence:
-        missing_numbers = set(expected_sequence) - set(numbers)
-        if missing_numbers:
-            raise ValueError(f"片段编号不连续！缺失的编号: {sorted(missing_numbers)}。当前合格文件: {[f for _, f in sorted_files]}")
-        else:
-            raise ValueError(f"片段编号序列异常！当前: {numbers}，期望: {expected_sequence}")
-    
-    result = [filename for _, filename in sorted_files]
-    # print(f"最终通过的文件 ({len(result)} 个): {result}")
-    return result
 
 def gen_black_video(duration, resolution):
     """

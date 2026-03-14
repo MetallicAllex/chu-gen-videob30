@@ -20,9 +20,9 @@ custom_style = st.Page("st_pages/Custom_Video_Style.py",
                     title="（可选）视频样式编辑器",
                     icon=":material/palette:")
 
-# custom_save = st.Page("st_pages/Make_Custom_Save.py",
-#                     title="编辑B50数据/创建自定义B50数据",
-#                     icon=":material/leaderboard:")
+custom_save = st.Page("st_pages/Make_Custom_Save.py",
+                    title="（可选）自定义 Best50 数据",
+                    icon=":material/leaderboard:")
 
 search = st.Page("st_pages/2_Search_For_Videos.py",
                 title="搜索谱面确认视频信息",
@@ -43,7 +43,7 @@ composite = st.Page("st_pages/6_Compostie_Videos.py",
 pg = st.navigation(
     {
         "Home": [homepage, setup],
-        "Customization": [custom_style],
+        "Customization": [custom_save, custom_style],
         "Pre-generation": [img_gen, search, download],
         "Edit-video": [edit_comment, edit_intro_ending],
         "Run-generation": [composite]

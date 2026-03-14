@@ -1,7 +1,6 @@
 import os, time
 import streamlit as st
-from utils.Utils import fetch_music_data, should_update_metadata, get_ffmpeg_version
-from utils.DataUtils import music_info_path, jp_music_info_path
+from utils.DataUtils import fetch_music_data, should_update_metadata, music_info_path, jp_music_info_path
 
 col1, col2 = st.columns([.7, 1.3])
 with col1:

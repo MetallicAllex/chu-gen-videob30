@@ -147,6 +147,7 @@ b50/
 st_pages/sortable-code.txt
 st_pages/Custom_Video_Style_Config.py
 st_pages/2_Search_For_Videoes_old.py
+st_pages/GPR_bak.txt
 utils/video_crawler_old.py
 utils/TextRenderer.py
 
@@ -194,3 +195,5 @@ start.bat
 ffmpeg2.exe
 global_config.yaml
 chu-gen-videob30_v0.5-bugfix4.zip
+assets/thumbnails/NEW_1.png
+assets/thumbnails/TEST_1.png

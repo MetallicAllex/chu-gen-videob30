@@ -1,8 +1,8 @@
 import os, traceback
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 from PIL.Image import Resampling
-from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path
+from PIL import Image, ImageDraw, ImageFont
+from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path
 
 def get_splited_text(text, text_max_bytes=70):
     """
@@ -194,13 +194,13 @@ def ComboStatusLoader(combo_status: str = "", score: int = 0):
         case _ if combo_status == '' or combo_status is None:
             return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
         case _ if combo_status == 'alljustice' and score == 1010000:
-            with Image.open(f"{image_root_path}/ComboStatus/13.png") as _comboStatus:
+            with Image.open(f"{combo_img_path}/13.png") as _comboStatus:
                 return _comboStatus.copy()
         case _ if combo_status == 'alljustice':
-            with Image.open(f"{image_root_path}/ComboStatus/12.png") as _comboStatus:
+            with Image.open(f"{combo_img_path}/12.png") as _comboStatus:
                 return _comboStatus.copy()
         case _ if combo_status == 'fullcombo' :
-            with Image.open(f"{image_root_path}/ComboStatus/11.png") as _comboStatus:
+            with Image.open(f"{combo_img_path}/11.png") as _comboStatus:
                 return _comboStatus.copy()
 
 
@@ -209,10 +209,10 @@ def ChainStatusLoader(chain_status: str = ""):
         case _ if chain_status == '' or chain_status is None:
             return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
         case _ if chain_status == 'fullchain2':
-            with Image.open(f"{image_root_path}/ComboStatus/22.png") as _chainStatus:
+            with Image.open(f"{combo_img_path}/22.png") as _chainStatus:
                 return _chainStatus.copy()
         case _ if chain_status == 'fullchain':
-            with Image.open(f"{image_root_path}/ComboStatus/21.png") as _chainStatus:
+            with Image.open(f"{combo_img_path}/21.png") as _chainStatus:
                 return _chainStatus.copy()
 
 

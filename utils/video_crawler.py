@@ -1,11 +1,12 @@
 import tkinter as tk
 from typing import Tuple
 from PIL import Image, ImageTk
-from pytubefix import YouTube, Search
 from abc import ABC, abstractmethod
-from utils.PageUtils import read_global_config
+from pytubefix import YouTube, Search
+from utils.PathUtils import read_global_config
+from utils.PageUtils import remove_html_tags_and_invalid_chars
 from bilibili_api import login_v2, user, search, video, Credential, sync, HEADERS
-import os, yaml, json, asyncio, pickle, httpx, traceback, subprocess, platform, re, requests, time, io
+import os, json, asyncio, pickle, httpx, traceback, subprocess, platform, re, requests, time, io
 
 # 根据操作系统选择FFMPEG的输出重定向方式
 # TODO：添加日志输出
@@ -45,7 +46,7 @@ def autogen_po_token_verifier() -> Tuple[str, str]:
         output = json.loads(cleaned_output)
         # print(f"PO Token生成结果: {output}")
     except json.JSONDecodeError as e:
-        print(f"验证PO Token生成失败 (JSON解析错误): {str(e)}")
+        print(f"验证 PO Token 生成失败 (JSON 解析错误): {str(e)}")
         print(f"原始输出内容: {repr(result.stdout)}")  # 使用repr()显示所有特殊字符
         
         if result.stderr:
@@ -64,17 +65,15 @@ def autogen_po_token_verifier() -> Tuple[str, str]:
     
     return output["visitorData"], output["poToken"]
 
-def remove_html_tags_and_invalid_chars(text: str) -> str:
-    """去除字符串中的HTML标记和非法字符"""
-    # 去除HTML标记
-    clean = re.compile('<.*?>')
-    text = re.sub(clean, ' ', text)
-    
-    # 去除非法字符
-    invalid_chars = r'[<>:"/\\|?*【】]'  # 定义非法字符
-    text = re.sub(invalid_chars, ' ', text)  # 替换为' '
-
-    return text.strip()  # 去除首尾空白字符
+# 获取关键字
+def get_keyword(downloader_type, title_name, level_index):
+    if not level_index:
+        print(f"警告: 谱面【{title_name}】具有未指定的难度！")
+    return (
+        f"{title_name} {level_index} (譜面確認) [CHUNITHM チュウニズム]"
+        if downloader_type == "youtube"
+        else f"【CHUNITHM/中二节奏】谱面确认 {title_name} {level_index}"
+    )
 
 def convert_duration_to_seconds(duration: str) -> int:
     try:

@@ -1,9 +1,7 @@
+import os, traceback
 import streamlit as st
-import os, traceback, shutil
 from datetime import datetime
-from utils.PageUtils import *
-from utils.Variables import bgclips_path, audios_path
-from utils.PathUtils import get_data_paths, get_user_versions
+from utils.PathUtils import *
 
 st.header("Step 4-2: 片头/片尾内容编辑")
 
