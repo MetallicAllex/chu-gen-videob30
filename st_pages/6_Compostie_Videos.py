@@ -53,7 +53,7 @@ with st.container(border=True):
             )
             
     else:
-        st.warning("未索引到存档，请先加载存档数据！")
+        st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
 
     with st.expander("更换 Best50 存档", icon="💾"):
         st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")

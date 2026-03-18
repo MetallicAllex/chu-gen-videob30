@@ -4,7 +4,7 @@ from utils.PathUtils import *
 import os, time, shutil, random, traceback
 from utils.Variables import REVERSE_LEVEL_LABELS
 from utils.DataUtils import search_one_video, merge_b50_data
-from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader
+from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader, load_credential, streamlit_login_bilibili
 
 G_config = read_global_config()
 _downloader = G_config.get('DOWNLOADER', 'bilibili')
@@ -56,7 +56,7 @@ with st.container(border=True):
                 value=save_id
             )
     else:
-        st.warning("未索引到存档，请先加载存档数据！")
+        st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
 
     with st.expander("更换 Best50 存档", icon="💾"):
         st.info("如果要更换不同用户的存档，请回到存档管理页指定其他用户名。", icon="ℹ️")
@@ -98,7 +98,7 @@ extra_setting_container = st.container(border=True)
 with extra_setting_container:
     st.write("下载设置")
     # 选择下载器
-    col1, col2, col3 = st.columns([1, 0.65, 1.35], vertical_alignment="center")
+    col1, col2, col3 = st.columns([1, 0.35, 1.35], vertical_alignment="bottom")
     with col1:
         default_index = ["bilibili", "youtube"].index(_downloader)
         downloader = st.selectbox("谱面确认视频来源", ["bilibili", "youtube"], index=default_index)
@@ -110,13 +110,62 @@ with extra_setting_container:
         proxy_address = st.text_input("输入代理地址", value=_proxy_address, disabled=not use_proxy, placeholder="默认 127.0.0.1:7890")
     
     if downloader == "bilibili":
-        bili_col1, bili_col2 = st.columns(2)
+        bili_col1, bili_col2 = st.columns([.35, 1.65], vertical_alignment="center")
         with bili_col1:
-            no_credential = st.checkbox("不登录 B 站账号", value=_no_credential, help="不登录账号搜索（游客），某些情况下可以概率绕过风控")
-        with bili_col2:
             _download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
             download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res, disabled=no_credential, help="下载 720P+ 或 60FPS 的视频，这可让您的谱面确认视频更流畅" if not no_credential else "游客无法下载超过 480P+ 的视频（因为您当前选择了[不登录 B 站账号]）")
-        if not no_credential:
+        
+        # with bili_col2:
+            no_credential = st.checkbox("不登录 B 站账号", value=_no_credential, help="不登录账号搜索（游客），某些情况下可以概率绕过风控")
+    
+        with bili_col2:
+            # 登录状态管理
+            if 'bilibili_logged_in' not in st.session_state:
+                # 检查是否有缓存的凭证
+                cached_cred = load_credential("./cred_datas/bilibili_cred.pkl")
+                st.session_state.bilibili_logged_in = cached_cred is not None
+            
+            if not no_credential:
+                # st.markdown("---")
+                if st.session_state.bilibili_logged_in:
+                    st.success("已登录 Bilibili 账号", icon="✅")
+                    if st.button("登出", key="bilibili_logout", icon="🚪", width="stretch"):
+                        # 删除凭证文件
+                        cred_path = "./cred_datas/bilibili_cred.pkl"
+                        if os.path.exists(cred_path):
+                            os.remove(cred_path)
+                        st.session_state.bilibili_logged_in = False
+                        st.rerun()
+                else:
+                    st.error("未登录 Bilibili 账号", icon="❎")
+                    if st.button("登入", key="bilibili_login_btn", type="primary", icon="🔐", width="stretch"):
+                        st.session_state.bilibili_show_qr = True
+                        st.rerun()
+                    
+                    # 显示二维码登录流程
+                    if st.session_state.get('bilibili_show_qr', False):
+                        success, credential, message, username = streamlit_login_bilibili("./cred_datas/bilibili_cred.pkl")
+                        
+                        if success:
+                            st.session_state.bilibili_logged_in = True
+                            st.session_state.bilibili_show_qr = False
+                            st.session_state.bilibili_username = username
+                            st.success(message, icon="✅")
+                            st.rerun()
+                        elif credential is None and ("等待" in message or "扫描" in message or "确认" in message):
+                            # 需要继续轮询
+                            st.rerun()
+                        else:
+                            # 出错或超时
+                            if "过期" in message or "失败" in message:
+                                st.session_state.bilibili_show_qr = False
+                                st.error(message, icon="❌")
+                                st.info("请重新点击登录按钮", icon="ℹ️")
+
+        # with bili_col2:
+        #     _download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
+        #     download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res, disabled=no_credential, help="下载 720P+ 或 60FPS 的视频，这可让您的谱面确认视频更流畅" if not no_credential else "游客无法下载超过 480P+ 的视频（因为您当前选择了[不登录 B 站账号]）")
+        if no_credential:
             st.info("二维码首次无法登录，请在弹出后关闭，待重新登录的二维码弹出后再扫描登录。", icon="ℹ️")
     elif downloader == "youtube":
         # 新增 YouTube API 选项

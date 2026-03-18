@@ -43,7 +43,7 @@ with st.container(border=True):
                 value=save_id
             )
     else:
-        st.warning("未索引到存档，请先加载存档数据！")
+        st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
 
     with st.expander("更换 Best50 存档", icon="💾"):
         st.info("""

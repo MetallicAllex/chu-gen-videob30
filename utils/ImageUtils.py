@@ -236,6 +236,10 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
             h_align (str): 水平对齐方式: 'left' | 'center' | 'right'
         """
 
+        # 转换 font_color 为元组
+        if isinstance(font_color, list):
+            font_color = tuple(font_color)
+
         # 载入文字元素
         Draw = ImageDraw.Draw(image)
         if not font_path:
@@ -299,6 +303,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
     size = style_config['size']
     color = style_config['color']
     max_width = style_config['maxWidth']
+    align = style_config['align']
     try:
         assert record_detail['level_index'] in range(0, 5)
         image_base_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
@@ -333,6 +338,9 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
             next_pos = position['level']['next']
             cur_color = color['level']['current']
             next_color = color['level']['next']
+            cur_next_size = size['level']
+            cur_next_align = align['level']
+            
             # 成绩数据
             cur_level = record_detail['level']
             next_level = record_detail['level_next']
@@ -341,7 +349,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
                 cur_text = "--"
             temp_img = TextDraw(temp_img, cur_text, cur_pos,
                                  font_path=title_font_path,
-                                 font_size=45, font_color=(77, 77, 77), h_align="center")
+                                 font_size=cur_next_size, font_color=cur_color, h_align=cur_next_align)
             
             if cur_level <= 0:
                 next_text = str(next_level)
@@ -353,7 +361,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
                 next_text = str(next_level) + "→"
             temp_img = TextDraw(temp_img, next_text, next_pos,
                                  font_path=title_font_path,
-                                 font_size=45, font_color=(77, 77, 77), h_align="center")
+                                 font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
             
             # 分数
             # score_pos = (706, 958)
@@ -390,23 +398,32 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
             # 标题
             # title_pos = (234, 876)
             title_pos = position['title']
+            title_color = color['title']
+            title_size = size['title']
+            title_align = align['title']
             temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=900,
-                                 font_path=title_font_path, font_size=48,
-                                 font_color=(26, 0, 84), h_align="left")
+                                 font_path=title_font_path, font_size=title_size,
+                                 font_color=title_color, h_align=title_align)
             
             # 曲师
             # artist_pos = (234, 936)
             artist_pos = position['artist']
+            artist_color = color['artist']
+            artist_size = size['artist']
+            artist_align = align['artist']
             temp_img = TextDraw(temp_img, record_detail['artist'], artist_pos, max_width=420,
-                                 font_path=title_font_path, font_size=36,
-                                 font_color=(26, 0, 84), h_align="left")
+                                 font_path=title_font_path, font_size=artist_size,
+                                 font_color=artist_color, h_align=artist_align)
             
             # Best 序号
             # best_pos = (245, 1017)
-            best_pos = position['best']
+            best_pos = position['bestNum']
+            best_color = color['bestNum']
+            best_size = size['bestNum']
+            best_align = align['bestNum']
             temp_img = TextDraw(temp_img, f"{prefix} #{index}", best_pos, max_width=200,
-                                font_path=title_font_path, font_size=28,
-                                font_color=(255, 255, 255), h_align="center")
+                                font_path=title_font_path, font_size=best_size,
+                                font_color=best_color, h_align=best_align)
             
             # 游玩次数
             if record_detail['play_count'] is not None:
@@ -427,10 +444,14 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
                 # 绘制游玩次数文字
                 # text_central_pos = (1359, 865)
                 text_central_pos = position['playCount']['text']
+                
                 play_count_text = str(PlayCount)
+                play_count_color = color['playCount']
+                play_count_size = size['playCount']
+                play_count_align = align['playCount']
                 temp_img = TextDraw(temp_img, play_count_text, text_central_pos,
-                                   font_path=title_font_path, font_size=30,
-                                   font_color=(248, 34, 117), h_align="center")
+                                   font_path=title_font_path, font_size=play_count_size,
+                                   font_color=play_count_color, h_align=play_count_align)
             
             # 将temp_img合成到background上
             background = Image.alpha_composite(background, temp_img)

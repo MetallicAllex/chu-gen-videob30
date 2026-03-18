@@ -1,12 +1,13 @@
 import streamlit as st
 from copy import deepcopy
-import os, time, traceback
 from datetime import datetime
-from utils.DataUtils import load_config_with_types
 from utils.PageUtils import *
 from utils.PathUtils import *
-from utils.ImageUtils import generate_single_image
+import os, time, traceback, shutil
+from utils.Variables import root_path
 from concurrent.futures import ThreadPoolExecutor
+from utils.DataUtils import load_config_with_types
+from utils.ImageUtils import generate_single_image
 
 def st_generate_b30_images(placeholder, save_paths):
     b50_data = load_config(save_paths['data_file'])
@@ -71,51 +72,54 @@ def st_generate_b30_images(placeholder, save_paths):
         # 创建进度条
         pb = st.progress(0, text=f"准备生成 {len(to_generate)} 张图片...")
         
-        # 统计数据
+        # 统计数据 - 初始化时只包含跳过的
         stats = {
             'success': 0,
             'failed': 0,
             'skipped': existing_count
         }
         
+        # 记录已完成的任务，避免重复统计
+        completed_tasks = set()
+        
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(worker, i, d) for i, d in to_generate]
+            futures = {executor.submit(worker, i, d): i for i, d in to_generate}
             
             completed = 0
             total_to_generate = len(to_generate)
             
             while completed < total_to_generate:
-                new_completed = sum(1 for f in futures if f.done())
-                
-                if new_completed > completed:
-                    completed = new_completed
-                    
-                    # 更新统计数据
-                    for f in futures[:completed]:
-                        if f.done():
-                            result = f.result()
-                            if result == "success":
-                                stats['success'] += 1
-                            elif result == "failed":
-                                stats['failed'] += 1
-                    
-                    # 计算进度
-                    elapsed = (datetime.now() - start_time).total_seconds()
-                    speed = completed / max(elapsed, 1e-3)
-                    remaining = (total_to_generate - completed) / max(speed, 1e-3)
-                    
-                    # 更新进度条显示
-                    progress_text = (
-                        f"进度: {completed}/{total_to_generate} | "
-                        f"成功: {stats['success']} | "
-                        f"失败: {stats['failed']} | "
-                        f"剩余: {remaining:.1f}秒"
-                    )
-                    
-                    pb.progress(
-                        min(completed / total_to_generate, 1.0),
-                        text=progress_text
-                    )
+                # 检查新完成的任务
+                for future in list(futures.keys()):
+                    if future.done() and future not in completed_tasks:
+                        completed += 1
+                        completed_tasks.add(future)
+                        
+                        # 统计结果
+                        result = future.result()
+                        if result == "success":
+                            stats['success'] += 1
+                        elif result == "failed":
+                            stats['failed'] += 1
+                        # skipped 已经包含在初始统计中
+                        
+                        # 计算进度
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        speed = completed / max(elapsed, 1e-3)
+                        remaining = (total_to_generate - completed) / max(speed, 1e-3)
+                        
+                        # 更新进度条显示
+                        progress_text = (
+                            f"进度: {completed} / {total_to_generate} | "
+                            f"成功: {stats['success']} | "
+                            f"失败: {stats['failed']} | "
+                            f"剩余: {remaining:.1f} 秒"
+                        )
+                        
+                        pb.progress(
+                            min(completed / total_to_generate, 1.0),
+                            text=progress_text
+                        )
                 
                 time.sleep(0.01)
             
@@ -125,11 +129,11 @@ def st_generate_b30_images(placeholder, save_paths):
             # 显示最终统计
             summary = []
             if stats['success'] > 0:
-                summary.append(f"✅ 成功生成: {stats['success']} 张")
+                summary.append(f"成功生成: {stats['success']} 张")
             if stats['skipped'] > 0:
-                summary.append(f"⏭️ 已跳过: {stats['skipped']} 张")
+                summary.append(f"已跳过: {stats['skipped']} 张")
             if stats['failed'] > 0:
-                summary.append(f"❌ 失败: {stats['failed']} 张")
+                summary.append(f"失败: {stats['failed']} 张")
             
             st.info(" | ".join(summary), icon="ℹ️")
             
@@ -137,6 +141,8 @@ def st_generate_b30_images(placeholder, save_paths):
                 st.toast("所有图片处理完成！", icon="✅")
             else:
                 st.toast(f"处理完成，但有 {stats['failed']} 张生成失败", icon="⚠️")
+            time.sleep(5)
+            st.rerun()
 
 st.title("Step 1: 生成 Best50 成绩底图")
 
@@ -175,7 +181,7 @@ with st.container(border=True):
                 value=save_id
             )
     else:
-        st.warning("未索引到存档，请先加载存档数据！")
+        st.warning("未索引到存档，请先加载存档数据！", icon="⚠️")
 
     with st.expander("更换 Best50 存档", icon="💾"):
         st.info("""
@@ -202,6 +208,10 @@ with st.container(border=True):
             st.stop()
 ### Savefile Management - End ###
 
+custom_dir = current_paths['custom_style']
+if not os.path.exists(custom_dir):
+    st.toast("无法找到存档内样式文件，已复制默认样式文件至存档。", icon="✅️")
+    shutil.copy2(f"{root_path}/themes/default.json", custom_dir)
 ### Data Viewing Section - Start ###
 st.divider()
 with st.container(border=True):
@@ -261,7 +271,7 @@ with st.container(border=True):
                             - **曲名/曲师**：歌曲的基本信息
                             - **等级**：歌曲难度等级（1.0-20.0）
                             - **等级索引**：2=EXPERT(红), 3=MASTER(紫), 4=ULTIMA(黑)
-                            - **下版本等级**：下一版本中的难度等级
+                            - **下版本等级**：下一版本中的难度等级（如使用国际服数据则此参数与当前定数相同）
                             - **分数**：您的成绩（0-1010000）
                             - **Rating**：单曲Rating值
                             - **Combo 类型**：fullcombo 或 alljustice

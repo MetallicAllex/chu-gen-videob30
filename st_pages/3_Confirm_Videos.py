@@ -289,7 +289,7 @@ def check_matched_songs(config):
 #     print(f"已成功更新 {updated_count} 条记录的搜索参数，跳过 {skipped_count} 条无需更新（不符合）的记录")
 #     return new_config_data
 
-def copy_search_args(config_path, old_config_path, debug=True):
+def copy_search_args(config_path, old_config_path, debug=False):
     """
     复制旧存档的 视频候选列表 和 视频匹配列表 到新存档
 
@@ -306,8 +306,8 @@ def copy_search_args(config_path, old_config_path, debug=True):
     """
     if debug:
         print(f"[DEBUG] 开始复制搜索参数")
-        # print(f"[DEBUG] 新配置文件: {config_path}")
-        # print(f"[DEBUG] 旧配置文件: {old_config_path}")
+        print(f"[DEBUG] 新配置文件: {config_path}")
+        print(f"[DEBUG] 旧配置文件: {old_config_path}")
     
     if not os.path.exists(config_path) or not os.path.exists(old_config_path):
         missing_file = config_path if not os.path.exists(config_path) else old_config_path
