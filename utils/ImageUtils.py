@@ -1,8 +1,9 @@
-import os, traceback
 import numpy as np
+import os, traceback
 from PIL.Image import Resampling
 from PIL import Image, ImageDraw, ImageFont
-from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path
+from utils.PageUtils import calculate_rating
+from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, REVERSE_LEVEL_LABELS
 
 def get_splited_text(text, text_max_bytes=70):
     """
@@ -216,7 +217,7 @@ def ChainStatusLoader(chain_status: str = ""):
                 return _chainStatus.copy()
 
 
-def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
+def TextDraw(image, text: str = "", pos: tuple = (0, 0), offset: tuple = (0, 0), max_width: int = 2000,
                  font_path=None, font_size=32, font_color=(255, 255, 255), h_align: str = "center"):
         """
         绘制文本，若超出最大宽度则缩小字体直至适配
@@ -229,6 +230,7 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
                          h_align = 'center'-> pos 作为文本水平中心
                          h_align = 'right' -> pos 作为文本右边界
                          垂直方向始终居中
+            offset (tuple): 相对于基准位置的偏移量 (x_offset, y_offset)
             max_width (int): 最大允许宽度
             font_path (str): 字体文件路径
             font_size (int): 初始字体大小
@@ -262,18 +264,19 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), max_width: int = 2000,
         text_height = Bbox[3] - Bbox[1]
         # 计算水平起点
         if h_align == "left":
-            x = pos[0]
+            x = pos[0] + offset[0]
         elif h_align == "center":
-            x = pos[0] - text_width // 2
+            x = pos[0] - text_width // 2 + offset[0]
         else:  # right
-            x = pos[0] - text_width
+            x = pos[0] - text_width + offset[0]
         # 垂直始终居中
-        y = pos[1] - text_height // 2
+        y = pos[1] - text_height // 2 + offset[1]
         text_pos = (x, y)
         Draw.text(text_pos, text, fill=font_color, font=Font)
         return image
 
-def generate_single_image(record_detail: dict, style_config: dict, output_path, prefix, index: int):
+# def generate_single_image(record_detail: dict, style_config: dict, output_path, prefix, index: int):
+def generate_single_image(record_detail: dict, style_config: dict, output_path):
     """
     生成单个 Best50 成绩记录图。
 
@@ -291,173 +294,366 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path, 
             - level_next (float): 下版本定数
         style_config (dict): 元素坐标，用于读取 customization.json 文件
         output_path (str): 输出目录
-        prefix (str): 文件名前缀
-        index (int): 索引编号
-        verse_mode (bool): 是否显示定数变化模式
+        prefix (str): 文件名前缀(deprecated)
+        index (int): 索引编号(deprecated)
 
     Returns:
         file: Best50 图像
     """
     background = None
+    template = style_config['themes']
     position = style_config['position']['image']
     size = style_config['size']
     color = style_config['color']
-    max_width = style_config['maxWidth']
+    max_width = style_config['maxWidth'] if 'maxWidth' in style_config else None
     align = style_config['align']
+    # 只允许一个下划线分隔符（对应 Best_xx 格式）
+    prefix, index = record_detail['clip_id'].split('_', 1)
     try:
-        assert record_detail['level_index'] in range(0, 5)
-        image_base_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
-        with Image.open(image_base_path) as background:
-            background = background.convert("RGBA")
-            assert background.size == (1920, 1080)
-            
-            # 载入元素
-            temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
-            
-            # 边框
-            # frame_pos = (65, 32)
-            frame_pos = position['frame']
-            frame = FrameLoader(record_detail['level_index'])
-            # 确保frame是RGBA模式
-            if frame.mode != 'RGBA':
-                frame = frame.convert('RGBA')
-            temp_img.paste(frame, frame_pos, frame)
-            
-            # 等级
-            # level_pos = (100, 884) # x 坐标 + 4（发现已偏移 4px）
-            level_pos = position['level']['integer']
-            level = LevelLoader(record_detail['level'], record_detail['level_next'])
-            if level.mode != 'RGBA':
-                level = level.convert('RGBA')
-            temp_img.paste(level, level_pos, level)
-            
-            # 定数
-            # cur_pos = (1562, 1018)
-            # next_pos = (1756, 1018)
-            cur_pos = position['level']['current']
-            next_pos = position['level']['next']
-            cur_color = color['level']['current']
-            next_color = color['level']['next']
-            cur_next_size = size['level']
-            cur_next_align = align['level']
-            
-            # 成绩数据
-            cur_level = record_detail['level']
-            next_level = record_detail['level_next']
-            cur_text = str(cur_level)
-            if cur_level <= 0.0:
-                cur_text = "--"
-            temp_img = TextDraw(temp_img, cur_text, cur_pos,
-                                 font_path=title_font_path,
-                                 font_size=cur_next_size, font_color=cur_color, h_align=cur_next_align)
-            
-            if cur_level <= 0:
-                next_text = str(next_level)
-            elif next_level > cur_level:
-                next_text = str(next_level) + "↑" 
-            elif next_level < cur_level:
-                next_text = str(next_level) + "↓"
-            else:
-                next_text = str(next_level) + "→"
-            temp_img = TextDraw(temp_img, next_text, next_pos,
-                                 font_path=title_font_path,
-                                 font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
-            
-            # 分数
-            # score_pos = (706, 958)
-            score_pos = position['score']
-            score = ScoreLoader(record_detail["score"])
-            if score.mode != 'RGBA':
-                score = score.convert('RGBA')
-            temp_img.paste(score, score_pos, score)
-
-            # Rating
-            # rating_pos = (1216, 980)
-            rating_pos = position['rating']
-            rating = RatingLoader(record_detail["rating"])
-            if rating.mode != 'RGBA':
-                rating = rating.convert('RGBA')
-            temp_img.paste(rating, rating_pos, rating)
-
-            # Combo
-            # combo_pos = (424, 971)
-            combo_pos = position['combo']
-            combo_status = ComboStatusLoader(record_detail['full_combo'], record_detail['score']).resize([243, 40], Resampling.LANCZOS)
-            if combo_status.mode != 'RGBA':
-                combo_status = combo_status.convert('RGBA')
-            temp_img.paste(combo_status, combo_pos, combo_status)
-
-            # Chain
-            # chain_pos = (423, 1015)
-            chain_pos = position['chain']
-            chain_status = ChainStatusLoader(record_detail['full_chain']).resize([243, 40], Resampling.LANCZOS)
-            if chain_status.mode != 'RGBA':
-                chain_status = chain_status.convert('RGBA')
-            temp_img.paste(chain_status, chain_pos, chain_status)
-
-            # 标题
-            # title_pos = (234, 876)
-            title_pos = position['title']
-            title_color = color['title']
-            title_size = size['title']
-            title_align = align['title']
-            temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=900,
-                                 font_path=title_font_path, font_size=title_size,
-                                 font_color=title_color, h_align=title_align)
-            
-            # 曲师
-            # artist_pos = (234, 936)
-            artist_pos = position['artist']
-            artist_color = color['artist']
-            artist_size = size['artist']
-            artist_align = align['artist']
-            temp_img = TextDraw(temp_img, record_detail['artist'], artist_pos, max_width=420,
-                                 font_path=title_font_path, font_size=artist_size,
-                                 font_color=artist_color, h_align=artist_align)
-            
-            # Best 序号
-            # best_pos = (245, 1017)
-            best_pos = position['bestNum']
-            best_color = color['bestNum']
-            best_size = size['bestNum']
-            best_align = align['bestNum']
-            temp_img = TextDraw(temp_img, f"{prefix} #{index}", best_pos, max_width=200,
-                                font_path=title_font_path, font_size=best_size,
-                                font_color=best_color, h_align=best_align)
-            
-            # 游玩次数
-            if record_detail['play_count'] is not None:
-                PlayCount = int(record_detail['play_count'])
-            else:
-                PlayCount = 0
-            # 只有当游玩次数≥1时才显示
-            if PlayCount >= 1:
-                # 载入游玩次数背景图标
-                play_count_base_path = os.path.join(os.getcwd(), f"{image_root_path}/Playcount/PlayCountBase.png")
-                with Image.open(play_count_base_path) as play_count_base:
-                    # play_count_base_pos = (1170, 840)
-                    play_count_base_pos = position['playCount']['base']
-                    if play_count_base.mode != 'RGBA':
-                        play_count_base = play_count_base.convert('RGBA')
-                    temp_img.paste(play_count_base, play_count_base_pos, play_count_base)
+        if template == 'default':
+            assert record_detail['level_index'] in range(0, 5)
+            image_base_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
+            with Image.open(image_base_path) as background:
+                background = background.convert("RGBA")
+                assert background.size == (1920, 1080)
                 
-                # 绘制游玩次数文字
-                # text_central_pos = (1359, 865)
-                text_central_pos = position['playCount']['text']
+                # 载入元素
+                temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
                 
-                play_count_text = str(PlayCount)
-                play_count_color = color['playCount']
-                play_count_size = size['playCount']
-                play_count_align = align['playCount']
-                temp_img = TextDraw(temp_img, play_count_text, text_central_pos,
-                                   font_path=title_font_path, font_size=play_count_size,
-                                   font_color=play_count_color, h_align=play_count_align)
+                # 边框
+                # frame_pos = (65, 32)
+                frame_pos = position['frame']
+                frame = FrameLoader(record_detail['level_index'])
+                # 确保frame是RGBA模式
+                if frame.mode != 'RGBA':
+                    frame = frame.convert('RGBA')
+                temp_img.paste(frame, frame_pos, frame)
+                
+                # 等级
+                # level_pos = (100, 884) # x 坐标 + 4（发现已偏移 4px）
+                level_pos = position['level']['integer']
+                level = LevelLoader(record_detail['level'], record_detail['level_next'])
+                if level.mode != 'RGBA':
+                    level = level.convert('RGBA')
+                temp_img.paste(level, level_pos, level)
+                
+                # 定数
+                # cur_pos = (1562, 1018)
+                # next_pos = (1756, 1018)
+                cur_pos = position['level']['current']
+                next_pos = position['level']['next']
+                cur_color = color['level']['current']
+                next_color = color['level']['next']
+                cur_next_size = size['level']
+                cur_next_align = align['level']
+                
+                # 成绩数据
+                cur_level = record_detail['level']
+                next_level = record_detail['level_next']
+                cur_text = str(cur_level)
+                if cur_level <= 0.0:
+                    cur_text = "--"
+                temp_img = TextDraw(temp_img, cur_text, cur_pos,
+                                    font_path=title_font_path,
+                                    font_size=cur_next_size, font_color=cur_color, h_align=cur_next_align)
+                
+                if cur_level <= 0:
+                    next_text = str(next_level)
+                elif next_level > cur_level:
+                    next_text = str(next_level) + "↑" 
+                elif next_level < cur_level:
+                    next_text = str(next_level) + "↓"
+                else:
+                    next_text = str(next_level) + "→"
+                temp_img = TextDraw(temp_img, next_text, next_pos,
+                                    font_path=title_font_path,
+                                    font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
+                
+                # 分数
+                # score_pos = (706, 958)
+                score_pos = position['score']
+                score = ScoreLoader(record_detail["score"])
+                if score.mode != 'RGBA':
+                    score = score.convert('RGBA')
+                temp_img.paste(score, score_pos, score)
+
+                # Rating
+                # rating_pos = (1216, 980)
+                rating_pos = position['rating']
+                rating = RatingLoader(record_detail["rating"])
+                if rating.mode != 'RGBA':
+                    rating = rating.convert('RGBA')
+                temp_img.paste(rating, rating_pos, rating)
+
+                # Combo
+                # combo_pos = (424, 971)
+                combo_pos = position['combo']
+                combo_status = ComboStatusLoader(record_detail['full_combo'], record_detail['score']).resize([243, 40], Resampling.LANCZOS)
+                if combo_status.mode != 'RGBA':
+                    combo_status = combo_status.convert('RGBA')
+                temp_img.paste(combo_status, combo_pos, combo_status)
+
+                # Chain
+                # chain_pos = (423, 1015)
+                chain_pos = position['chain']
+                chain_status = ChainStatusLoader(record_detail['full_chain']).resize([243, 40], Resampling.LANCZOS)
+                if chain_status.mode != 'RGBA':
+                    chain_status = chain_status.convert('RGBA')
+                temp_img.paste(chain_status, chain_pos, chain_status)
+
+                # 标题
+                # title_pos = (234, 876)
+                title_pos = position['title']
+                title_color = color['title']
+                title_size = size['title']
+                title_align = align['title']
+                title_width = max_width['title']
+                temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=title_width,
+                                    font_path=title_font_path, font_size=title_size,
+                                    font_color=title_color, h_align=title_align)
+                
+                # 曲师
+                # artist_pos = (234, 936)
+                artist_pos = position['artist']
+                artist_color = color['artist']
+                artist_size = size['artist']
+                artist_align = align['artist']
+                artist_width = max_width['artist']
+                temp_img = TextDraw(temp_img, record_detail['artist'], artist_pos, max_width=artist_width,
+                                    font_path=title_font_path, font_size=artist_size,
+                                    font_color=artist_color, h_align=artist_align)
+                
+                # Best 序号
+                # best_pos = (245, 1017)
+                best_pos = position['bestNum']
+                best_color = color['bestNum']
+                best_size = size['bestNum']
+                best_align = align['bestNum']
+                best_width = max_width['bestNum']
+                temp_img = TextDraw(temp_img, f"{prefix} #{index}", best_pos, max_width=best_width,
+                                    font_path=title_font_path, font_size=best_size,
+                                    font_color=best_color, h_align=best_align)
+                
+                # 游玩次数
+                if record_detail['play_count'] is not None:
+                    PlayCount = int(record_detail['play_count'])
+                else:
+                    PlayCount = 0
+                # 只有当游玩次数≥1时才显示
+                if PlayCount >= 1:
+                    # 载入游玩次数背景图标
+                    play_count_base_path = os.path.join(os.getcwd(), f"{image_root_path}/Playcount/PlayCountBase.png")
+                    with Image.open(play_count_base_path) as play_count_base:
+                        # play_count_base_pos = (1170, 840)
+                        play_count_base_pos = position['playCount']['base']
+                        if play_count_base.mode != 'RGBA':
+                            play_count_base = play_count_base.convert('RGBA')
+                        temp_img.paste(play_count_base, play_count_base_pos, play_count_base)
+                    
+                    # 绘制游玩次数文字
+                    # text_central_pos = (1359, 865)
+                    text_central_pos = position['playCount']['text']
+                    
+                    play_count_text = str(PlayCount)
+                    play_count_color = color['playCount']
+                    play_count_size = size['playCount']
+                    play_count_align = align['playCount']
+                    temp_img = TextDraw(temp_img, play_count_text, text_central_pos,
+                                    font_path=title_font_path, font_size=play_count_size,
+                                    font_color=play_count_color, h_align=play_count_align)
+                
+                # 将temp_img合成到background上
+                background = Image.alpha_composite(background, temp_img)
+        
+        elif template == 'init':
+            CORNER_IMG_PATH = f"{image_root_path}/CornerMark.png"
+
+            # （此函数只能调用微软字体库中的字体）
+            def load_fonts(base_font: str, size: dict):
+                config = {
+                    'title': ('bd', size['title']), 'number': ('', size['number']), 'song_name': ('l', size['song_name']),
+                    'level': ('l', size['level']), 'score': ('l', size['score']), 'rating': ('l', size['rating'])
+                }
+                
+                fonts = {}
+                for key, (suffix, size) in config.items():
+                    font_path = f"{base_font}{suffix}.ttc"
+                    fonts[key] = {
+                        'path': font_path,
+                        'size': size,
+                        'font': ImageFont.truetype(font_path, size)
+                    }
+                
+                return fonts
+
+            def render_corner_logo(fonts, clip_id: str, color):
+                corner = Image.open(CORNER_IMG_PATH).resize((125, 125))
+                text_layer = Image.new("RGBA", corner.size, (0, 0, 0, 0))
+                
+                # 获取中心点坐标
+                center_x = corner.width // 2
+                center_y = corner.height // 2
+                prefix, clip_number = clip_id.split("_", 1)
+                
+                # 绘制 prefix 文本（原偏移 -3, -52）
+                TextDraw(
+                    text_layer,
+                    prefix.upper(),
+                    pos=(center_x - 3, center_y - 52),  # 应用偏移
+                    font_path=fonts['title']['path'],  # 需要从ImageFont对象获取路径
+                    font_size=fonts['title']['size'],
+                    # font_color=(0, 0, 0),
+                    font_color=color['title'],
+                    h_align="center"
+                )
+                
+                # 绘制 clip_id 文本（原偏移 -1, -6）
+                TextDraw(
+                    text_layer,
+                    clip_number,
+                    pos=(center_x - 1, center_y - 6),
+                    font_path=fonts['number']['path'],
+                    font_size=fonts['number']['size'],
+                    # font_color=(255, 255, 255),
+                    font_color=color['number'],
+                    h_align="center"
+                )
+                
+                return Image.alpha_composite(corner, text_layer)
             
-            # 将temp_img合成到background上
-            background = Image.alpha_composite(background, temp_img)
+            fonts = load_fonts("msyh", size)
+            background_path = os.path.join(f"{image_root_path}/Base/content", f"{record_detail['level_index']}.png")
+            with Image.open(background_path) as background:
+                background = background.convert('RGBA')
+                
+                # 角标
+                corner = render_corner_logo(fonts, record_detail['clip_id'], color)
+                
+                # 曲名图层
+                name_layer = Image.new("RGBA", (1308, 143))
+                name_center_x = name_layer.width // 2
+                name_center_y = name_layer.height // 2
+                
+                TextDraw(
+                    name_layer,
+                    record_detail['song_name'],
+                    pos=(name_center_x, name_center_y - 10),  # y_offset = -10
+                    font_path=fonts['song_name']['path'],
+                    font_size=fonts['song_name']['size'],
+                    # font_color=(0, 0, 0),
+                    font_color=color['title'],
+                    h_align="center",
+                    max_width=1000
+                )
+                
+                # 等级图层
+                level_layer = Image.new("RGBA", (1308, 83))
+                level_center_x = level_layer.width // 2
+                level_center_y = level_layer.height // 2
+                
+                difficulty_name = REVERSE_LEVEL_LABELS[record_detail['level_index']]
+                old_const = record_detail['level']
+                new_const = record_detail['level_next']
+                
+                if new_const > old_const:
+                    level_text = f"{difficulty_name}[{old_const} ↑ {new_const}(NEXT)]"
+                elif new_const < old_const:
+                    level_text = f"{difficulty_name}[{old_const} ↓ {new_const}(NEXT)]"
+                else:
+                    level_text = f"{difficulty_name}[{old_const}(NEXT)]"
+                
+                TextDraw(
+                    level_layer,
+                    level_text,
+                    pos=(level_center_x, level_center_y - 20),  # y_offset = -20
+                    font_path=fonts['level']['path'],
+                    font_size=fonts['level']['size'],
+                    # font_color=(0, 0, 0),
+                    font_color=color['level'],
+                    h_align="center"
+                )
+                
+                # 分数图层
+                score_layer = Image.new("RGBA", (437, 143))
+                score_center_x = score_layer.width // 2
+                score_center_y = score_layer.height // 2
+                
+                # score_text = f"{record_detail['score']}{dict(fullcombo='(FC)', alljustice='(AJ)').get(record_detail['full_combo'], '')}"
+                
+                score = record_detail['score']
+                full_combo = record_detail['full_combo']
+
+                # 根据条件确定后缀
+                if full_combo == 'alljustice':
+                    suffix = '(AJC)' if score == 1010000 else '(AJ)'
+                elif full_combo == 'fullcombo':
+                    suffix = '(FC)'
+                else:
+                    suffix = ''
+
+                score_text = f"{score}{suffix}"
+                
+                TextDraw(
+                    score_layer,
+                    score_text,
+                    pos=(score_center_x, score_center_y - 17),  # y_offset = -17
+                    font_path=fonts['score']['path'],
+                    font_size=fonts['score']['size'],
+                    # font_color=(0, 0, 0),
+                    font_color=color['score'],
+                    h_align="center"
+                )
+                
+                # Rating图层
+                rating_layer = Image.new("RGBA", (437, 83))
+                rating_center_x = rating_layer.width // 2
+                rating_center_y = rating_layer.height // 2
+                
+                base_rating = record_detail["rating"]
+                new_rating = calculate_rating(record_detail['score'], new_const)
+                if new_const != old_const:
+                    rating_text = f'{base_rating} → {new_rating}(NEXT)'
+                else:
+                    rating_text = f'{base_rating}(NEXT)'
+                
+                TextDraw(
+                    rating_layer,
+                    rating_text,
+                    pos=(rating_center_x, rating_center_y - 15),  # y_offset = -15
+                    font_path=fonts['rating']['path'],
+                    font_size=fonts['rating']['size'],
+                    # font_color=(0, 0, 0),
+                    font_color=color['rating'],
+                    h_align="center"
+                )
+                
+                # 合成图层
+                # layers = [
+                #     (name_layer, (59, 860)),
+                #     (level_layer, (59, 1013)),
+                #     (score_layer, (1420, 864)),
+                #     (rating_layer, (1420, 1008)),
+                #     (corner, (60, 875))
+                # ]
+                
+                layers = [
+                    (name_layer, position['title']),
+                    (level_layer, position['level']),
+                    (score_layer, position['score']),
+                    (rating_layer, position['rating']),
+                    (corner, position['combined'])
+                ]
+                
+                for layer, position in layers:
+                    background.paste(layer, position, layer)
     except Exception as e:
             print(f"在生成图像时出现错误：{e}")
             print(traceback.format_exc())
             background = Image.new('RGBA', background.size, (0, 0, 0, 255))
+            error_text = f"生成图像时出现错误：{e}"
+            temp_img = TextDraw(temp_img, error_text, (0, 50), max_width=background.size[0],
+                                 font_path=title_font_path, font_size=32,
+                                 font_color=(255, 255, 255), h_align="left")
+            background = Image.alpha_composite(background, temp_img)
     finally:
         background.save(os.path.join(output_path, f"{prefix}_{index}.png"))

@@ -3,12 +3,11 @@ import streamlit as st
 from pathlib import Path
 from datetime import datetime
 from utils.PathUtils import *
-from concurrent.futures import ThreadPoolExecutor
 import json, random, os, base64, hashlib, requests
 from utils.Variables import music_info_path, jp_music_info_path
 from utils.PageUtils import _process_cn_data, _process_intl_data
+from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader, get_keyword
-from utils.Variables import LEVEL_LABELS, REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE, CHUNI_COMBO_TYPES, CHUNI_CHAIN_TYPES
 
 def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, best_or_new: str):
     """
@@ -103,7 +102,7 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
                 for key in keys:
                     current = current[key]
                 
-                print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
+                # print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
                 
                 if current is not None:
                     if isinstance(current, list):
@@ -139,597 +138,6 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
     save_config(b50_data_file, processed_data)
     return processed_data
     
-# def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, best_or_new: str):
-#     """
-#     Best50 数据清洗
-    
-#     Args:
-#         raw_data: 请求获取的原始数据
-#         source_type(str): 数据源类型：[水鱼 / 落雪 / 国际服]
-#         b50_raw_file: Best50 原始数据存储文件名
-#         b50_data_file: Best50 清洗数据存储文件名
-#         best_or_new(str): 数据类型: [全都要(b30 + n20), 仅新曲(n20), 仅旧曲(b30)]
-        
-#     Returns:
-#         processed_data: 已经过清洗的 Best50 数据
-        
-#     Raises:
-#         Exception: 当数据无效或处理失败时抛出异常
-#     """
-    
-#     # 检查数据是否包含错误
-#     if isinstance(raw_data, dict):
-#         if "error" in raw_data:
-#             raise Exception(f"API 返回错误: {raw_data['error']}")
-#         if "message" in raw_data and "error" in raw_data["message"].lower():
-#             raise Exception(f"API 返回错误: {raw_data['message']}")
-#         if "code" in raw_data and raw_data.get("code") != 200:
-#             raise Exception(f"API 返回错误码: {raw_data.get('code')} - {raw_data.get('message', '')}")
-    
-#     # 1. 加载本地曲目数据库
-#     song_db = load_config(music_info_path, use_cache=True)  # 国服数据库
-#     jp_song_db = load_config(jp_music_info_path, use_cache=True)  # 日服数据库
-
-#     # 2. 根据数据源类型提取字段映射规则
-#     field_map = {
-#         "lxns": {
-#             "id": "id",
-#             "song_name": "song_name",
-#             "level": None,
-#             "level_index": "level_index",
-#             "score": "score",
-#             "rating": "rating",
-#             "fc": "full_combo",
-#             "fchain": "full_chain",
-#             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
-#         },
-#         "fish": {
-#             "id": "mid",
-#             "song_name": "title", 
-#             "level": "ds",
-#             "level_index": "level_index",
-#             "score": "score",
-#             "rating": "ra",
-#             "fc": "fc",
-#             "fchain": None,
-#             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
-#         },
-#         "intr": {  # 国际服 - 从日服数据库获取数据
-#             "id": "idx",
-#             "song_name": "title", 
-#             "level": None,  # 从日服数据库获取
-#             "level_index": "difficulty",  # 难度名称
-#             "score": "score",
-#             "rating": None,  # 需要从日服数据库获取定数后计算
-#             "fc": None,  # 在 process_song 中处理
-#             "fchain": "fullChainLv",
-#             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
-#         }
-#     }
-    
-#     if source_type not in field_map:
-#         error_msg = f"错误：不支持的源类型 '{source_type}'"
-#         print(error_msg)
-#         raise Exception(error_msg)
-        
-#     fields = field_map[source_type]
-
-#     def get_nested_field(data, field_paths):
-#         """从嵌套字典中获取字段值"""
-#         if isinstance(field_paths, str):
-#             field_paths = [field_paths]
-        
-#         result = []
-        
-#         for field_path in field_paths:
-#             try:
-#                 keys = field_path.split('.')
-#                 current = data
-#                 for key in keys:
-#                     current = current[key]
-                
-#                 print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
-                
-#                 if current is not None:
-#                     if isinstance(current, list):
-#                         if current:  # 只添加非空列表
-#                             result.extend(current)
-#                     else:
-#                         result.append(current)
-#             except (KeyError, TypeError, AttributeError) as e:
-#                 print(f"提取 '{field_path}' 时出错: {e}")
-#                 continue
-        
-#         return result
-
-#     # 3. 提取原始 B50 数据
-#     print(f"=== 开始提取数据 ===")
-#     b50_data = get_nested_field(raw_data, fields["data_field"])
-#     print(f"提取到的 best_data 总长度: {len(b50_data)}")
-    
-#     # 如果还是没有数据，抛出异常
-#     if len(b50_data) == 0:
-#         error_msg = "无法提取到任何有效数据"
-#         print(f"错误：{error_msg}")
-        
-#         # 保存原始数据用于调试
-#         try:
-#             save_config(b50_raw_file, raw_data)
-#             print(f"已保存原始数据到 {b50_raw_file} 用于调试")
-#         except:
-#             pass
-            
-#         raise Exception(error_msg)
-
-#     # 4. 缓存原始数据
-#     save_config(b50_raw_file, raw_data)
-
-#     # 5. 多线程处理每条曲目数据
-#     processed_data = []
-    
-#     # 国际服专用：难度映射（从字符串到标签）
-#     if source_type == "intr":
-#         intr_difficulty_to_label = {
-#             "Basic": "BASIC",
-#             "Advanced": "ADVANCED", 
-#             "Expert": "EXPERT",
-#             "Master": "MASTER",
-#             "Ultima": "ULTIMA"
-#         }
-    
-#     def process_song(song, i):
-#         try:
-#             print(f"处理第 {i} 首曲目: {song.get(fields['song_name'], 'Unknown')}")
-            
-#             # 检查必要字段（根据源类型有所不同）
-#             if source_type == "intr":
-#                 # 国际服检查
-#                 required_fields = ['id', 'song_name', 'level_index', 'score']
-#                 missing_fields = []
-#                 for field in required_fields:
-#                     field_name = fields[field]
-#                     if field_name not in song:
-#                         missing_fields.append(field_name)
-                
-#                 if missing_fields:
-#                     print(f"错误：字段 {missing_fields} 不存在于曲目数据中")
-#                     return None
-#             else:
-#                 # 国服检查（lxns/fish）
-#                 required_fields = ['id', 'song_name', 'level_index', 'score', 'rating', 'fc']
-#                 missing_fields = []
-#                 for field in required_fields:
-#                     field_name = fields[field]
-#                     if field_name not in song:
-#                         missing_fields.append(field_name)
-                
-#                 if missing_fields:
-#                     print(f"错误：字段 {missing_fields} 不存在于曲目数据中")
-#                     return None
-            
-#             # ========== 国际服特殊处理 ==========
-#             if source_type == "intr":
-#                 # 处理连击类型
-#                 fc_value = None
-#                 is_aj = song.get("isAllJustice", False)
-#                 is_fc = song.get("isFullCombo", False)
-#                 if is_aj:
-#                     fc_value = CHUNI_COMBO_TYPES[2]  # 使用 CHUNI_COMBO_TYPES 中的值
-#                 elif is_fc:
-#                     fc_value = CHUNI_COMBO_TYPES[1]   # 使用 CHUNI_COMBO_TYPES 中的值
-                
-#                 # 获取全连等级
-#                 full_chain_lv = song.get("fullChainLv", 0)
-#                 if full_chain_lv == 2:
-#                     fchain_value = CHUNI_CHAIN_TYPES[2]  # FC+
-#                 elif full_chain_lv == 1:
-#                     fchain_value = CHUNI_CHAIN_TYPES[1]   # FC
-#                 else:
-#                     fchain_value = None          # 未达成
-                
-#                 # 处理难度索引（从字符串转换为标签）
-#                 difficulty_str = song[fields["level_index"]]
-#                 level_index_label = intr_difficulty_to_label.get(difficulty_str, difficulty_str.upper())
-#             else:
-#                 # 国服直接使用已有字段
-#                 fc_value = song.get(fields["fc"]) if fields["fc"] else None
-#                 fchain_value = song.get(fields["fchain"]) if fields["fchain"] else None
-#                 level_index_label = song[fields["level_index"]]
-            
-#             # 基础数据
-#             processed_song = {
-#                 "clip_id": f"Best_{i + 1}" if i < 30 else f"New_{i - 29}",
-#                 "id": song[fields["id"]],
-#                 "song_name": song[fields["song_name"]],
-#                 "artist": None,
-#                 "score": song[fields["score"]],
-#                 "rating": None,  # 需要从数据库获取定数后计算
-#                 "level": None,  # 从数据库获取
-#                 "level_next": None,  # 从数据库获取
-#                 # "level_index": LEVEL_LABELS.get(level_index_label.upper()) if source_type == "intr",
-#                 "level_index": LEVEL_LABELS.get(level_index_label.upper()) if source_type == "intr" else REVERSE_LEVEL_LABELS.get(level_index_label),
-#                 "full_combo": fc_value,
-#                 "full_chain": fchain_value,
-#                 "play_count": None
-#             }
-
-#             print(f"【处理后】曲目基础信息: {processed_song['song_name']} - ID: {processed_song['id']}")
-
-#             # ========== 国际服：优先从日服数据库获取数据 ==========
-#             if source_type == "intr":
-#                 jp_difficulty_key = level_index_label  # 直接使用标签，因为日服用的是 "MASTER" 而不是 "MAS"
-#                 # 从日服数据库匹配曲目信息
-#                 jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
-#                 if jp_song_info:
-#                     print(f"检索到日服曲库匹配: {jp_song_info['meta']['title']}")
-#                     processed_song["artist"] = jp_song_info["meta"].get("artist", "Unknown")
-                    
-#                     # 获取对应难度的定数
-#                     if jp_difficulty_key in jp_song_info["data"]:
-#                         difficulty_data = jp_song_info["data"][jp_difficulty_key]
-#                         processed_song["level_next"] = difficulty_data["const"]
-#                         processed_song["level"] = processed_song["level_next"]  # 使用日服定数
-                        
-#                         # 计算 rating
-#                         if processed_song["score"] is not None and processed_song["level"] is not None:
-#                             from utils.PageUtils import calculate_rating
-#                             processed_song["rating"] = calculate_rating(
-#                                 processed_song["score"], 
-#                                 float(processed_song["level"])
-#                             )
-                        
-#                         print(f"更新日服难度等级: {processed_song['level']}, rating: {processed_song['rating']}")
-#                     else:
-#                         print(f"警告：［{processed_song['song_name']}］在日服数据库中未找到 {jp_difficulty_key} 难度")
-#                 else:
-#                     print(f"警告：未在日服数据库中找到［{processed_song['song_name']}］的信息")
-#                     # 从国服数据库尝试匹配（作为备用）
-#                     song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
-#                     if song_info:
-#                         print(f"从国服数据库找到备用匹配: {song_info['title']}")
-#                         processed_song["artist"] = song_info["artist"]
-#                         for diff in song_info.get("difficulties", []):
-#                             if diff.get("difficulty") == processed_song["level_index"]:
-#                                 level_value = diff["level_value"]
-#                                 processed_song["level"] = float(level_value) if isinstance(level_value, (int, float, str)) and str(level_value).replace('.', '').isdigit() else level_value
-#                                 processed_song["level_next"] = processed_song["level"]
-                                
-#                                 # 计算 rating
-#                                 if processed_song["score"] is not None and processed_song["level"] is not None:
-#                                     from utils.PageUtils import calculate_rating
-#                                     processed_song["rating"] = calculate_rating(
-#                                         processed_song["score"], 
-#                                         float(processed_song["level"])
-#                                     )
-#                                 print(f"使用国服备用定数: {processed_song['level']}")
-#                                 break
-                
-#                 # 如果还是没有定数，使用默认定数
-#                 if processed_song["level"] is None:
-#                     level_defaults = {
-#                         "BASIC": 7.0,
-#                         "ADVANCED": 10.0,
-#                         "EXPERT": 12.0,
-#                         "MASTER": 13.5,
-#                         "ULTIMA": 14.5
-#                     }
-#                     processed_song["level"] = level_defaults.get(processed_song["level_index"], 12.0)
-#                     processed_song["level_next"] = processed_song["level"]
-                    
-#                     # 计算 rating
-#                     if processed_song["score"] is not None:
-#                         from utils.PageUtils import calculate_rating
-#                         processed_song["rating"] = calculate_rating(
-#                             processed_song["score"], 
-#                             float(processed_song["level"])
-#                         )
-#                     print(f"使用默认定数: {processed_song['level']}")
-            
-#             else:  # 国服处理逻辑（lxns/fish）
-#                 # 从国服数据库匹配曲目信息
-#                 song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
-#                 if song_info:
-#                     print(f"检索到国服数据库匹配: {song_info['title']}")
-#                     processed_song["artist"] = song_info["artist"]
-                    
-#                     # 查找对应难度的定数
-#                     for diff in song_info.get("difficulties", []):
-#                         if diff.get("difficulty") == processed_song["level_index"]:
-#                             level_value = diff["level_value"]
-#                             processed_song["level"] = float(level_value) if isinstance(level_value, (int, float, str)) and str(level_value).replace('.', '').isdigit() else level_value
-                            
-#                             # 计算 rating
-#                             if processed_song["score"] is not None and processed_song["level"] is not None:
-#                                 from utils.PageUtils import calculate_rating
-#                                 processed_song["rating"] = calculate_rating(
-#                                     processed_song["score"], 
-#                                     float(processed_song["level"])
-#                                 )
-                            
-#                             print(f"更新难度等级: {processed_song['level']}, rating: {processed_song['rating']}")
-#                             break
-#                     else:
-#                         print(f"警告：［{processed_song['song_name']}］未找到 {processed_song['level_index']} 难度")
-#                 else:
-#                     print(f"警告：未找到［{processed_song['song_name']}］的信息")
-
-#                 # 从日服数据库匹配日服曲目信息（用于 level_next）
-#                 jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
-#                 if jp_song_info:
-#                     print(f"检索到日服曲库的相同匹配: {jp_song_info['meta']['title']}")
-#                     level_label = REVERSE_LEVEL_LABELS.get(processed_song["level_index"])
-#                     print(f"难度索引: {processed_song['level_index']} -> 标签: {level_label}")
-#                     if level_label and level_label in jp_song_info["data"]:
-#                         difficulty_data = jp_song_info["data"][level_label]
-#                         processed_song["level_next"] = difficulty_data["const"]
-#                         print(f"国服 - [{processed_song['level']}], 日服 - [{processed_song['level_next']}]")
-#                     else:
-#                         print(f"警告：【{processed_song['song_name']}】未找到 {level_label} 难度")
-#                 else:
-#                     print(f"警告：未找到【{processed_song['song_name']}】的信息")
-                
-#                 # 备用方案
-#                 if processed_song["level_next"] is None:
-#                     processed_song["level_next"] = processed_song.get("level", "N/A")
-#                     print(f"使用备用定数: {processed_song['level_next']}")
-            
-#             print(f"曲目处理完成: {processed_song['song_name']}")
-#             return processed_song
-            
-#         except Exception as e:
-#             import traceback
-#             error_msg = f"处理曲目 {i} 时出错: {str(e)}\n{traceback.format_exc()}"
-#             print(error_msg)
-#             return None
-
-#     print(f"=== 开始处理 {len(b50_data)} 首曲目 ===")
-#     with ThreadPoolExecutor() as executor:
-#         futures = [executor.submit(process_song, song, i) for i, song in enumerate(b50_data)]
-#         for future in futures:
-#             if result := future.result():
-#                 processed_data.append(result)
-
-#     # 检查处理后的数据是否为空
-#     if len(processed_data) == 0:
-#         error_msg = "处理后的数据为空，没有成功处理任何曲目"
-#         print(f"错误：{error_msg}")
-#         raise Exception(error_msg)
-
-#     print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===\n若需要添加 PickUp 曲目，请按照 b50_config.json 中的格式编写")
-    
-#     # 6. 保存处理后的数据
-#     save_config(b50_data_file, processed_data)
-#     return processed_data
-
-
-
-
-
-
-# def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, best_or_new: str):
-#     """
-#     Best50 数据清洗
-    
-#     Args:
-#         raw_data: 请求获取的原始数据
-#         source_type(str): 数据源类型：[水鱼 / 落雪 / 国际服]
-#         b50_raw_file: Best50 原始数据存储文件名
-#         b50_data_file: Best50 清洗数据存储文件名
-#         best_or_new(str): 数据类型: [全都要(b30 + n20), 仅新曲(n20), 仅旧曲(b30)]
-        
-#     Returns:
-#         processed_data: 已经过清洗的 Best50 数据
-        
-#     Raises:
-#         NoSuchFileExceptions: 未找到原始文件
-#         KeyErrorExceptions: 字段不存在
-#     """
-    
-#     # 调试：打印原始数据结构
-#     # print(f"=== 数据调试信息 ===")
-#     # print(f"原始数据类型: {type(raw_data)}")
-#     # if isinstance(raw_data, dict):
-#     #     print(f"原始数据顶层键: {list(raw_data.keys())}")
-#     #     if "records" in raw_data:
-#     #         print(f"records 键: {list(raw_data['records'].keys())}")
-#     #         print(f"b30 数据长度: {len(raw_data['records'].get('b30', []))}")
-#     #         print(f"n20 数据长度: {len(raw_data['records'].get('n20', []))}")
-#     #         print(f"r10 数据长度: {len(raw_data['records'].get('r10', []))}")
-
-#     # 1. 加载本地曲目数据库
-#     song_db = load_config(music_info_path, use_cache=True)
-#     jp_song_db = load_config(jp_music_info_path, use_cache=True)
-
-#     # 2. 根据数据源类型提取字段映射规则
-#     field_map = {
-#         "lxns": {
-#             "id": "id",
-#             "song_name": "song_name",
-#             "level": None,
-#             "level_index": "level_index",
-#             "score": "score",
-#             "rating": "rating",
-#             "fc": "full_combo",
-#             "fchain": "full_chain",
-#             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
-#         },
-#         "fish": {
-#             "id": "mid",
-#             "song_name": "title", 
-#             "level": "ds",
-#             "level_index": "level_index",
-#             "score": "score",
-#             "rating": "ra",
-#             "fc": "fc",
-#             "fchain": None,
-#             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
-#         },
-#         "intr": {
-#             "id": "idx",
-#             "song_name": "title", 
-#             "level": None,
-#             "level_index": "difficulty", # 下面已经处理这个字段的信息了，这里不需要处理
-#             "score": "score",
-#             "rating": None,
-#             "fc": CHUNI_COMBO_TYPES[2] if "isAllJustice" else (CHUNI_COMBO_TYPES[1] if "isFullCombo" else CHUNI_COMBO_TYPES[0]),
-#             "fchain": "fullChainLv",
-#             "data_field": CHUNI_DATA_TYPE[source_type][best_or_new]
-#         }
-#     }
-    
-#     if source_type not in field_map:
-#         print(f"错误：不支持的源类型 '{source_type}'")
-#         return []
-        
-#     fields = field_map[source_type]
-
-#     def get_nested_field(data, field_paths):
-#         """从嵌套字典中获取字段值"""
-#         if isinstance(field_paths, str):
-#             field_paths = [field_paths]
-        
-#         result = []
-        
-#         for field_path in field_paths:
-#             try:
-#                 keys = field_path.split('.')
-#                 current = data
-#                 for key in keys:
-#                     current = current[key]
-                
-#                 print(f"字段路径 '{field_path}' 找到数据: {type(current)}, 长度: {len(current) if isinstance(current, list) else 'N/A'}")
-                
-#                 if current is not None:
-#                     if isinstance(current, list):
-#                         if current:  # 只添加非空列表
-#                             result.extend(current)
-#                     else:
-#                         result.append(current)
-#             except (KeyError, TypeError, AttributeError) as e:
-#                 print(f"提取 '{field_path}' 时出错: {e}")
-#                 continue
-        
-#         return result
-
-#     # 3. 提取原始 B50 数据
-#     print(f"=== 开始提取数据 ===")
-#     b50_data = get_nested_field(raw_data, fields["data_field"])
-#     print(f"提取到的 best_data 总长度: {len(b50_data)}")
-    
-#     # 备用方案：如果嵌套提取失败，尝试直接提取
-#     # if len(b50_data) == 0:
-#     #     print("=== 尝试备用提取方案 ===")
-#     #     if isinstance(raw_data, dict) and "records" in raw_data:
-#     #         records = raw_data["records"]
-#     #         b30_data = records.get("b30", [])
-#     #         n20_data = records.get("n20", [])
-#     #         print(f"直接提取 b30: {len(b30_data)} 条")
-#     #         print(f"直接提取 n20: {len(n20_data)} 条")
-#     #         b50_data = b30_data + n20_data
-#     #         print(f"合并后 b50_data 长度: {len(b50_data)}")
-
-#     # 如果还是没有数据，直接返回空列表
-#     if len(b50_data) == 0:
-#         print("错误：无法提取到任何有效数据")
-#         # 保存原始数据用于调试
-#         save_config(b50_raw_file, raw_data)
-#         return []
-
-#     # 4. 缓存原始数据
-#     save_config(b50_raw_file, raw_data)
-
-#     # 5. 多线程处理每条曲目数据
-#     processed_data = []
-#     # print_lock = threading.Lock()
-    
-#     def process_song(song, i):
-#         try:
-#             print(f"处理第 {i} 首曲目: {song.get(fields['song_name'], 'Unknown')}")
-#             # print(f"曲目数据: {song}")  # 打印完整曲目数据
-            
-#             # 检查必要字段是否存在
-#             required_fields = ['id', 'song_name', 'level_index', 'score', 'rating', 'fc']
-#             for field in required_fields:
-#                 field_name = fields[field]
-#                 if field_name not in song:
-#                     print(f"错误：字段 '{field_name}' 不存在于曲目数据中")
-#                     return None
-#                 # print(f"  {field}: {song[field_name]}")
-            
-#             processed_song = {
-#                 "clip_id": f"{"Best"}_{i + 1}" if i < 30 else f"New_{i - 29}",
-#                 "id": song[fields["id"]],
-#                 "song_name": song[fields["song_name"]],
-#                 "artist": None,
-#                 "score": song[fields["score"]],
-#                 "rating": song[fields["rating"]],
-#                 "level": song[fields["level"]] if fields["level"] is not None else None,
-#                 "level_next": None,
-#                 "level_index": LEVEL_LABELS[song[fields["level_index".upper()]]] if source_type == "intr" else song[fields["level_index"]],
-#                 "full_combo": song.get(fields["fc"]) if fields["fc"] is not None else None,
-#                 "full_chain": song.get(fields["fchain"]) if fields["fchain"] is not None else None,
-#                 "play_count": None
-#             }
-
-#             print(f"【处理后】曲目基础信息: {processed_song['song_name']} - ID: {processed_song['id']}")
-
-#             # 从国服数据库匹配曲目信息
-#             song_info = next((item for item in song_db if item["id"] == processed_song["id"]), None)
-#             if song_info or source_type != "intr":
-#                 print(f"检索到国服数据库匹配: {song_info['title']}")
-#                 processed_song["artist"] = song_info["artist"]
-#                 for diff in song_info.get("difficulties", []):
-#                     if diff.get("difficulty") == processed_song["level_index"]:
-#                         level_value = diff["level_value"]
-#                         processed_song["level"] = float(level_value) if isinstance(level_value, (int, float, str)) and str(level_value).replace('.', '').isdigit() else level_value
-#                         print(f"更新难度等级: {processed_song['level']}")
-#                         break
-#                 else:
-#                     print(f"警告：［{processed_song['song_name']}］未找到 {processed_song['level_index']} 难度")
-#             else:
-#                 print(f"警告：未找到［{processed_song['song_name']}］的信息")
-
-#             # 从日服数据库匹配日服曲目信息
-#             jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
-#             if jp_song_info:
-#                 print(f"检索到日服曲库的相同匹配: {jp_song_info['meta']['title']}")
-#                 level_label = REVERSE_LEVEL_LABELS.get(processed_song["level_index"])
-#                 print(f"难度索引: {processed_song['level_index']} -> 标签: {level_label}")
-#                 if level_label and level_label in jp_song_info["data"]:
-#                     difficulty_data = jp_song_info["data"][level_label]
-#                     processed_song["level_next"] = difficulty_data["const"]
-#                     print(f"国服 - [{processed_song['level']}], 日服 - [{processed_song['level_next']}]")
-#                 else:
-#                     print(f"警告：【{processed_song['song_name']}】未找到 {level_label} 难度")
-#             else:
-#                 print(f"警告：未找到【{processed_song['song_name']}】的信息")
-            
-#             # 备用方案
-#             if processed_song["level_next"] is None:
-#                 processed_song["level_next"] = processed_song.get("level", "N/A")
-#                 print(f"使用备用定数: {processed_song['level_next']}")
-            
-#             print(f"曲目处理完成: {processed_song['song_name']}")
-#             return processed_song
-            
-#         except Exception as e:
-#             import traceback
-#             error_msg = f"处理曲目 {i} 时出错: {str(e)}\n{traceback.format_exc()}"
-#             print(error_msg)
-#             return None
-
-#     print(f"=== 开始处理 {len(b50_data)} 首曲目 ===")
-#     with ThreadPoolExecutor() as executor:
-#         futures = [executor.submit(process_song, song, i) for i, song in enumerate(b50_data)]
-#         for future in futures:
-#             if result := future.result():
-#                 processed_data.append(result)
-
-#     print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===\n若需要添加 PickUp 曲目，请按照 b50_config.json 中的格式编写")
-#     # 6. 保存处理后的数据
-#     save_config(b50_data_file, processed_data)
-#     return processed_data
-
 def gen_video_config(b50_data, images_path, videoes_path, output_file,
                             clip_start_interval, clip_play_time, default_comment_placeholders):
     """生成视频配置文件，合并了 `st_gen_resource_config` 和 `gene_resource_config`
@@ -783,13 +191,13 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
 
     # 检查视频开始时间区间
     if clip_start_interval[0] > clip_start_interval[1]:
-        print(f"Error: 视频开始时间区间设置错误，请检查global_config.yaml文件中的CLIP_START_INTERVAL配置。")
+        print(f"错误: 视频开始时间区间设置错误，请检查global_config.yaml文件中的CLIP_START_INTERVAL配置。")
         clip_start_interval = (clip_start_interval[1], clip_start_interval[1])
 
     # 遍历 b50_data 来构建视频配置数据
     for song in b50_data:
         if not song['clip_id']:
-            print(f"Error: 没有找到 {song['title']}-{song['level_label']}-{song['type']} 的 clip_id，请检查数据格式，跳过该片段。")
+            print(f"错误: 没有找到 {song['title']}-{song['level_label']}-{song['type']} 的 clip_id，请检查数据格式，跳过该片段。")
             continue
         id = song['clip_id']
         # video_name = f"{song['id']}-{song['song_name']}"
@@ -797,13 +205,13 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         __image_path = os.path.join(images_path, id + ".png")
         __image_path = os.path.normpath(__image_path)
         if not os.path.exists(__image_path):
-            print(f"Error: 没有找到 {id}.png 图片，请检查本地缓存数据。")
+            print(f"错误: 没有找到 {id}.png 图片，请检查本地缓存数据。")
             __image_path = ""
 
         __video_path = os.path.join(videoes_path, video_name + ".mp4")
         __video_path = os.path.normpath(__video_path)
         if not os.path.exists(__video_path):
-            print(f"Error: 没有找到 {video_name} 视频，请检查本地缓存数据。")
+            print(f"错误: 没有找到 {video_name} 视频，请检查本地缓存数据。")
             __video_path = ""
         
         duration = clip_play_time
@@ -905,6 +313,36 @@ def save_config_with_types(file_path, data):
         st.error(f"保存数据失败: {e}")
         return False
 
+
+def save_song_data(current_data, current_paths, success_message, warning_message, should_rerun=True):
+    """
+    保存曲目数据的通用函数
+    
+    Args:
+        current_data: 当前数据列表
+        current_paths: 路径配置
+        success_message: 成功消息
+        warning_message: 警告消息（只读模式）
+        should_rerun: 是否在保存后刷新页面
+    """
+    # 更新数据
+    st.session_state.processed_data = current_data
+    st.session_state.editing_b50_data = current_data
+    
+    # 如果处于编辑模式，自动保存
+    if st.session_state.editing_enabled:
+        if save_config_with_types(current_paths['data_file'], current_data):
+            st.success(success_message, icon="✅")
+            if should_rerun:
+                st.rerun()
+            return True
+    else:
+        st.warning(warning_message, icon="⚠️")
+        if should_rerun:
+            st.rerun()
+        return False
+    return False
+
 def merge_b50_data(new_b50_data, old_b50_data):
     """
     合并两份 Best50 数据，使用新数据的基本信息但保留旧数据中的视频相关信息
@@ -955,23 +393,6 @@ def update_b50_data(b50_raw_file, b50_data_file, query_param, best_new, server):
         if 'message' in b50_data:
             raise ConnectionError(f"请求 Best50 数据失败: {b50_data['message']}")
     return _process_b50_data(b50_data, server, b50_raw_file, b50_data_file, best_new)
-
-# def update_b50_data_lxns(b50_raw_file, b50_data_file, friend_code, data_type):
-#     lxns = get_b50_data(friend_code, "lxns")
-#     # if "data" not in lxns:
-#     #     raise Exception("落雪 API 未传回 Best50 数据，您可能需要检查好友码或账号设置")
-#     if 'message' in lxns:
-#         raise ConnectionError(f"请求 Best50 数据失败: {lxns['message']}")
-#     return _process_b50_data(lxns, "lxns", b50_raw_file, b50_data_file, data_type)
-
-# def update_b50_data_fish(b50_raw_file, b50_data_file, username, data_type):
-#     try:
-#         fish = get_b50_data(username, "fish")
-#         if 'message' in fish:
-#             raise ConnectionError(f"请求 Best50 数据失败: {fish['message']}")
-#         return _process_b50_data(fish, "fish", b50_raw_file, b50_data_file, data_type)
-#     except json.JSONDecodeError:
-#         raise Exception("Error: 返回数据非有效 JSON 格式")
 
 def search_one_video(downloader, song_data):
     title_name = song_data['song_name']

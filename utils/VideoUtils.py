@@ -293,76 +293,76 @@ def create_video_segment(clip_config, resolution, font_path, bitrate, encoder_pa
     
     # 视频片段处理（全屏→默认位置的缓动动画）
     audio_stream = None
-    # # 视频片段处理部分
+    # 视频片段处理部分
     if video_path and os.path.exists(video_path):
         input_args.extend(['-i', video_path])
         video_idx = 2
         
-    #     # 精确判断：只对 id=9191 且 level_index=3 的曲目添加动画
-    #     video_id = str(clip_config.get('id', ''))
-    #     level = clip_config.get('level_index')
+        # # 精确判断：只对 id=9191 且 level_index=3 的曲目添加动画
+        # video_id = str(clip_config.get('id', ''))
+        # level = clip_config.get('level_index')
         
-    #     if video_id == '9191' and level == 3:
-    #         print(f"✓ 为目标曲目添加动画效果：ID={video_id}, 难度=MASTER")
+        # if video_id == '9191' and level == 3:
+        #     print(f"✓ 为目标曲目添加动画效果：ID={video_id}, 难度=MASTER")
             
-    #         # 动画参数
-    #         anim_start_time = 1.5
-    #         anim_duration = 1.75
-    #         anim_end_time = anim_start_time + anim_duration
+        #     # 动画参数
+        #     anim_start_time = 1.5
+        #     anim_duration = 1.75
+        #     anim_end_time = anim_start_time + anim_duration
             
-    #         # 起始位置：全屏
-    #         start_x, start_y = 0, 0
-    #         start_width = resolution[0]
-    #         start_height = resolution[1]
+        #     # 起始位置：全屏
+        #     start_x, start_y = 0, 0
+        #     start_width = resolution[0]
+        #     start_height = resolution[1]
             
-    #         # 结束位置：默认内框
-    #         end_x = inner_box_left
-    #         end_y = inner_box_top
-    #         end_height = inner_box_height
-    #         # 保持宽高比计算结束宽度
-    #         aspect = start_width / start_height  # 视频原始宽高比（假设与分辨率相同）
-    #         end_width = end_height * aspect
+        #     # 结束位置：默认内框
+        #     end_x = inner_box_left
+        #     end_y = inner_box_top
+        #     end_height = inner_box_height
+        #     # 保持宽高比计算结束宽度
+        #     aspect = start_width / start_height  # 视频原始宽高比（假设与分辨率相同）
+        #     end_width = end_height * aspect
             
-    #         print(f"动画参数:")
-    #         print(f"  位置: ({start_x}, {start_y}) → ({end_x}, {end_y})")
-    #         print(f"  尺寸: ({start_width}, {start_height}) → ({end_width:.1f}, {end_height})")
+        #     print(f"动画参数:")
+        #     print(f"  位置: ({start_x}, {start_y}) → ({end_x}, {end_y})")
+        #     print(f"  尺寸: ({start_width}, {start_height}) → ({end_width:.1f}, {end_height})")
             
-    #         # 缓动函数：progress = (t - start)/duration, ease = 0.5 - 0.5*cos(pi * progress)
-    #         progress = f'((t-{anim_start_time})/{anim_duration})'
-    #         ease = f'(0.5 - 0.5*cos(PI * {progress}))'
+        #     # 缓动函数：progress = (t - start)/duration, ease = 0.5 - 0.5*cos(pi * progress)
+        #     progress = f'((t-{anim_start_time})/{anim_duration})'
+        #     ease = f'(0.5 - 0.5*cos(PI * {progress}))'
             
-    #         # 缩放表达式（宽度保持宽高比）
-    #         scale_filter = f"scale=" \
-    #                     f"'if(lt(t,{anim_start_time}), {start_width}, " \
-    #                     f"if(gt(t,{anim_end_time}), {end_width}, " \
-    #                     f"({start_height} + ({end_height}-{start_height})*{ease})*{aspect}" \
-    #                     f"))' : " \
-    #                     f"'if(lt(t,{anim_start_time}), {start_height}, " \
-    #                     f"if(gt(t,{anim_end_time}), {end_height}, " \
-    #                     f"{start_height} + ({end_height}-{start_height})*{ease}" \
-    #                     f"))' : eval=frame"
+        #     # 缩放表达式（宽度保持宽高比）
+        #     scale_filter = f"scale=" \
+        #                 f"'if(lt(t,{anim_start_time}), {start_width}, " \
+        #                 f"if(gt(t,{anim_end_time}), {end_width}, " \
+        #                 f"({start_height} + ({end_height}-{start_height})*{ease})*{aspect}" \
+        #                 f"))' : " \
+        #                 f"'if(lt(t,{anim_start_time}), {start_height}, " \
+        #                 f"if(gt(t,{anim_end_time}), {end_height}, " \
+        #                 f"{start_height} + ({end_height}-{start_height})*{ease}" \
+        #                 f"))' : eval=frame"
             
-    #         # 位置表达式
-    #         overlay_filter = f"overlay=" \
-    #                         f"'if(lt(t,{anim_start_time}), {start_x}, " \
-    #                         f"if(gt(t,{anim_end_time}), {end_x}, " \
-    #                         f"{start_x} + ({end_x}-{start_x})*{ease}" \
-    #                         f"))' : " \
-    #                         f"'if(lt(t,{anim_start_time}), {start_y}, " \
-    #                         f"if(gt(t,{anim_end_time}), {end_y}, " \
-    #                         f"{start_y} + ({end_y}-{start_y})*{ease}" \
-    #                         f"))' : eval=frame"
+        #     # 位置表达式
+        #     overlay_filter = f"overlay=" \
+        #                     f"'if(lt(t,{anim_start_time}), {start_x}, " \
+        #                     f"if(gt(t,{anim_end_time}), {end_x}, " \
+        #                     f"{start_x} + ({end_x}-{start_x})*{ease}" \
+        #                     f"))' : " \
+        #                     f"'if(lt(t,{anim_start_time}), {start_y}, " \
+        #                     f"if(gt(t,{anim_end_time}), {end_y}, " \
+        #                     f"{start_y} + ({end_y}-{start_y})*{ease}" \
+        #                     f"))' : eval=frame"
             
-    #         # 应用滤镜
-    #         filter_complex_parts.append(
-    #             f'[{video_idx}:v]trim=start={start_time}:duration={duration},'
-    #             f'setpts=PTS-STARTPTS,'
-    #             f'{scale_filter}[overlay_vid];'
-    #         )
+        #     # 应用滤镜
+        #     filter_complex_parts.append(
+        #         f'[{video_idx}:v]trim=start={start_time}:duration={duration},'
+        #         f'setpts=PTS-STARTPTS,'
+        #         f'{scale_filter}[overlay_vid];'
+        #     )
             
-    #         filter_complex_parts.append(
-    #             f'[{base_stream}][overlay_vid]{overlay_filter}[final_video];'
-    #         )
+        #     filter_complex_parts.append(
+        #         f'[{base_stream}][overlay_vid]{overlay_filter}[final_video];'
+        #     )
         
     #     else:
         # 其他曲目：使用默认静态效果
@@ -465,7 +465,7 @@ FFmpeg 命令:
 ============================ 错误日志结束 ============================"""
         
         # 写入错误日志文件
-        log_path = f'./videos/error_logs/video_generation_error_report_{timestamp}.log'
+        log_path = f'./videos/error_logs/generation_error_report_{timestamp}.log'
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(log_content)
@@ -748,8 +748,7 @@ def render_all_video_clips(
     to_render, existing = check_rendered_clips_multithreaded(
         resources,
         video_output_path,
-        force_render,
-        max_workers=4
+        force_render
     )
     
     print(f"需要渲染 {len(to_render)} 个新片段，跳过 {len(existing)} 个已存在片段")

@@ -11,7 +11,7 @@ from utils.ImageUtils import generate_single_image
 
 def st_generate_b30_images(placeholder, save_paths):
     b50_data = load_config(save_paths['data_file'])
-    image_path = save_paths['image_dir']
+    image_path = f"{save_paths['image_dir']}/background"
     
     # 确保图片目录存在
     os.makedirs(image_path, exist_ok=True)
@@ -38,12 +38,12 @@ def st_generate_b30_images(placeholder, save_paths):
                 record_detail,
                 custom_data,
                 image_path,
-                prefix,
-                int(index)
+                # prefix,
+                # int(index)
             )
             return "success"
         except Exception as e:
-            print(f"生成图片 {index} 失败: {e}")
+            print(f"在生成 {prefix} 图片 {index} 失败: {e}")
             return "failed"
 
     with placeholder.container(border=False):
@@ -210,8 +210,9 @@ with st.container(border=True):
 
 custom_dir = current_paths['custom_style']
 if not os.path.exists(custom_dir):
-    st.toast("无法找到存档内样式文件，已复制默认样式文件至存档。", icon="✅️")
+    st.toast("无法找到存档内的样式文件，已复制默认样式文件至存档。", icon="✅️")
     shutil.copy2(f"{root_path}/themes/default.json", custom_dir)
+
 ### Data Viewing Section - Start ###
 st.divider()
 with st.container(border=True):

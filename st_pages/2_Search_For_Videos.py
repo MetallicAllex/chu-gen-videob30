@@ -15,6 +15,7 @@ _use_custom_po_token = G_config.get('USE_CUSTOM_PO_TOKEN', False)
 _use_auto_po_token = G_config.get('USE_AUTO_PO_TOKEN', False)
 _use_oauth = G_config.get('USE_OAUTH', False)
 _customer_po_token = G_config.get('CUSTOMER_PO_TOKEN', '')
+_download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
 # 新增 YouTube API 配置
 _use_youtube_api = G_config.get('USE_YOUTUBE_API', False)
 _youtube_api_key = G_config.get('YOUTUBE_API_KEY', '')
@@ -112,10 +113,7 @@ with extra_setting_container:
     if downloader == "bilibili":
         bili_col1, bili_col2 = st.columns([.35, 1.65], vertical_alignment="center")
         with bili_col1:
-            _download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
             download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res, disabled=no_credential, help="下载 720P+ 或 60FPS 的视频，这可让您的谱面确认视频更流畅" if not no_credential else "游客无法下载超过 480P+ 的视频（因为您当前选择了[不登录 B 站账号]）")
-        
-        # with bili_col2:
             no_credential = st.checkbox("不登录 B 站账号", value=_no_credential, help="不登录账号搜索（游客），某些情况下可以概率绕过风控")
     
         with bili_col2:
@@ -128,7 +126,7 @@ with extra_setting_container:
             if not no_credential:
                 # st.markdown("---")
                 if st.session_state.bilibili_logged_in:
-                    st.success("已登录 Bilibili 账号", icon="✅")
+                    st.success("已登录 Bilibili 账号（如果您的显示状态有问题，请以控制台实际输出为准）", icon="✅")
                     if st.button("登出", key="bilibili_logout", icon="🚪", width="stretch"):
                         # 删除凭证文件
                         cred_path = "./cred_datas/bilibili_cred.pkl"
@@ -137,7 +135,7 @@ with extra_setting_container:
                         st.session_state.bilibili_logged_in = False
                         st.rerun()
                 else:
-                    st.error("未登录 Bilibili 账号", icon="❎")
+                    st.error("未登录 Bilibili 账号（如果您的显示状态有问题，请以控制台实际输出为准）", icon="❎")
                     if st.button("登入", key="bilibili_login_btn", type="primary", icon="🔐", width="stretch"):
                         st.session_state.bilibili_show_qr = True
                         st.rerun()
@@ -162,9 +160,6 @@ with extra_setting_container:
                                 st.error(message, icon="❌")
                                 st.info("请重新点击登录按钮", icon="ℹ️")
 
-        # with bili_col2:
-        #     _download_high_res = G_config.get('DOWNLOAD_HIGH_RES', True)
-        #     download_high_res = st.checkbox("下载高分辨率视频", value=_download_high_res, disabled=no_credential, help="下载 720P+ 或 60FPS 的视频，这可让您的谱面确认视频更流畅" if not no_credential else "游客无法下载超过 480P+ 的视频（因为您当前选择了[不登录 B 站账号]）")
         if no_credential:
             st.info("二维码首次无法登录，请在弹出后关闭，待重新登录的二维码弹出后再扫描登录。", icon="ℹ️")
     elif downloader == "youtube":
@@ -185,7 +180,7 @@ with extra_setting_container:
                 help="在 Google Cloud Console 创建 API Key"
             )
             if not youtube_api_key:
-                st.warning("⚠️ 请配置 YouTube API Key 以使用 API 搜索功能")
+                st.warning("请配置 YouTube API Key 以使用 API 搜索功能", icon="⚠️")
         else:
             youtube_api_key = ''
             with ytb_col2:
@@ -286,8 +281,11 @@ def st_init_downloader():
 
     elif downloader == "bilibili":
         st.toast("正在初始化 Bilibili 下载器...", icon="ℹ️")
-        if not no_credential:
-            st.toast("正在尝试登录... 如弹出二维码窗口，请使用 哔哩哔哩 客户端扫描进行登录", icon="ℹ️")
+        if download_high_res and not no_credential:
+            # st.toast("正在尝试登录... 如弹出二维码窗口，请使用 哔哩哔哩 客户端扫描进行登录", icon="ℹ️")
+            # st.session_state.bilibili_show_qr = True
+            st.toast("您选择了下载高分辨率视频，但您并未登录 B 站账号，将以 480P 下载。")
+            st.toast("您需要主动登录 B 站账号，才能下载高分辨率视频（如果显示缓存异常，请重新登录）")
         dl_instance = BilibiliDownloader(
             proxy=proxy_address if use_proxy else None,
             no_credential=no_credential,

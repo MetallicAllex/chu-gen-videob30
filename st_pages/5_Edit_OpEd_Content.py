@@ -171,6 +171,12 @@ with st.container(border=True):
         st.stop()
 ### Savefile Management - End ###
 
+# TODO: 在这里添加开头结尾和评论的文字图像预览功能
+# 并且支持在此处预先生成需要使用的图像，将其存储在 (存档目录)/images/text 目录下
+# 以背景板图像的相同名称保存，减少因命名混乱导致评论所在片段错误
+# 同时在一定程度上可以解决无法显示 Emoji 的问题，并且加快渲染速度
+# 能将节省下来的时间用于在最终的拼接视频步骤上添加转场过渡效果
+
 if config:
     st.write("添加想要展示的文字内容，每一页最多可以展示约 250 字")
     st.info("""
@@ -195,4 +201,3 @@ if config:
             st.switch_page("st_pages/6_Compostie_Videos.py")
 else:
     st.warning("未找到视频生成生成配置！请检查是否完成了4-1！", icon="⚠️")
-

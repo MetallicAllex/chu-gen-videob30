@@ -78,11 +78,6 @@ with st.container(border=True):
         st.stop()
 ### Savefile Management - End ###
 
-custom_dir = current_paths['custom_style']
-if not os.path.exists(custom_dir):
-    st.toast("无法找到存档内样式文件，已复制默认样式文件至存档。", icon="✅️")
-    shutil.copy2(f"{root_path}/themes/default.json", custom_dir)
-
 # 添加悬停效果CSS（从5_Edit_OpEd_Content.py复制）
 st.markdown("""
 <style>
@@ -140,84 +135,115 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def update_preview_images(style_config, placeholder, test_string):
+# def update_preview_images(style_config, placeholder, test_string):
 
-    record_template = {
-        "clip_id": "Best_1",
-        "id": 2401,
-        "song_name": "オンソクデイズ!!",
-        "artist": "cosMo＠暴走P",
-        "score": 1008529,
-        "rating": 17.0029,
-        "level": 14.9,
-        "level_next": 14.9,
-        "level_index": 3,
-        "full_combo": "fullcombo",
-        "full_chain": None,
-        "play_count": None
-    }
+#     record_template = {
+#         "clip_id": "Best_1",
+#         "id": 2401,
+#         "song_name": "オンソクデイズ!!",
+#         "artist": "cosMo＠暴走P",
+#         "score": 1008529,
+#         "rating": 17.0029,
+#         "level": 14.9,
+#         "level_next": 14.9,
+#         "level_index": 3,
+#         "full_combo": "fullcombo",
+#         "full_chain": None,
+#         "play_count": None
+#     }
 
-    intro_template = {
-        "id": "intro_1",
-        "duration": 2,
-        "text": test_string,
-        "bg_page": True
-    }
+#     intro_template = {
+#         "id": "intro_1",
+#         "duration": 2,
+#         "text": test_string,
+#         "bg_page": True
+#     }
     
-    video_template = {
-        "id": 2401,
-        "clip_id": "Best_1",
-        "song_name": "オンソクデイズ!!",
-        "artist": "cosMo＠暴走P",
-        "level": 14.9,
-        "level_next": 14.9,
-        "level_index": 3,
-        "score": 1008529,
-        "rating": 17.0029,
-        "full_combo": "fullcombo",
-        "full_chain": None,
-        "main_image": None,
-        "video": "videos\\downloads\\2401-MASTER.mp4",
-        "duration": 2,
-        "start": 121,
-        "end": 123,
-        "text": test_string
-    }
+#     video_template = {
+#         "id": 2401,
+#         "clip_id": "Best_1",
+#         "song_name": "オンソクデイズ!!",
+#         "artist": "cosMo＠暴走P",
+#         "level": 14.9,
+#         "level_next": 14.9,
+#         "level_index": 3,
+#         "score": 1008529,
+#         "rating": 17.0029,
+#         "full_combo": "fullcombo",
+#         "full_chain": None,
+#         "main_image": None,
+#         "video": "videos\\downloads\\2401-MASTER.mp4",
+#         "duration": 2,
+#         "start": 121,
+#         "end": 123,
+#         "text": test_string
+#     }
     
-    with placeholder.container(border=True):
-        st.info("提示：此效果仅供预览您的自定义样式修改，需要点击下方按钮保存方可生效！")
+#     with placeholder.container(border=True):
+#         st.info("提示：此效果仅供预览您的自定义样式修改，需要点击下方按钮保存方可生效！")
 
-        # Render Preview 1
-        pil_img1 = get_video_preview_frame(
-            clip_config=intro_template,
-            style_config=style_config,
-            resolution=G_config.get("VIDEO_RES", (1920, 1080)),
-            part="intro"
-        )
-        st.image(pil_img1, caption="预览图1(片头)")
+#         # Render Preview 1
+#         pil_img1 = get_video_preview_frame(
+#             clip_config=intro_template,
+#             style_config=style_config,
+#             resolution=G_config.get("VIDEO_RES", (1920, 1080)),
+#             part="intro"
+#         )
+#         st.image(pil_img1, caption="预览图1(片头)")
 
-        # Render Preview 2
-        # generate test image
-        test_image_path = os.path.join(f"{root_path}/thumbnails", "test_achievement.png")
-        video_template['main_image'] = test_image_path
-        # BUG: CHECK GENERATE IMAGE
-        generate_single_image(record_template, test_image_path, "TEST", 1)
+#         # Render Preview 2
+#         # generate test image
+#         test_image_path = os.path.join(f"{root_path}/thumbnails", "test_achievement.png")
+#         video_template['main_image'] = test_image_path
+#         # BUG: CHECK GENERATE IMAGE
+#         generate_single_image(record_template, test_image_path, "TEST", 1)
 
-        # get preivew video frame
-        pil_img2 = get_video_preview_frame(
-            clip_config=intro_template,
-            style_config=style_config,
-            resolution=G_config.get("VIDEO_RES", (1920, 1080)),
-            part="content"
-        )
-        st.image(pil_img2, caption="预览图2(正片)")
+#         # get preivew video frame
+#         pil_img2 = get_video_preview_frame(
+#             clip_config=intro_template,
+#             style_config=style_config,
+#             resolution=G_config.get("VIDEO_RES", (1920, 1080)),
+#             part="content"
+#         )
+#         st.image(pil_img2, caption="预览图2(正片)")
+
+custom_dir = current_paths['custom_style']
+# if not os.path.exists(custom_dir):
+#     st.toast("无法找到存档内的样式文件，已复制默认样式文件至存档。", icon="✅️")
+#     shutil.copy2(f"{root_path}/themes/default.json", custom_dir)
 
 # 初始化 session state
-if 'preset_style' not in st.session_state:
-    st.session_state.preset_style = "chu-gen 默认"  # 设置默认值
+# if 'preset_style' not in st.session_state:
+#     st.session_state.preset_style = "default"  # 设置默认值
 
-sel_preset_style = st.radio("选择预设模版", options=["chu-gen 默认", "init_ 模版" ,"自定义"], key="preset_style",
-            horizontal=True, help="仅更改画面图像，不会修改字体等参数", captions=["由 mai-gen 官方制作的默认模版", "由哔哩哔哩 @init_ 制作的 PPT 模版", "自行上传合适的素材"])
+# sel_preset_style = st.radio("选择预设模版", options=["default", "init"], key="preset_style",
+#             horizontal=True, help="仅更改画面图像，不会修改字体等参数", captions=["由 mai-gen 官方制作的默认模版", "由哔哩哔哩 @init_ 制作的 PPT 模版"])
+
+# 预设样式选择
+preset_col1, preset_col2 = st.columns([3, 1])
+with preset_col1:
+    sel_preset_style = st.selectbox(
+        "选择要复制的预设模板", options=["default", "init"],
+        key="preset_style_selector",
+        help="""
+default: 由 mai-gen 官方制作的默认模版\n
+init: 由哔哩哔哩 @init_ 制作的 PPT 模版
+        """ if not os.path.exists(custom_dir) else "❌ 当前已存在样式文件，无法再次应用预设模板！（如需要，请删除此文件重新复制）",
+        disabled=os.path.exists(custom_dir)
+    )
+with preset_col2:
+    apply_preset = st.button("应用模板", icon="✅️", help="❌ 当前已存在样式文件，无法再次应用预设模板！（如需要，请删除此文件重新复制）", use_container_width=True, type="primary", disabled=os.path.exists(custom_dir))
+    if apply_preset:
+        if sel_preset_style == "default":
+            st.session_state.preset_style = "default"
+            shutil.copy2(f"{root_path}/themes/default.json", custom_dir)
+        elif sel_preset_style == "init":
+            st.session_state.preset_style = "init"
+            shutil.copy2(f"{root_path}/themes/init.json", custom_dir)
+        else:
+            st.toast("请选择预设模板！", icon="⚠️")
+# 原有的 radio 可以移除或改为只读显示
+# sel_preset_style = st.radio(...)  # 这行可以删除或注释掉
 
 custom_col1, custom_col2 = st.columns(2)
 with custom_col1:
@@ -755,46 +781,176 @@ def render_coordinates(key_prefix, data, base_path="", name_mapping=None, use_ex
                                  name_mapping=name_mapping, use_expander=True)  # 内层默认使用expander
 
 
-# 在调用时指定要解析的标签和名称映射
-with st.expander("画面坐标参数", icon="📝"):
-    st.error("""
-             此区域仍在开发中！请稍后再回来
-             - 目前已支持修改生成元素的显示位置
-             """, icon="⚠️")
+# 在文件开头添加通用配置渲染函数
+def render_simple_config(data, config_type, display_names, columns_per_row=4):
+    """
+    渲染简单的配置项（大小、宽度、对齐等）
     
-    # 定义名称映射
-    image_name_mapping = {
-        "frame": "难度边框",
-        "level": "等级信息",
-        "integer": "整数等级",
-        "current": "当前等级",
-        "next": "下版本等级",
-        "score": "分数",
-        "rating": "定数",
-        "combo": "连击数",
-        "chain": "Chain 数",
-        "title": "曲名",
-        "artist": "艺术家",
-        "best": "Best 编号",
-        "playCount": "游玩次数",
-        "base": "背景位置",
-        "text": "文本位置"
+    Args:
+        data: 配置数据字典
+        config_type: 配置类型 ('size', 'maxWidth', 'align')
+        display_names: 键名到显示名称的映射字典
+        columns_per_row: 每行显示的列数
+    """
+    # 根据类型设置不同的提示和选项
+    config_info = {
+        'size': {
+            'info': "调整字体大小（单位：像素）",
+            'help': "❌️ 仅自定义样式可修改",
+            'widget': 'number_input',
+            'params': {'min_value': 1, 'step': 1}
+        },
+        'maxWidth': {
+            'info': "调整最大宽度（单位：像素）",
+            'help': "❌️ 仅自定义样式可修改",
+            'widget': 'number_input',
+            'params': {'min_value': 1, 'step': 1}
+        },
+        'align': {
+            'info': "调整文本对齐方式",
+            'help': "❌️ 仅自定义样式可修改",
+            'widget': 'selectbox',
+            'params': {'options': ["left", "center", "right"]}
+        }
     }
     
-    # 只解析 "image" 标签下的内容
-    if "image" in custom_data["position"]:
-        image_data = {"image": custom_data["position"]["image"]}
-        # 设置 use_expander=False 让 image 本身不使用 expander
-        render_coordinates("image", image_data, name_mapping=image_name_mapping, use_expander=False)
+    info = config_info[config_type]
+    st.info(info['info'])
     
+    # 将字典项转换为列表
+    items = list(data.items())
+    
+    # 计算需要的行数
+    rows = (len(items) + columns_per_row - 1) // columns_per_row
+    
+    for row_idx in range(rows):
+        cols = st.columns(columns_per_row)
+        start_idx = row_idx * columns_per_row
+        end_idx = min(start_idx + columns_per_row, len(items))
+        
+        for col_idx, (key, value) in enumerate(items[start_idx:end_idx]):
+            with cols[col_idx]:
+                display_name = display_names.get(key, key)
+                display_name_config = {
+                    'size': f"{display_name} 字体大小",
+                    'maxWidth': f"{display_name} 最大宽度",
+                    'align': f"{display_name} 对齐方式"
+                }[config_type]
+                if info['widget'] == 'number_input':
+                    new_value = st.number_input(
+                        display_name_config,
+                        value=value,
+                        key=f"{config_type}_{key}",
+                        # disabled=sel_preset_style != "自定义",
+                        help=info['help'],
+                        **info['params']
+                    )
+                    data[key] = new_value
+                    
+                elif info['widget'] == 'selectbox':
+                    options = info['params']['options']
+                    current_index = options.index(value) if value in options else 0
+                    new_value = st.selectbox(
+                        display_name_config,options,
+                        index=current_index,
+                        key=f"{config_type}_{key}",
+                        # disabled=sel_preset_style != "自定义",
+                        help=info['help']
+                    )
+                    data[key] = new_value
+
+if os.path.exists(current_paths['custom_style']):
+    # 在调用时指定要解析的标签和名称映射
+    with st.expander("画面参数", icon="📝"):
+        st.error("此区域仍在开发中！", icon="⚠️")
+        
+        coords, size, color, maxWidth, align = st.tabs(["坐标", "字体大小", "字体颜色", "最大宽度", "对齐"])
+        with coords:
+            # 定义名称映射
+            image_name_mapping = {
+                "frame": "难度边框",
+                "level": "等级信息",
+                "integer": "整数等级",
+                "current": "当前等级",
+                "next": "下版本等级",
+                "score": "分数",
+                "rating": "定数",
+                "combo": "连击数",
+                "chain": "Chain 数",
+                "title": "曲名",
+                "artist": "艺术家",
+                "bestNum": "Best 序号",
+                "playCount": "游玩次数",
+                "base": "背景位置",
+                "text": "文本位置",
+                "combined": "角标位置"  # init 模板特有
+            }
+            
+            # 只解析 "image" 标签下的内容
+            if "image" in custom_data["position"]:
+                image_data = {"image": custom_data["position"]["image"]}
+                # 设置 use_expander=False 让 image 本身不使用 expander
+                render_coordinates("image", image_data, name_mapping=image_name_mapping, use_expander=False)
+            
     col1, col2, col3, col4 = st.columns(4, vertical_alignment="center")
+    # with col1:
+        # if st.button("保存所有修改", icon="💾", width='stretch', disabled=sel_preset_style != "自定义"):
+            # try:
+            #     # 备份当前文件（可选）
+            #     if os.path.exists(custom_dir):
+            #         backup_path = custom_dir + ".bak"
+            #         shutil.copy2(custom_dir, backup_path)
+                
+            #     # 保存新配置
+            #     save_config(custom_dir, custom_data)
+                
+            #     st.toast("配置保存成功！", icon="✅")
+            #     st.balloons()
+                
+            # except Exception as e:
+            #     st.error(f"保存失败：{str(e)}", icon="❌")
     with col1:
         if st.button("💾 保存所有修改", width='stretch', disabled=sel_preset_style != "自定义"):
             try:
-                # 备份当前文件（可选）
+                # 备份当前文件
                 if os.path.exists(custom_dir):
                     backup_path = custom_dir + ".bak"
                     shutil.copy2(custom_dir, backup_path)
+                
+                # 加载预设配置
+                preset_configs = load_config("path/to/default.json")
+                default_preset = preset_configs.get("default", {})
+                init_preset = preset_configs.get("init", {})
+                
+                # 获取当前配置（排除 themes）
+                current_config = {k: v for k, v in custom_data.items() if k != 'themes'}
+                
+                # 使用 JSON 序列化对比（自动处理嵌套和顺序）
+                current_json = json.dumps(current_config, sort_keys=True)
+                default_json = json.dumps(default_preset, sort_keys=True)
+                init_json = json.dumps(init_preset, sort_keys=True)
+                
+                # 对比
+                is_same_as_default = current_json == default_json
+                is_same_as_init = current_json == init_json
+                
+                # 根据对比结果设置 themes
+                if is_same_as_default:
+                    custom_data['themes'] = 'custom_default'
+                    st.success("✓ 配置与「chu-gen 默认」完全一致，已标记为 custom_default", icon="✅")
+                elif is_same_as_init:
+                    custom_data['themes'] = 'custom_init'
+                    st.success("✓ 配置与「init_ 模版」完全一致，已标记为 custom_init", icon="✅")
+                else:
+                    # 可选：显示相似度提示（不额外函数）
+                    same_keys = sum(1 for k in set(current_config.keys()) & set(default_preset.keys()) 
+                                if current_config.get(k) == default_preset.get(k))
+                    total_keys = len(set(current_config.keys()) | set(default_preset.keys()))
+                    similarity = (same_keys / total_keys * 100) if total_keys > 0 else 0
+                    
+                    if custom_data.get('themes') in ['default', 'init', None]:
+                        custom_data['themes'] = 'custom_original'
+                    st.info(f"🎨 已保存为独立自定义配置（与默认模板相似度 {similarity:.0f}%）", icon="✨")
                 
                 # 保存新配置
                 save_config(custom_dir, custom_data)
@@ -804,9 +960,10 @@ with st.expander("画面坐标参数", icon="📝"):
                 
             except Exception as e:
                 st.error(f"保存失败：{str(e)}", icon="❌")
-    
+
+
     with col2:
-        if st.button("🔄 恢复默认配置", width='stretch', disabled=sel_preset_style != "自定义"):
+        if st.button("恢复默认配置", icon="🔄", width='stretch', help="将删除您的 customization.json 文件。"):
             try:
                 custom_config_path = os.path.join(custom_dir, "customization.json")
                 
@@ -816,19 +973,20 @@ with st.expander("画面坐标参数", icon="📝"):
                     shutil.copy2(backup_path, custom_config_path)
                     
                     # 重新加载配置
-                    original_data = load_config(custom_config_path)
+                    original_data = load_config(current_paths['custom_style'], use_cache=True)
                     
                     custom_data.clear()
-                    custom_data.update(original_data)
+                    custom_data.update(original_data[sel_preset_style])
                     
-                    st.success("✅ 已恢复默认配置！", icon="✅")
+                    st.success("已恢复默认配置！", icon="✅")
+                    time.sleep(3)
                     st.rerun()
                 else:
                     st.warning("未找到备份文件", icon="⚠️")
                     
             except Exception as e:
-                st.error(f"❌ 恢复失败：{str(e)}")
-    
+                st.error(f"恢复失败：{str(e)}", icon="❌")
+                
     with col3:
         if st.button("刷新坐标数据", width='stretch', icon="🔄"):
             try:
@@ -854,7 +1012,7 @@ with st.expander("画面坐标参数", icon="📝"):
                 else:
                     st.toast("配置文件格式错误", icon="❌")
                 
-                time.sleep(2)
+                time.sleep(3)
                 # 4. 强制重新渲染页面
                 st.rerun()
                 
@@ -864,36 +1022,117 @@ with st.expander("画面坐标参数", icon="📝"):
     with col4:
         preview_btn = st.button("生成预览图", type="primary", help="⚠️ 修改配置后，需要先保存，再重新生成 Best50 图像才能看到效果", width='stretch', icon="🖼️")
 
-data_templates = {
-        "clip_id": "PickUp_1",
-        "id": 9191,
-        "song_name": "神鳴",
-        "artist": "Rígr feat. 光吉猛修",
-        "score": 1010000,
-        "rating": 17.75,
-        "level": 15.6,
-        "level_next": 15.6,
-        "level_index": 3,
-        "full_combo": "alljustice",
-        "full_chain": None,
-        "play_count": None
-    }
+        # test_str = """
+        # 啊🤪～啊🤪～啊咦😬啊咦😬啊→啊↑啊↓😨啊😰～嗯💥哎哎🤗哎哦哎嗯😋～哦哎🥳爱爱爱爱爱😍
+        # 啊🤪～啊🤪～啊咦😬啊咦😬啊→啊↑啊↓😨啊😰～嗯💥嗯嗯👿滴嘚滴嘚😈唔😱嘟⬅️嘟↖️嘟⬆️嘟↗️嘟➡️嘟↘️嘟⬇️
+        # """
+    def update_preview_image(placeholder):
+        thumbnails_dir = f"{root_path}/thumbnails"
+        b50_datas = load_config(current_paths['data_file'])
+        # generate_single_image(b50_datas[0], custom_data, thumbnails_dir, "BEST", 1)
+        generate_single_image(b50_datas[0], custom_data, thumbnails_dir)
+        with placeholder:
+            st.image(f"{thumbnails_dir}/BEST_1.png")
 
-test_str = """
-啊🤪～啊🤪～啊咦😬啊咦😬啊→啊↑啊↓😨啊😰～嗯💥哎哎🤗哎哦哎嗯😋～哦哎🥳爱爱爱爱爱😍
-啊🤪～啊🤪～啊咦😬啊咦😬啊→啊↑啊↓😨啊😰～嗯💥嗯嗯👿滴嘚滴嘚😈唔😱嘟⬅️嘟↖️嘟⬆️嘟↗️嘟➡️嘟↘️嘟⬇️
-"""
-def update_preview_image(placeholder, test_str):
-    thumbnails_dir = f"{root_path}/thumbnails"
-    b50_datas = load_config(current_paths['data_file'])
-    generate_single_image(b50_datas[0], custom_data, thumbnails_dir, "TEST", 1)
-    with placeholder:
-        st.image(f"{thumbnails_dir}/TEST_1.png")
+    if preview_btn:
+        preview_image_placeholder = st.expander("预览图", expanded=False)
+        update_preview_image(preview_image_placeholder)
 
-if preview_btn:
-    preview_image_placeholder = st.expander("预览图", expanded=False)
-    update_preview_image(preview_image_placeholder, test_str)
+        with color:
+            # 获取 color 字典
+            image_data = custom_data['color']
+            st.info("调整字体颜色")
+            
+            display_names = {
+                "title": "曲名",
+                "artist": "曲师",
+                "bestNum": "Best 序号",
+                "playCount": "游玩次数",
+                "level": "等级",
+                "integer": "等级（整数）",
+                "current": "当前等级",
+                "next": "下版本等级"
+            }
+            
+            def collect_color_items(data, prefix="", items=None):
+                """收集所有颜色项"""
+                if items is None:
+                    items = []
+                
+                for key, value in data.items():
+                    if isinstance(value, dict):
+                        collect_color_items(value, f"{prefix}{key}.", items)
+                    elif isinstance(value, list) and len(value) == 3:
+                        # 获取显示名称：优先使用映射，否则使用路径的最后一部分
+                        display_name = display_names.get(key, key)
+                        items.append({
+                            'path': prefix + key,
+                            # 'display': f"{prefix}{key}".strip('.'),
+                            'display': display_name,
+                            'color': value
+                        })
+                return items
 
+            # 使用
+            image_data = custom_data['color']
+
+            # 收集所有颜色项
+            color_items = collect_color_items(image_data)
+
+            # 使用列布局显示
+            if color_items:
+                cols_per_row = 7
+                for i in range(0, len(color_items), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j, item in enumerate(color_items[i:i+cols_per_row]):
+                        with cols[j]:
+                            hex_color = f"#{item['color'][0]:02x}{item['color'][1]:02x}{item['color'][2]:02x}"
+                            new_color_hex = st.color_picker(
+                                item['display'],
+                                hex_color,
+                                key=f"color_{item['path'].replace('.', '_')}",
+                                disabled=sel_preset_style != "自定义",
+                                help="❌️ 仅自定义样式可修改"
+                            )
+                            
+                            if new_color_hex:
+                                r = int(new_color_hex[1:3], 16)
+                                g = int(new_color_hex[3:5], 16)
+                                b = int(new_color_hex[5:7], 16)
+                                
+                                # 更新原始数据
+                                parts = item['path'].split('.')
+                                target = image_data
+                                for part in parts[:-1]:
+                                    target = target[part]
+                                target[parts[-1]] = [r, g, b]
+                                
+        display_names = {
+            "title": "曲名",
+            "artist": "曲师",
+            "bestNum": "Best 序号",
+            "playCount": "游玩次数",
+            "level": "等级",
+            "integer": "等级（整数）",
+            "current": "当前版本等级",
+            "next": "下版本等级"
+        }
+        
+        with size:
+            size_data = custom_data['size']
+            render_simple_config(size_data, 'size', display_names, columns_per_row=len(size_data))
+
+        with maxWidth:
+            if sel_preset_style == "default" and 'maxWidth' in custom_data:
+                width_data = custom_data['maxWidth']
+                render_simple_config(width_data, 'maxWidth', display_names, columns_per_row=len(width_data))
+            else:
+                st.error("init 模版中未使用 maxWidth 配置项", icon="❌️")
+        with align:
+            align_data = custom_data["align"]
+            render_simple_config(align_data, 'align', display_names, columns_per_row=len(align_data))
+else:
+    st.error("未找到自定义样式文件", icon="❌️")
 
 # 使用说明
 st.divider()

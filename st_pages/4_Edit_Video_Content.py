@@ -77,7 +77,7 @@ with st.container(border=True):
         st.stop()
 ### Savefile Management - End ###
 
-image_output_path = current_paths['image_dir']
+image_output_path = f"{current_paths['image_dir']}/background"
 video_config_output_file = current_paths['video_config']
 old_video_config_file = current_paths['old_video_config']
 video_download_path = f"./videos/downloads"
@@ -499,7 +499,7 @@ if not os.path.exists(b30_config_file):
     st.error(f"未找到配置文件【{b30_config_file}】，请检查 Best50 存档数据完整性！", icon="⚠️")
     st.stop()
 b30_config = load_config(b30_config_file)
-video_config = load_config(video_config_output_file)
+video_config = load_config(video_config_output_file, use_cache=False) if os.path.exists(video_config_output_file) else None
 
 if not video_config or 'main' not in video_config:
     col1, col2 = st.columns(2, vertical_alignment="center")

@@ -4,9 +4,66 @@ from datetime import datetime
 from utils.PageUtils import *
 from utils.PathUtils import *
 from utils.Variables import REVERSE_LEVEL_LABELS
-from utils.DataUtils import load_config_with_types, save_config_with_types
+from utils.DataUtils import load_config_with_types, save_config_with_types, save_song_data
 
 st.title("Step 1: 生成 Best50 成绩底图")
+
+# 添加悬停效果CSS（从5_Edit_OpEd_Content.py复制）
+st.markdown("""
+<style>
+/* 基础tabs样式 */
+.stTabs {
+    width: 100%;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    flex: 1;
+    text-align: center;
+    padding: 10px 0;
+    font-weight: 600;
+    background-color: transparent;
+    color: #666;
+    position: relative;
+    border: none;
+    overflow: hidden;
+    z-index: 1;
+    transition: color 0.3s ease;
+}
+
+/* 当前选中状态 */
+.stTabs [aria-selected="true"] {
+    color: #ff4b4b;
+}
+
+/* 悬停效果 - 从底部填充 */
+.stTabs [data-baseweb="tab"]::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 0;
+    background-color: #ff4b4b;
+    z-index: -1;
+    transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 4px 4px 0 0;
+}
+
+.stTabs [data-baseweb="tab"]:hover::before {
+    height: 100%;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+    color: white;
+}
+</style>
+""", unsafe_allow_html=True)
 
 ### Savefile Management - Start ###
 if "username" in st.session_state:
@@ -500,115 +557,328 @@ with st.container(border=True):
                         # else:
                         #     sort_status = f"📊 {st.session_state.current_sort_field}排序"
                         
-                        st.info(f"""
-                                在表格中直接编辑数据，编辑完成后记得「保存修改」。
-                                
-                                **排序说明：**
-                                - 当前使用上方选择的排序方式
-                                - 如需精细调整顺序，请选择"手动拖拽"
-                                - 保存时将按当前显示的顺序存储
-                                
-                                **数据字段说明请指向列头标签查看。**
-                                - 计算 Rating 请访问[此页](https://public.cm-tea.top/Rating_Calculator_CHUNITHM.html)
-                                """, icon="ℹ️")
-                        
-                        # 显示数据编辑器
-                        edited_data = st.data_editor(
-                            st.session_state.processed_data,
-                            column_config={
-                                "id": st.column_config.NumberColumn("曲目 ID", width="small", help="""
-如果*不知道具体曲目 ID（或不需要迁移数据）*，可以随便填，它只会影响文件名；
-
-反之，如果有迁移数据的需求，请确保`和你要迁移的数据内曲目对应的 ID 一致`
-""", required=True, format="%d"),
-                                "song_name": st.column_config.TextColumn("曲名", width="medium", required=True),
-                                "artist": st.column_config.TextColumn("曲师", width="medium", required=True),
-                                "level": st.column_config.NumberColumn("等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
-                                "level_index": st.column_config.NumberColumn("等级索引", min_value=2, max_value=4, step=1, width="small", help="可填写：2(EXPERT/红)、3(MASTER/紫)、4(ULTIMA/黑)", required=True, format="%d"),
-                                "level_next": st.column_config.NumberColumn("下版本等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
-                                "score": st.column_config.NumberColumn("分数", min_value=0, max_value=1010000, step=100, width="small", required=True, format="%d"),
-                                "rating": st.column_config.NumberColumn("Rating", min_value=0.0, max_value=20.0, step=0.01, format="%.2f", width="small", required=True),
-                                "full_combo": st.column_config.SelectboxColumn("Combo 类型", width="small", options=[None, "fullcombo", "alljustice"], help="若您的成绩为 1010000，直接选择 alljustice 即可（生成器会自动计算 AJC）"),
-                                "full_chain": st.column_config.SelectboxColumn("Chain 类型", width="small", help="使用水鱼的玩家请自行确定本曲是否已有 Chain", options=[None, "fullchain", "fullchain2"]),
-                                "clip_id": st.column_config.TextColumn("剪辑 ID", width="small", required=True, default="PickUp_1", help="按照 [类型]_[序号] 格式添加，如 Best_1", pinned=True, validate="^[a-zA-Z]+_+$"),
-                                "play_count": st.column_config.NumberColumn("游玩次数", width="small", min_value=0, step=1, help="如果需要填写游玩次数，请输入具体数值（留空即不填充）", format="%d", default=None)
-                            },
-                            hide_index=True,  # 不显示行号
-                            num_rows="dynamic",
-                            width='stretch',
-                            key="data_editor",
-                            disabled=not st.session_state.editing_enabled
-                        )
-                        
-                        # 操作按钮
-                        if st.session_state.editing_enabled:
-                            confirm, cancel = st.columns(2)
+                        simple_edit, advanced_edit = st.tabs(["简单编辑", "高级编辑"])
+                        with simple_edit:
+                            # 添加Rating计算器行
+                            title, calc_col1, calc_col2, calc_col3 = st.columns([2, 1.25, 1.5, .85], vertical_alignment="center")
+                            with title:
+                                st.markdown("### 🎵 [Rating 计算器 & 曲目管理](https://public.cm-tea.top/Rating_Calculator_CHUNITHM.html)", unsafe_allow_html=True)
+                            with calc_col1:
+                                calc_level = st.number_input(
+                                    "等级",
+                                    min_value=1.0,
+                                    max_value=20.0,
+                                    value=13.0,
+                                    step=0.1,
+                                    key="rating_calc_level",
+                                    help="输入曲目等级"
+                                )
                             
-                            with confirm:
-                                if st.button("保存修改", width='stretch', type="primary", icon="💾", 
-                                           help="保存数据内容和当前排序顺序"):
-                                    # 数据类型清理
-                                    cleaned_data = []
-                                    for item in edited_data:
-                                        cleaned_item = {}
-                                        for key, value in item.items():
-                                            if value is None or (isinstance(value, (int, float)) and pd.isna(value)):
-                                                cleaned_item[key] = None
-                                            elif key in ['id', 'score', 'level_index', 'play_count'] and value is not None:
-                                                cleaned_item[key] = int(value)
-                                            elif key in ['level', 'level_next', 'rating'] and value is not None:
-                                                cleaned_item[key] = float(value)
-                                            else:
-                                                cleaned_item[key] = value
-                                        cleaned_data.append(cleaned_item)
+                            with calc_col2:
+                                calc_score = st.number_input(
+                                    "分数",
+                                    min_value=0,
+                                    max_value=1010000,
+                                    value=1000000,
+                                    step=1000,
+                                    key="rating_calc_score",
+                                    help="输入分数 (0-1010000)"
+                                )
+                            
+                            with calc_col3:
+                                # 计算Rating
+                                calculated_rating = calculate_rating(calc_score, calc_level)
+                                st.metric(
+                                    "Rating 值",
+                                    f"{calculated_rating:.2f}",
+                                    help="根据等级和分数计算出的Rating值"
+                                )
+                            
+                            st.divider()
+                            
+                            # 获取当前数据
+                            current_data = st.session_state.processed_data if 'processed_data' in st.session_state else []
+                            
+                            if not current_data:
+                                st.info("请先在「数据编辑器」标签页加载数据", icon="ℹ️")
+                            else:
+                                # ========== 1. 添加新曲目 ==========
+                                with st.expander("添加新曲目", expanded=False, icon="➕"):
+                                    st.markdown("##### 填写新曲目信息（`其中 * 为必填项`）")
+                                    # 使用表单组件（添加模式）
+                                    form_result = render_song_form(
+                                        song_data=None, 
+                                        is_edit=False, 
+                                        form_key="add_song",
+                                        button_text="✅ 添加曲目"
+                                    )
                                     
-                                    # 保存数据
-                                    if save_config_with_types(current_paths['data_file'], cleaned_data):
-                                        st.session_state.editing_b50_data = cleaned_data
-                                        st.session_state.processed_data = cleaned_data.copy()
-                                        st.session_state.sortable_items = []  # 清空拖拽缓存
-                                        st.session_state.data_edited = True
-                                        st.success("数据保存成功！", icon="✅")
-                                        st.rerun()
+                                    if form_result["submitted"]:
+                                        new_song_data = form_result["data"]
+                                        
+                                        # 验证必填字段
+                                        if not new_song_data['song_name'] \
+                                            and not new_song_data['artist'] \
+                                            and not new_song_data['id']\
+                                                and not new_song_data['level']\
+                                                and not new_song_data['score']\
+                                                and not new_song_data['rating']:
+                                            st.error("曲名、曲师、 ID、难度等级、分数、rating为必填项！", icon="❌")
+                                        else:
+                                            # 添加到数据中
+                                            current_data.append(new_song_data)
+                                            
+                                            # 保存数据
+                                            save_song_data(
+                                                current_data,
+                                                current_paths,
+                                                f"✅ 成功添加曲目: {new_song_data['song_name']}",
+                                                "⚠️ 当前处于只读模式，曲目已添加到内存但未保存，请「解锁」后保存"
+                                            )
+                                
+                                # ========== 2. 修改曲目 ==========
+                                with st.expander("修改曲目", expanded=False, icon="✏️"):
+                                    st.markdown("##### 选择要修改的曲目")
+                                    
+                                    # 创建曲目选择器
+                                    song_options = [f"《{item.get('song_name', '未知')}》 - {item.get('artist', '未知')} (难度：{REVERSE_LEVEL_LABELS[item.get('level_index', '2')]})" 
+                                                for item in current_data]
+                                    
+                                    if song_options:
+                                        # 使用 session_state 来跟踪当前选中的曲目
+                                        if 'selected_song_idx' not in st.session_state:
+                                            st.session_state.selected_song_idx = 0
+                                        
+                                        # 确保索引有效
+                                        if st.session_state.selected_song_idx >= len(current_data):
+                                            st.session_state.selected_song_idx = 0
+                                        
+                                        selected_song_idx = st.selectbox(
+                                            "选择曲目",
+                                            range(len(song_options)),
+                                            format_func=lambda x: song_options[x],
+                                            key="edit_song_select",
+                                            index=st.session_state.selected_song_idx
+                                        )
+                                        
+                                        # 更新 session_state
+                                        st.session_state.selected_song_idx = selected_song_idx
+                                        
+                                        if selected_song_idx is not None and 0 <= selected_song_idx < len(current_data):
+                                            selected_song = current_data[selected_song_idx]
+                                            
+                                            st.markdown("##### 修改曲目信息（`其中 * 为基础项`）")
+                                            
+                                            # 使用表单组件（编辑模式）
+                                            # 使用曲目ID和名称作为表单key的一部分，确保唯一性
+                                            form_key = f"edit_song_{selected_song_idx}_{selected_song.get('id', 0)}"
+                                            form_result = render_song_form(
+                                                song_data=selected_song,
+                                                is_edit=True, 
+                                                form_key=form_key,
+                                                button_text="💾 保存修改"
+                                            )
+                                            
+                                            if form_result["submitted"]:
+                                                edited_song_data = form_result["data"]
+                                                
+                                                if not edited_song_data['song_name'] or not edited_song_data['artist']:
+                                                    st.error("曲名和曲师不能为空！", icon="❌")
+                                                else:
+                                                    # 更新曲目信息
+                                                    current_data[selected_song_idx] = edited_song_data
+                                                    
+                                                    # 保存数据
+                                                    save_song_data(
+                                                        current_data,
+                                                        current_paths,
+                                                        f"✅ 成功修改曲目: {edited_song_data['song_name']}",
+                                                        "⚠️ 当前处于只读模式，修改已应用到内存但未保存，请「解锁」后保存"
+                                                    )
+                                    else:
+                                        st.info("暂无曲目数据", icon="ℹ️")
+                                
+                                act_col3, act_col4 = st.columns(2)
+                                with act_col3:
+                                    # ========== 3. 删除曲目 ==========
+                                    with st.expander("删除曲目", expanded=False, icon="🗑️"):
+                                        st.warning("删除操作不可撤销，请谨慎操作！", icon="⚠️")
+                                        
+                                        if song_options:
+                                            # 多选框支持批量删除
+                                            selected_delete_indices = st.multiselect(
+                                                "选择要删除的曲目", range(len(song_options)),
+                                                placeholder="选择要删除的曲目（支持多选）",
+                                                format_func=lambda x: song_options[x], disabled=not st.session_state.editing_enabled,
+                                                key="delete_song_select", label_visibility="collapsed"
+                                            )
+                                            
+                                            if selected_delete_indices:
+                                                # 显示选中的曲目详情
+                                                st.markdown("##### 将删除以下曲目：")
+                                                for idx in selected_delete_indices:
+                                                    if 0 <= idx < len(current_data):
+                                                        song = current_data[idx]
+                                                        st.write(f"《**{song.get('song_name')}**》 - {song.get('artist')} (难度：{REVERSE_LEVEL_LABELS[song.get('level_index', '2')]})")
+                                                
+                                                # 删除按钮
+                                                col_del_btn1, col_del_btn2, col_del_btn3 = st.columns([1, 2, 1])
+                                                with col_del_btn2:
+                                                    if st.button("确认删除", icon="🗑️", width='stretch', type="primary", use_container_width=True, disabled=not st.session_state.editing_enabled):
+                                                        try:
+                                                            # 从后往前删除，避免索引错误
+                                                            valid_indices = [idx for idx in selected_delete_indices if 0 <= idx < len(current_data)]
+                                                            for idx in sorted(valid_indices, reverse=True):
+                                                                del current_data[idx]
+                                                            
+                                                            # 重置选中的曲目索引
+                                                            if 'selected_song_idx' in st.session_state:
+                                                                st.session_state.selected_song_idx = 0
+                                                            
+                                                            # 保存数据
+                                                            save_song_data(
+                                                                current_data,
+                                                                current_paths,
+                                                                f"✅ 成功删除 {len(valid_indices)} 首曲目",
+                                                                "⚠️ 当前处于只读模式，删除已应用到内存但未保存，请「解锁」后保存"
+                                                            )
+                                                        except Exception as e:
+                                                            st.error(f"删除失败: {e}", icon="❌")
+                                        else:
+                                            st.info("暂无曲目数据", icon="ℹ️")
+                                
+                                with act_col4:
+                                    # ========== 批量操作提示 ==========
+                                    with st.expander("批量操作提示", expanded=False, icon="💡"):
+                                        st.markdown("""
+                                        1. **快速添加多首曲目**：
+                                        - 在「数据编辑器」标签页使用表格编辑功能
+                                        - 可以复制粘贴多行数据
+                                        
+                                        2. **批量修改**：
+                                        - 在「数据编辑器」标签页可以同时编辑多个字段
+                                        - 支持Excel风格的批量操作
+                                        
+                                        3. **数据导入导出**：
+                                        - 如需批量导入，请在「数据编辑器」中操作
+                                        - 可以从其他文件复制数据后粘贴
+                                        
+                                        4. **注意事项**：
+                                        - 修改后记得点击「保存修改」按钮
+                                        - 只读模式下无法保存，请先「解锁」
+                                        - 曲目ID建议保持唯一性
+                                        """)
+                                    
+                        with advanced_edit:
+                            st.info(f"""
+                                    在表格中直接编辑数据，编辑完成后记得「保存修改」。
+                                    
+                                    **排序说明：**
+                                    - 当前使用上方选择的排序方式
+                                    - 如需精细调整顺序，请选择"手动拖拽"
+                                    - 保存时将按当前显示的顺序存储
+                                    
+                                    **数据字段说明请指向列头标签查看。**
+                                    - 计算 Rating 请在简单编辑页计算，或访问[此页](https://public.cm-tea.top/Rating_Calculator_CHUNITHM.html)
+                                    """, icon="ℹ️")
                             
-                            with cancel:
-                                if st.button("放弃修改", width='stretch', icon="🗑️", 
-                                           help="放弃所有修改，恢复原始数据"):
-                                    st.session_state.editing_b50_data = load_config_with_types(current_paths['data_file'])
-                                    st.session_state.processed_data = st.session_state.editing_b50_data.copy()
-                                    st.session_state.sortable_items = []  # 清空拖拽缓存
-                                    st.success("已放弃所有修改", icon="✅")
-                                    st.rerun()
-                
-                # 数据统计卡片（始终显示）
-                st.caption("📈 数据概览")
-                current_data = st.session_state.processed_data
-                stats_col1, stats_col2, stats_col3, stats_col4, stats_col5, stats_col6 = st.columns(6)
-                
-                with stats_col1:
-                    total_records = len(current_data)
-                    st.metric("总记录数", total_records)
-                
-                with stats_col2:
-                    expert_count = sum(1 for item in current_data if item.get('level_index') == 2)
-                    st.metric("EXPERT 数", expert_count)
-                
-                with stats_col3:
-                    master_count = sum(1 for item in current_data if item.get('level_index') == 3)
-                    st.metric("MASTER 数", master_count)
-                        
-                with stats_col4:
-                    ultima_count = sum(1 for item in current_data if item.get('level_index') == 4)
-                    st.metric("ULTIMA 数", ultima_count)
+                            # 显示数据编辑器
+                            edited_data = st.data_editor(
+                                st.session_state.processed_data,
+                                column_config={
+                                    "id": st.column_config.NumberColumn("曲目 ID", width="small", help="""
+    如果*不知道具体曲目 ID（或不需要迁移数据）*，可以随便填，它只会影响文件名；
+
+    反之，如果有迁移数据的需求，请确保`和你要迁移的数据内曲目对应的 ID 一致`
+    """, required=True, format="%d"),
+                                    "song_name": st.column_config.TextColumn("曲名", width="medium", required=True),
+                                    "artist": st.column_config.TextColumn("曲师", width="medium", required=True),
+                                    "level": st.column_config.NumberColumn("等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
+                                    "level_index": st.column_config.NumberColumn("等级索引", min_value=2, max_value=4, step=1, width="small", help="可填写：2(EXPERT/红)、3(MASTER/紫)、4(ULTIMA/黑)", required=True, format="%d"),
+                                    "level_next": st.column_config.NumberColumn("下版本等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
+                                    "score": st.column_config.NumberColumn("分数", min_value=0, max_value=1010000, step=100, width="small", required=True, format="%d"),
+                                    "rating": st.column_config.NumberColumn("Rating", min_value=0.0, max_value=20.0, step=0.01, format="%.2f", width="small", required=True),
+                                    "full_combo": st.column_config.SelectboxColumn("Combo 类型", width="small", options=[None, "fullcombo", "alljustice"], help="若您的成绩为 1010000，直接选择 alljustice 即可（生成器会自动计算 AJC）"),
+                                    "full_chain": st.column_config.SelectboxColumn("Chain 类型", width="small", help="使用水鱼的玩家请自行确定本曲是否已有 Chain", options=[None, "fullchain", "fullchain2"]),
+                                    "clip_id": st.column_config.TextColumn("剪辑 ID", width="small", required=True, default="PickUp_1", help="按照 [类型]_[序号] 格式添加，如 Best_1", pinned=True, validate="^[a-zA-Z]+_+$"),
+                                    "play_count": st.column_config.NumberColumn("游玩次数", width="small", min_value=0, step=1, help="如果需要填写游玩次数，请输入具体数值（留空即不填充）", format="%d", default=None)
+                                },
+                                hide_index=True,  # 不显示行号
+                                num_rows="dynamic",
+                                width='stretch',
+                                key="data_editor",
+                                disabled=not st.session_state.editing_enabled
+                            )
+                            
+                            # 操作按钮
+                            if st.session_state.editing_enabled:
+                                confirm, cancel = st.columns(2)
+                                
+                                with confirm:
+                                    if st.button("保存修改", width='stretch', type="primary", icon="💾", 
+                                            help="保存数据内容和当前排序顺序"):
+                                        # 数据类型清理
+                                        cleaned_data = []
+                                        for item in edited_data:
+                                            cleaned_item = {}
+                                            for key, value in item.items():
+                                                if value is None or (isinstance(value, (int, float)) and pd.isna(value)):
+                                                    cleaned_item[key] = None
+                                                elif key in ['id', 'score', 'level_index', 'play_count'] and value is not None:
+                                                    cleaned_item[key] = int(value)
+                                                elif key in ['level', 'level_next', 'rating'] and value is not None:
+                                                    cleaned_item[key] = float(value)
+                                                else:
+                                                    cleaned_item[key] = value
+                                            cleaned_data.append(cleaned_item)
+                                        
+                                        # 保存数据
+                                        if save_config_with_types(current_paths['data_file'], cleaned_data):
+                                            st.session_state.editing_b50_data = cleaned_data
+                                            st.session_state.processed_data = cleaned_data.copy()
+                                            st.session_state.sortable_items = []  # 清空拖拽缓存
+                                            st.session_state.data_edited = True
+                                            st.success("数据保存成功！", icon="✅")
+                                            st.rerun()
+                                
+                                with cancel:
+                                    if st.button("放弃修改", width='stretch', icon="🗑️", 
+                                            help="放弃所有修改，恢复原始数据"):
+                                        st.session_state.editing_b50_data = load_config_with_types(current_paths['data_file'])
+                                        st.session_state.processed_data = st.session_state.editing_b50_data.copy()
+                                        st.session_state.sortable_items = []  # 清空拖拽缓存
+                                        st.success("已放弃所有修改", icon="✅")
+                                        st.rerun()
                     
-                with stats_col5:
-                    hardest_level = max((item.get('level', 0) for item in current_data), default=0)
-                    st.metric("最难曲目等级", f"{hardest_level:.1f}")
+                    # 数据统计卡片（始终显示）
+                    # st.caption("📈 数据概览")
+                    # current_data = st.session_state.processed_data
+                    # stats_col1, stats_col2, stats_col3, stats_col4, stats_col5, stats_col6 = st.columns(6)
                     
-                with stats_col6:
-                    highest_rating = max((item.get('rating', 0) for item in current_data), default=0)
-                    st.metric("最高单曲 ra", f"{highest_rating:.2f}")
+                    # with stats_col1:
+                    #     total_records = len(current_data)
+                    #     st.metric("总记录数", total_records)
+                    
+                    # with stats_col2:
+                    #     expert_count = sum(1 for item in current_data if item.get('level_index') == 2)
+                    #     st.metric("EXPERT 数", expert_count)
+                    
+                    # with stats_col3:
+                    #     master_count = sum(1 for item in current_data if item.get('level_index') == 3)
+                    #     st.metric("MASTER 数", master_count)
+                            
+                    # with stats_col4:
+                    #     ultima_count = sum(1 for item in current_data if item.get('level_index') == 4)
+                    #     st.metric("ULTIMA 数", ultima_count)
                         
+                    # with stats_col5:
+                    #     hardest_level = max((item.get('level', 0) for item in current_data), default=0)
+                    #     st.metric("最难曲目等级", f"{hardest_level:.1f}")
+                        
+                    # with stats_col6:
+                    #     highest_rating = max((item.get('rating', 0) for item in current_data), default=0)
+                    #     st.metric("最高单曲 ra", f"{highest_rating:.2f}")
+                            
             except Exception as e:
                 st.error(f"加载数据失败: {e}", icon="❌")
 ### Data Editing Section - End ###

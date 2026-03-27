@@ -1,11 +1,11 @@
 import time
-import os, json, traceback
 import streamlit as st
+import os, json, traceback
 from datetime import datetime
-from utils.DataUtils import _process_b50_data
 from utils.PageUtils import *
 from utils.PathUtils import *
-from utils.DataUtils import *
+from utils.DataUtils import _process_b50_data, st_init_cache_pathes, update_b50_data
+from utils.Variables import jp_music_info_path, music_info_path
 
 st.set_page_config(
     page_title="获取 / 管理 Best50 成绩与存档",

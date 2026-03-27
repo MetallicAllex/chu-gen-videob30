@@ -1,7 +1,7 @@
 import streamlit as st
 from datetime import datetime
 from moviepy import VideoFileClip
-import os, re, json, yaml, subprocess, platform
+import os, json, yaml, subprocess, platform
 
 def get_user_base_dir(username):
     """Get base directory for user data"""
@@ -39,7 +39,7 @@ def get_user_versions(username):
                if os.path.isdir(os.path.join(base_dir, d))]
     return sorted(versions, reverse=True)
 
-def load_config(file_path, use_cache=False, cache_time=3600):
+def load_config(file_path, use_cache=False, cache_time=60):
     """加载JSON配置文件，可选择是否使用缓存"""
     
     def _load_config(file_path):

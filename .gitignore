@@ -64,6 +64,7 @@ coverage.xml
 .pytest_cache/
 cover/
 runtime/
+runtime2/
 
 # Translations
 *.mo
@@ -191,5 +192,6 @@ cython_debug/
 ffmpeg.exe
 start.bat
 global_config.yaml
-chu-gen-videob30_v0.5-bugfix4.zip
 assets/thumbnails/
+chu-gen-videob30_v1.1-branch2.zip
+runtime_v1.1-branch2.zip
