@@ -968,8 +968,8 @@ class BilibiliDownloader(Downloader):
         
         # 原有的自动登录逻辑（使用终端打印二维码）
         for attempt in range(MAX_LOGIN_RETRIES):
-            # log_succ = self._login_terminal(credential_path)
-            log_succ = self.log_in(credential_path)
+            log_succ = self._login_terminal(credential_path)
+            # log_succ = self.log_in(credential_path)
             if log_succ:
                 break  # 登录成功，退出循环
             print(f"正在尝试第 {attempt + 1} 次重新登录...")
