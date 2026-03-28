@@ -97,7 +97,7 @@ def refresh_main_image_paths(config_path, username, save_id, max_order_id):
 
     config_data = load_config(config_path)
 
-    new_base_path = os.path.normpath(f"b30_datas/{username}/{save_id}/images")
+    new_base_path = os.path.normpath(f"b30_datas/{username}/{save_id}/images/background")
 
     for clip in config_data.get("main", []):
         if "main_image" in clip:

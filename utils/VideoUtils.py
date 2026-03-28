@@ -68,7 +68,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
         print("如果您反复填写保存无效果，请尝试手动编辑配置文件中的 intro 和 outro 部分。")
     
     # 创建统一的背景（整个片段共用）
-    bg_image = ImageClip(f"{image_root_path}\\Base\intro\IntroBase.png").with_duration(clip_config['duration'])
+    bg_image = ImageClip(f"{image_root_path}/Base/intro/IntroBase.png").with_duration(clip_config['duration'])
     bg_image = bg_image.with_effects([vfx.Resize(width=resolution[0])])
 
     bg_video = VideoFileClip(f"{bgclips_path}/bg.mp4")
@@ -99,7 +99,7 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
         pages.append(current_page)
     
     # 底部文字
-    addtional_text = "【本视频由 chu-gen-videob30 生成，版本 v0.6】"
+    addtional_text = "【本视频由 chu-gen-videob30 生成，版本 v1.1-fix3】"
     addtional_txt_clip = TextClip(
         font=font_path, text=addtional_text,
         method="label", font_size=20,
@@ -117,7 +117,8 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
             method="label", font_size=text_scale,
             margin=(20, 5), interline=6.5,
             vertical_align="top", color="black" if clip_config["bg_page"] == False else "#FFFFFF00",
-            duration=clip_config['duration'], transparent=True if clip_config["bg_page"] == True else False
+        #     duration=clip_config['duration'], transparent=False if clip_config["bg_page"] == True else True
+            duration=clip_config['duration']
         )
         
         composite_clip = CompositeVideoClip([
