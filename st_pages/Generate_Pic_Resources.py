@@ -200,6 +200,7 @@ with st.container(border=True):
                 if st.button("使用此存档", help="（只需要点击一次！）", width='stretch', icon="▶️"):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
+                        st.session_state.viewing_data_loaded = False
                         st.rerun()
                     else:
                         st.error("无效的存档路径！", icon="❌")
@@ -283,7 +284,7 @@ with st.container(border=True):
                     
                     # 显示数据表格（只读模式）
                     st.dataframe(
-                        st.session_state.processed_data,
+                        b50_data,
                         column_config={
                             "id": st.column_config.NumberColumn("曲目 ID", width="small", help="曲目的唯一标识", disabled=True),
                             "song_name": st.column_config.TextColumn("曲名", width="medium", disabled=True),
@@ -339,7 +340,12 @@ with st.container(border=True):
     if data_loaded:
         image_path = current_paths['image_dir']
         with st.container(border=False):
-            st.text("确认存档数据无误后，即可生成您的 Best50 显示图像（将用您上面的数据生成）")
+            info_col1, info_col2 = st.columns([1, 1.5], vertical_alignment="center")
+            with info_col1:
+                st.text("确认存档数据无误后，即可生成您的 Best50 显示图像")
+            with info_col2:
+                st.warning("如果您需要添加 pickup 曲目，请提前添加，后续生成配置文件后将难于修改。", icon="⚠️")
+            
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("生成成绩图底图", help="使用 1920 × 1080 生成", icon="🔄️", width='stretch'):

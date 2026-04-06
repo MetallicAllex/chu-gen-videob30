@@ -1,10 +1,10 @@
 import pandas as pd
 import streamlit as st
 from datetime import datetime
-from utils.PageUtils import *
-from utils.PathUtils import *
 from utils.Variables import REVERSE_LEVEL_LABELS
-from utils.DataUtils import load_config_with_types, save_config_with_types, save_song_data
+from utils.PathUtils import get_data_paths, get_user_versions, load_config
+from utils.PageUtils import render_song_form, calculate_rating
+from utils.DataUtils import load_config_with_types, music_info_path, save_config_with_types, save_song_data
 
 st.title("Step 1: 生成 Best50 成绩底图")
 
@@ -119,6 +119,8 @@ with st.container(border=True):
                 if st.button("使用此存档", help="（只需要点击一次！）", width='stretch', icon="▶️"):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
+                        st.session_state.viewing_data_loaded = False
+                        st.session_state.editing_data_loaded = False
                         st.rerun()
                     else:
                         st.error("无效的存档路径！", icon="❌")
@@ -610,7 +612,8 @@ with st.container(border=True):
                                         song_data=None, 
                                         is_edit=False, 
                                         form_key="add_song",
-                                        button_text="✅ 添加曲目"
+                                        button_text="✅ 添加曲目",
+                                        # songs_db=load_config(music_info_path)
                                     )
                                     
                                     if form_result["submitted"]:
@@ -770,6 +773,19 @@ with st.container(border=True):
                                         """)
                                     
                         with advanced_edit:
+                            # 简化会话状态，只保留必要的数据加载状态
+                            if 'viewing_data_loaded' not in st.session_state:
+                                st.session_state.viewing_data_loaded = False
+                            
+                            # 只有在加载了数据时才显示表格
+                            if st.session_state.viewing_data_loaded:
+                                # 加载数据
+                                if 'viewing_b50_data' not in st.session_state:
+                                    st.session_state.viewing_b50_data = load_config_with_types(current_paths['data_file'])
+                                    st.session_state.processed_data = st.session_state.viewing_b50_data.copy()
+                                
+                                b50_data = st.session_state.viewing_b50_data
+                                
                             st.info(f"""
                                     在表格中直接编辑数据，编辑完成后记得「保存修改」。
                                     
@@ -784,7 +800,7 @@ with st.container(border=True):
                             
                             # 显示数据编辑器
                             edited_data = st.data_editor(
-                                st.session_state.processed_data,
+                                b50_data,
                                 column_config={
                                     "id": st.column_config.NumberColumn("曲目 ID", width="small", help="""
     如果*不知道具体曲目 ID（或不需要迁移数据）*，可以随便填，它只会影响文件名；

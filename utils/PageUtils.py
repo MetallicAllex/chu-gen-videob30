@@ -367,7 +367,7 @@ def render_song_form(song_data=None, is_edit=False, form_key="", button_text=Non
                 key=f"clip_id_{form_key}"
             )
             rating = st.number_input(
-                "Rating",
+                "Rating*",
                 min_value=0.0,
                 max_value=20.0,
                 value=float(song_data.get('rating', 15.0)),
@@ -446,3 +446,275 @@ def render_song_form(song_data=None, is_edit=False, form_key="", button_text=Non
                 "play_count": play_count if play_count > 0 else None
             }
         }
+
+# alternative version
+# def render_song_form(song_data=None, is_edit=False, form_key="", button_text=None, auto_calculate_rating=True, songs_db=None):
+#     """
+#     使用 st.form 渲染曲目信息表单（曲名选择器支持别名搜索）
+#     """
+#     if song_data is None:
+#         song_data = {
+#             "id": 9999,
+#             "song_name": "",
+#             "artist": "",
+#             "level": 13.0,
+#             "level_index": 3,
+#             "level_next": 13.0,
+#             "score": 1000000,
+#             "rating": 15.0,
+#             "full_combo": None,
+#             "full_chain": None,
+#             "clip_id": "PickUp_1",
+#             "play_count": None,
+#             "aliases": []
+#         }
+    
+#     if button_text is None:
+#         button_text = "✅ 添加曲目" if not is_edit else "💾 保存修改"
+    
+#     # 构建歌曲选项
+#     song_options = {}
+#     song_display_list = []
+    
+#     if songs_db:
+#         for song in songs_db:
+#             name = song.get("title") or song.get("song_name") or song.get("meta", {}).get("title")
+#             artist = song.get("artist") or song.get("meta", {}).get("artist")
+#             aliases = song.get("aliases", [])
+            
+#             # 显示文本包含别名
+#             display = f"{name} - {artist}"
+#             if aliases:
+#                 display += f" [{', '.join(aliases)}]"
+            
+#             song_options[display] = {
+#                 "id": song.get("id"),
+#                 "name": name,
+#                 "artist": artist,
+#                 "aliases": aliases,
+#             }
+#             song_display_list.append(display)
+    
+#     # 初始化 session_state
+#     select_key = f"song_select_{form_key}"
+#     selected_song_key = f"selected_song_{form_key}"
+    
+#     if select_key not in st.session_state:
+#         st.session_state[select_key] = None
+#     if selected_song_key not in st.session_state:
+#         st.session_state[selected_song_key] = None
+    
+#     # 在 form 外面放置 selectbox 和选择按钮
+#     st.markdown("#### 🎵 选择曲目")
+    
+#     selected_display = st.selectbox(
+#         "曲名（支持别名搜索）",
+#         options=[""] + song_display_list,
+#         key=select_key,
+#         placeholder="输入曲名或别名搜索...",
+#         help="可以直接输入曲名、曲师或别名进行搜索"
+#     )
+    
+#     # 选择按钮
+#     if st.button("✅ 选择此曲目", key=f"select_btn_{form_key}"):
+#         if selected_display and selected_display in song_options:
+#             st.session_state[selected_song_key] = song_options[selected_display]
+#             st.rerun()
+    
+#     # 显示当前选中的歌曲
+#     selected_song = st.session_state[selected_song_key]
+#     if selected_song:
+#         st.success(f"✅ 已选择: **{selected_song['name']}** - {selected_song['artist']}")
+#         if selected_song["aliases"]:
+#             st.info(f"🏷️ **别名:** {', '.join(selected_song['aliases'])}")
+#     else:
+#         st.info("💡 请在上方选择曲目")
+    
+#     st.markdown("---")
+    
+#     # 表单部分 - 使用 selected_song 的值
+#     with st.form(key=f"song_form_{form_key}"):
+#         st.markdown("#### 📝 曲目信息")
+        
+#         col1, col2, col3 = st.columns(3)
+        
+#         with col1:
+#             # 根据是否有选中的歌曲决定默认值和是否禁用
+#             if selected_song:
+#                 default_song_name = selected_song["name"]
+#                 default_artist = selected_song["artist"]
+#                 default_id = selected_song["id"]
+#                 is_disabled = True
+#             else:
+#                 default_song_name = song_data.get('song_name', '')
+#                 default_artist = song_data.get('artist', '')
+#                 default_id = song_data.get('id', 9999)
+#                 is_disabled = False
+            
+#             song_name = st.text_input(
+#                 "曲名*", 
+#                 value=default_song_name,
+#                 placeholder="请输入曲名",
+#                 key=f"song_name_{form_key}",
+#                 disabled=is_disabled
+#             )
+#             artist = st.text_input(
+#                 "曲师*", 
+#                 value=default_artist,
+#                 placeholder="请输入曲师",
+#                 key=f"artist_{form_key}",
+#                 disabled=is_disabled
+#             )
+#             level = st.number_input(
+#                 "等级*",
+#                 min_value=1.0,
+#                 max_value=20.0,
+#                 value=float(song_data.get('level', 13.0)),
+#                 step=0.1,
+#                 key=f"level_{form_key}",
+#                 help="当前版本的等级"
+#             )
+        
+#         with col2:
+#             song_id = st.number_input(
+#                 "曲目ID*",
+#                 min_value=1,
+#                 value=int(default_id),
+#                 step=1,
+#                 key=f"id_{form_key}",
+#                 disabled=is_disabled
+#             )
+            
+#             level_index_value = song_data.get('level_index', 3)
+#             level_index_options = [2, 3, 4]
+#             if level_index_value in level_index_options:
+#                 level_index_default = level_index_options.index(level_index_value)
+#             else:
+#                 level_index_default = 1
+            
+#             level_index = st.selectbox(
+#                 "等级索引*",
+#                 options=level_index_options,
+#                 format_func=lambda x: {2: "EXPERT (红)", 3: "MASTER (紫)", 4: "ULTIMA (黑)"}[x],
+#                 index=level_index_default,
+#                 key=f"level_index_{form_key}"
+#             )
+            
+#             score = st.number_input(
+#                 "分数*",
+#                 min_value=0,
+#                 max_value=1010000,
+#                 value=int(song_data.get('score', 1000000)),
+#                 step=1000,
+#                 key=f"score_{form_key}",
+#                 help="分数范围: 0-1010000"
+#             )
+        
+#         with col3:
+#             level_next = st.number_input(
+#                 "下版本等级",
+#                 min_value=1.0,
+#                 max_value=20.0,
+#                 value=float(song_data.get('level_next', song_data.get('level', 13.0))),
+#                 step=0.1,
+#                 key=f"level_next_{form_key}",
+#                 help="下个版本的等级（如果有变化）"
+#             )
+#             clip_id = st.text_input(
+#                 "剪辑ID*",
+#                 value=song_data.get('clip_id', 'PickUp_1'),
+#                 placeholder="如: Best_1, New_1",
+#                 key=f"clip_id_{form_key}"
+#             )
+#             rating = st.number_input(
+#                 "Rating",
+#                 min_value=0.0,
+#                 max_value=20.0,
+#                 value=float(song_data.get('rating', 15.0)),
+#                 step=0.01,
+#                 key=f"rating_{form_key}"
+#             )
+
+#         col4, col5, col6 = st.columns(3)
+#         with col4:
+#             full_combo_value = song_data.get('full_combo')
+#             full_combo_options = [None, "fullcombo", "alljustice"]
+#             if full_combo_value in full_combo_options:
+#                 full_combo_index = full_combo_options.index(full_combo_value)
+#             else:
+#                 full_combo_index = 0
+            
+#             full_combo = st.selectbox(
+#                 "Combo类型",
+#                 options=full_combo_options,
+#                 format_func=lambda x: "无" if x is None else x,
+#                 index=full_combo_index,
+#                 key=f"full_combo_{form_key}"
+#             )
+        
+#         with col5:
+#             full_chain_value = song_data.get('full_chain')
+#             full_chain_options = [None, "fullchain", "fullchain2"]
+#             if full_chain_value in full_chain_options:
+#                 full_chain_index = full_chain_options.index(full_chain_value)
+#             else:
+#                 full_chain_index = 0
+            
+#             full_chain = st.selectbox(
+#                 "Chain类型",
+#                 options=full_chain_options,
+#                 format_func=lambda x: "无" if x is None else x,
+#                 index=full_chain_index,
+#                 key=f"full_chain_{form_key}"
+#             )
+        
+#         with col6:
+#             play_count = st.number_input(
+#                 "游玩次数",
+#                 min_value=0,
+#                 value=song_data.get('play_count', 0) or 0,
+#                 step=1,
+#                 key=f"play_count_{form_key}"
+#             )
+        
+#         # 按钮区域
+#         col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+#         with col_btn2:
+#             submitted = st.form_submit_button(
+#                 button_text,
+#                 width='stretch',
+#                 type="primary",
+#                 disabled=not st.session_state.editing_enabled,
+#                 use_container_width=True
+#             )
+        
+#         # 返回数据
+#         if selected_song:
+#             final_id = selected_song["id"]
+#             final_song_name = selected_song["name"]
+#             final_artist = selected_song["artist"]
+#             final_aliases = selected_song["aliases"]
+#         else:
+#             final_id = song_id
+#             final_song_name = song_name
+#             final_artist = artist
+#             final_aliases = song_data.get('aliases', [])
+        
+#         return {
+#             "submitted": submitted,
+#             "data": {
+#                 "id": final_id,
+#                 "song_name": final_song_name,
+#                 "artist": final_artist,
+#                 "level": level,
+#                 "level_index": level_index,
+#                 "level_next": level_next,
+#                 "score": score,
+#                 "rating": rating,
+#                 "full_combo": full_combo,
+#                 "full_chain": full_chain,
+#                 "clip_id": clip_id,
+#                 "play_count": play_count if play_count > 0 else None,
+#                 "aliases": final_aliases
+#             }
+#         }

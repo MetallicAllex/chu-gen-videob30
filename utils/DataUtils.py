@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from utils.PathUtils import *
 import json, random, os, base64, hashlib, requests
-from utils.Variables import music_info_path, jp_music_info_path
+from utils.Variables import DIFFICULTY_MAP, music_info_path, jp_music_info_path
 from utils.PageUtils import _process_cn_data, _process_intl_data
 from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE
 from utils.video_crawler import PurePytubefixDownloader, BilibiliDownloader, get_keyword
@@ -169,7 +169,8 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         "id": "intro_1",
         "duration": 10,
         "text": "【请填写前言部分】" if default_comment_placeholders else "",
-        "bg_page": False
+        "bg_page": False,
+        "overlay": True
         # "version": "LUMINOUS"
     }
 
@@ -177,7 +178,8 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         "id": "ending_1",
         "duration": 10,
         "text": "【请填写后记部分】" if default_comment_placeholders else "",
-        "bg_page": False
+        "bg_page": False,
+        "overlay": True
         # "version": "LUMINOUS"
     }
 
@@ -385,13 +387,22 @@ def merge_b50_data(new_b50_data, old_b50_data):
     update_count = len(new_b50_data) - keep_count
     return merged_b50_data, update_count
 
-def update_b50_data(b50_raw_file, b50_data_file, query_param, best_new, server):
-    if server == "intr":
-        return _process_b50_data(b50_data, server, b50_raw_file, b50_data_file, best_new)
-    else:
-        b50_data = get_b50_data(query_param, server)
-        if 'message' in b50_data:
-            raise ConnectionError(f"请求 Best50 数据失败: {b50_data['message']}")
+# def update_b50_data(b50_raw_file, b50_data_file, query_param, best_new, server, req_param = None):
+#     if server == "intr":
+#         return _process_b50_data(b50_data, server, b50_raw_file, b50_data_file, best_new)
+#     else:
+#         b50_data = get_b50_data(query_param, server)
+#         if 'message' in b50_data:
+#             raise ConnectionError(f"请求 Best50 数据失败: {b50_data['message']}")
+#     return _process_b50_data(b50_data, server, b50_raw_file, b50_data_file, best_new)
+
+def update_b50_data(b50_raw_file, b50_data_file, query_param, req_param):
+    server = req_param['data_server']
+    best_new = req_param['best_or_new']
+    api_address = req_param['lxns_data_api']
+    b50_data = get_b50_data(query_param, server, api_address)
+    if 'message' in b50_data:
+        raise ConnectionError(f"请求 Best50 数据失败: {b50_data['message']}")
     return _process_b50_data(b50_data, server, b50_raw_file, b50_data_file, best_new)
 
 def search_one_video(downloader, song_data):
@@ -543,7 +554,7 @@ def sort_video_files(files):
     # print(f"最终通过的文件 ({len(result)} 个): {result}")
     return result
 
-def get_b50_data(query_param, server="lxns"):
+def get_b50_data(query_param, server="lxns", api_address = None):
     from requests.exceptions import HTTPError
     class LXNSBizError(Exception):
         def __init__(self, message):
@@ -551,10 +562,12 @@ def get_b50_data(query_param, server="lxns"):
     
     fish = "https://www.diving-fish.com/api/chunithmprober/query/player"
     lxns_proxy = f"https://fish-usta-proxy-efexqrwlmf.cn-shanghai.fcapp.run?source=lxns&game=chunithm&query=best&friend_code={query_param}"
+    lxns_api = f"https://api.cm-tea.top/chunithm/{query_param}"
     
     try:
         if server == "lxns":
-            response = requests.get(lxns_proxy, timeout=10)
+            print(f"正在向 {lxns_proxy if api_address == '主 API' else lxns_api} 发送请求，好友码为 {query_param}")
+            response = requests.get(lxns_proxy if api_address == "主 API" else lxns_api, timeout=10)
         elif server == "fish":
             response = requests.post(fish, json={"username": query_param}, timeout=10)
         
@@ -593,50 +606,50 @@ def safe_decode(content: bytes) -> str:
     except UnicodeDecodeError:
         return content.decode("utf-8")
 
-def should_update_metadata(threshold_hours=24):
-    """
-    检查是否需要更新乐曲元数据
+# def should_update_metadata(threshold_hours=24):
+#     """
+#     检查是否需要更新乐曲元数据
     
-    Args:
-        threshold_hours: 更新的时间阈值（小时）
+#     Args:
+#         threshold_hours: 更新的时间阈值（小时）
         
-    Returns:
-        bool: 是否需要更新
-    """
-    # 在用户目录下创建配置目录
-    config_dir = Path.home() / ".chu-gen-videob30"
-    config_dir.mkdir(exist_ok=True)
+#     Returns:
+#         bool: 是否需要更新
+#     """
+#     # 在用户目录下创建配置目录
+#     config_dir = Path.home() / ".chu-gen-videob30"
+#     config_dir.mkdir(exist_ok=True)
     
-    config_file = config_dir / "metadata_update.json"
+#     config_file = config_dir / "metadata_update.json"
     
-    current_time = datetime.now()
+#     current_time = datetime.now()
     
-    # 如果配置文件不存在，则创建并立即返回True
-    if not config_file.exists():
-        # with open(config_file, "w") as f:
-        #     json.dump({"last_update": current_time.isoformat()}, f)
-        save_config(config_file, {"last_update": current_time.isoformat()})
-        return True
+#     # 如果配置文件不存在，则创建并立即返回True
+#     if not config_file.exists():
+#         # with open(config_file, "w") as f:
+#         #     json.dump({"last_update": current_time.isoformat()}, f)
+#         save_config(config_file, {"last_update": current_time.isoformat()})
+#         return True
     
-    # 读取上次更新时间
-    try:
-        data = load_config(config_file)
-        last_update = datetime.fromisoformat(data.get("last_update", "2000-01-01T00:00:00"))
-    except (json.JSONDecodeError, ValueError):
-        # 文件损坏或格式错误，重新创建
-        # with open(config_file, "w") as f:
-        #     json.dump({"last_update": current_time.isoformat()}, f)
-        save_config(config_file, {"last_update": current_time.isoformat()})
-        return True
+#     # 读取上次更新时间
+#     try:
+#         data = load_config(config_file)
+#         last_update = datetime.fromisoformat(data.get("last_update", "2000-01-01T00:00:00"))
+#     except (json.JSONDecodeError, ValueError):
+#         # 文件损坏或格式错误，重新创建
+#         # with open(config_file, "w") as f:
+#         #     json.dump({"last_update": current_time.isoformat()}, f)
+#         save_config(config_file, {"last_update": current_time.isoformat()})
+#         return True
     
-    # 计算时间差
-    time_diff = current_time - last_update
-    if time_diff.total_seconds() / 3600 >= threshold_hours:
-        # 更新时间戳
-        save_config(config_file, {"last_update": current_time.isoformat()})
-        return True
+#     # 计算时间差
+#     time_diff = current_time - last_update
+#     if time_diff.total_seconds() / 3600 >= threshold_hours:
+#         # 更新时间戳
+#         save_config(config_file, {"last_update": current_time.isoformat()})
+#         return True
     
-    return False
+#     return False
 
 def _fetch_music_data(name, url, filepath, transformer=None):
     """
@@ -677,45 +690,113 @@ def _fetch_music_data(name, url, filepath, transformer=None):
         print(f"❌［{name}］获取谱面数据时出错：{e}")
 
 # fetch_music_data 函数用于调用（可选检查缓存）
-def fetch_music_data(forced, threshold_hours=24):
+# def fetch_music_data(forced, threshold_hours=24):
+#     """
+#     直接获取谱面数据（不检查缓存时间）
+#     """
+#     # 检查是否需要更新
+#     if should_update_metadata(threshold_hours) or forced == False:
+#         print("⏩ 未达到更新阈值，跳过数据更新")
+#         return
+    
+#     else:
+#         print("🔄️ 开始更新谱面数据。")
+#         _fetch_music_data(
+#             name="国服",
+#             url=song_data_cn,
+#             filepath=music_info_path,
+#             transformer=lambda d: d.get("songs", [])
+#         )
+
+#         difficulty_map = {
+#             "BAS": "BASIC",
+#             "ADV": "ADVANCED",
+#             "EXP": "EXPERT",
+#             "MAS": "MASTER",
+#             "ULT": "ULTIMA"
+#         }
+
+#         def transformer(data):
+#             for song in data:
+#                 if "data" in song:
+#                     song["data"] = {
+#                         difficulty_map.get(k, k): v for k, v in song["data"].items()
+#                     }
+#             return data
+        
+#         _fetch_music_data(
+#             name="日服",
+#             url=base64.b64decode(song_data_jp),
+#             filepath=jp_music_info_path,
+#             transformer=transformer
+#         )
+        
+#         print("✅ 谱面数据更新完成")
+
+
+def fetch_music_data():
     """
-    直接获取谱面数据（不检查缓存时间）
+    获取谱面数据
     """
     # 检查是否需要更新
-    if should_update_metadata(threshold_hours) or forced == False:
-        print("⏩ 未达到更新阈值，跳过数据更新")
-        return
+    # if not forced and not should_update_metadata(threshold_hours):
+    #     print("⏩ 未达到更新阈值，跳过数据更新")
+    #     return
     
-    else:
-        print("🔄️ 开始更新谱面数据。")
-        _fetch_music_data(
-            name="国服",
-            url=song_data_cn,
-            filepath=music_info_path,
-            transformer=lambda d: d.get("songs", [])
-        )
-
-        difficulty_map = {
-            "BAS": "BASIC",
-            "ADV": "ADVANCED",
-            "EXP": "EXPERT",
-            "MAS": "MASTER",
-            "ULT": "ULTIMA"
-        }
-
-        def transformer(data):
-            for song in data:
-                if "data" in song:
-                    song["data"] = {
-                        difficulty_map.get(k, k): v for k, v in song["data"].items()
-                    }
-            return data
+    print("🔄️ 开始更新谱面数据...")
+    
+    # 1. 获取国服别名数据
+    alias_map = {}
+    try:
+        response = requests.get(f"{LXNS_API_ENDPOINT}/alias/list")
+        if response.status_code == 200:
+            aliases_data = response.json()
+            for alias_item in aliases_data.get("aliases", []):
+                alias_map[str(alias_item["song_id"])] = alias_item["aliases"]
+            print(f"📋 已获取 {len(alias_map)} 条别名数据")
+    except Exception as e:
+        print(f"⚠️ 获取别名数据失败: {e}")
+    
+    # 2. 通用函数：为歌曲添加别名
+    def add_aliases(songs, id_field):
+        for song in songs:
+            song_id = str(song.get(id_field, ""))
+            song["aliases"] = alias_map.get(song_id, [])
+        return songs
+    
+    # 3. 获取国服数据（使用 id 字段）
+    _fetch_music_data(
+        name="国服",
+        url=song_data_cn,
+        filepath=music_info_path,
+        transformer=lambda d: add_aliases(d.get("songs", []), "id")
+    )
+    
+    def jp_transformer(data):
+        # 日服数据直接是列表，不是字典
+        songs = data if isinstance(data, list) else data.get("songs", [])
         
-        _fetch_music_data(
-            name="日服",
-            url=base64.b64decode(song_data_jp),
-            filepath=jp_music_info_path,
-            transformer=transformer
-        )
+        for song in songs:
+            # 转换难度名称
+            if "data" in song:
+                song["data"] = {
+                    DIFFICULTY_MAP.get(k, k): v for k, v in song["data"].items()
+                }
+            
+            # 添加别名（使用 meta.idx 或直接使用 idx）
+            song_id = str(song.get("meta", {}).get("idx", ""))
+            if song_id and song_id in alias_map:
+                song["aliases"] = alias_map[song_id]
+            else:
+                song["aliases"] = []
         
-        print("✅ 谱面数据更新完成")
+        return songs
+    
+    _fetch_music_data(
+        name="日服",
+        url=base64.b64decode(song_data_jp).decode('utf-8'),
+        filepath=jp_music_info_path,
+        transformer=jp_transformer
+    )
+    
+    print("✅ 谱面数据更新完成")

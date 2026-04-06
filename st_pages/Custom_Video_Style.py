@@ -2,8 +2,7 @@ import streamlit as st
 import os, shutil, time
 from utils.PathUtils import *
 from utils.ImageUtils import generate_single_image
-from utils.VideoUtils import get_video_preview_frame
-from utils.Variables import root_path, bgclips_path, audios_path, image_root_path
+from utils.Variables import root_path, bgclips_path, audios_path, image_root_path, thumbnails_dir
 
 # 页面标题
 st.set_page_config(
@@ -1027,7 +1026,6 @@ if os.path.exists(current_paths['custom_style']):
         # 啊🤪～啊🤪～啊咦😬啊咦😬啊→啊↑啊↓😨啊😰～嗯💥嗯嗯👿滴嘚滴嘚😈唔😱嘟⬅️嘟↖️嘟⬆️嘟↗️嘟➡️嘟↘️嘟⬇️
         # """
     def update_preview_image(placeholder):
-        thumbnails_dir = f"{root_path}/thumbnails"
         b50_datas = load_config(current_paths['data_file'])
         # generate_single_image(b50_datas[0], custom_data, thumbnails_dir, "BEST", 1)
         generate_single_image(b50_datas[0], custom_data, thumbnails_dir)

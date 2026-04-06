@@ -75,7 +75,8 @@ def create_info_segment(clip_config, resolution, font_path, text_size=32, inline
     bg_video = bg_video.with_effects([
         vfx.Loop(duration=clip_config['duration']), 
         vfx.MultiplyColor(0.5),
-        vfx.Resize(width=resolution[0])
+        vfx.Resize(width=resolution[0]),
+        vfx.LumContrast(lum=0.5)
     ])
 
     # 文本分页处理
@@ -724,7 +725,7 @@ def render_all_video_clips(
     video_output_path, 
     resolution: tuple, 
     v_bitrate_kbps, 
-    trans_params,
+    # trans_params,
     font_path,
     encoder_param: dict,
     force_render=False,
@@ -790,44 +791,49 @@ def render_all_video_clips(
                 # print(f"正在处理视频片段: {current_prefix}_{config['id']}.mp4")
 
                 clip = normalize_audio_volume(clip)
-                if trans_params["enabled"] or not clips_only:
-                    duration = trans_params["duration"]
-                    custom = trans_params["enable_custom"]
-                    effect = trans_params["effect"]
-                    fade_range = trans_params["range"]
+                # if trans_params["enabled"] or not clips_only:
+                #     duration = trans_params["duration"]
+                #     custom = trans_params["enable_custom"]
+                #     effect = trans_params["effect"]
+                #     fade_range = trans_params["range"]
                     
-                    effects = []
+                #     effects = []
                     
-                    # # 非自定义模式
-                    if custom:
-                        if effect == "fade":
-                            # 普通淡变
-                            if fade_range in ["start", "both"]:
-                                effects.append(vfx.FadeIn(duration))
-                            if fade_range in ["end", "both"]:
-                                effects.append(vfx.FadeOut(duration))
+                #     # # 非自定义模式
+                #     if custom:
+                #         if effect == "fade":
+                #             # 普通淡变
+                #             if fade_range in ["start", "both"]:
+                #                 effects.append(vfx.FadeIn(duration))
+                #             if fade_range in ["end", "both"]:
+                #                 effects.append(vfx.FadeOut(duration))
                         
-                        elif effect == "slide":
-                            # 滑入滑出效果
-                            direction = trans_params["slide_direction"]
-                            if fade_range in ["start", "both"]:
-                                effects.append(vfx.SlideIn(duration=duration, side=direction))
-                            if fade_range in ["end", "both"]:
-                                effects.append(vfx.SlideOut(duration=duration, side=direction))
-                    else:
-                        # 普通淡变
-                        if fade_range in ["start", "both"]:
-                            effects.append(vfx.FadeIn(duration))
-                        if fade_range in ["end", "both"]:
-                            effects.append(vfx.FadeOut(duration))
+                #         elif effect == "slide":
+                #             # 滑入滑出效果
+                #             direction = trans_params["slide_direction"]
+                #             if fade_range in ["start", "both"]:
+                #                 effects.append(vfx.SlideIn(duration=duration, side=direction))
+                #             if fade_range in ["end", "both"]:
+                #                 effects.append(vfx.SlideOut(duration=duration, side=direction))
+                #     else:
+                #         # 普通淡变
+                #         if fade_range in ["start", "both"]:
+                #             effects.append(vfx.FadeIn(duration))
+                #         if fade_range in ["end", "both"]:
+                #             effects.append(vfx.FadeOut(duration))
                     
-                    # 音频过渡始终添加
-                    effects.extend([
-                        afx.AudioFadeIn(duration),
-                        afx.AudioFadeOut(duration)
-                    ])
-                    
-                    clip = clip.with_effects(effects)
+                # 音频过渡始终添加
+                # effects.extend([
+                #     afx.AudioFadeIn(duration),
+                #     afx.AudioFadeOut(duration)
+                # ])
+                
+                clip = clip.with_effects([
+                    vfx.FadeIn(duration=1.5),
+                    vfx.FadeOut(duration=1.5),
+                    afx.AudioFadeIn(duration=1.5),
+                    afx.AudioFadeOut(duration=1.5)
+                ])
                     
                 clip.write_videofile(
                     output_file,

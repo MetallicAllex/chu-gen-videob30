@@ -1,7 +1,9 @@
 import os, traceback
 import streamlit as st
 from datetime import datetime
-from utils.PathUtils import *
+from utils.Variables import ui_font_path, thumbnails_dir
+from utils.TextRenderer import TextStyle, LayoutConfig, render_text_to_image
+from utils.PathUtils import read_global_config, save_config, load_config, get_data_paths, get_user_versions
 
 st.header("Step 4-2: 片头/片尾内容编辑")
 
@@ -44,7 +46,12 @@ def edit_context_widget(name, config, config_file_path):
                 #     horizontal=True
                 # )
                 # 文本编辑框
-                info_page = st.checkbox("此页为背景板", help="可在此页展示您需要额外编辑的内容", key=f"{item['id']}_bg_page", value=item["bg_page"])
+                bg_col1, bg_col2 = st.columns(2)
+                with bg_col1:
+                    info_page = st.checkbox("此页为背景板", help="可在此页展示您需要额外编辑的内容", key=f"{item['id']}_bg_page", value=item["bg_page"])
+                with bg_col2:
+                    use_overlay = st.checkbox("保留背景板底图", key=f"{item['id']}_overlay", help="此页非背景板时选项不可用" if not info_page else "用于框定文本区域，若手动添加文字可自行决定是否保留", disabled=not info_page)
+                
                 new_text = st.text_area(
                     "文本内容",
                     value=item["text"],
@@ -72,6 +79,7 @@ def edit_context_widget(name, config, config_file_path):
                 # )
                 items[idx]["text"] = new_text
                 items[idx]["bg_page"] = info_page
+                items[idx]['overlay'] = use_overlay
                 items[idx]["duration"] = new_duration
                 
         # 删除按钮（只有当列表长度大于 1 时才显示）
@@ -91,7 +99,8 @@ def edit_context_widget(name, config, config_file_path):
                     "id": f"{name}_{len(items) + 1}",
                     "duration": 10,
                     "text": "",
-                    "bg_page": False
+                    "bg_page": False,
+                    "overlay": False
                     # "version": "LUMINOUS"
                 }
                 items.append(new_item)
@@ -110,6 +119,104 @@ def edit_context_widget(name, config, config_file_path):
                 except Exception as e:
                     st.toast(f"保存失败：{str(e)}", icon="❌")
                     st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
+
+# 在 edit_context_widget 函数后面添加这个新函数
+@st.fragment
+def video_settings_widget(config, config_file_path):
+    """视频参数设置组件"""
+    vid_cfg = load_config(config_file_path)
+    config = vid_cfg['position']
+    with st.expander("视频画面参数", expanded=True, icon="📺"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 黑暗度
+            new_darkness = st.slider(
+                "背景压暗",
+                min_value=-1.0,
+                max_value=1.0,
+                value=config["video"].get("darkness", -0.25),
+                step=0.01,
+                help="（负值变亮）"
+            )
+            config["video"]["darkness"] = new_darkness
+            
+            # Overlay
+            overlay = config["video"].get("overlay", [0.0641, 0.075])
+            new_overlay_1 = st.number_input(
+                "【谱面确认】X 比例系数",
+                0.0, 1.0,
+                value=overlay[0],
+                format="%.4f",
+                step=0.0001
+            )
+            new_overlay_2 = st.number_input(
+                "【谱面确认】Y 比例系数", 
+                0.0, 1.0,
+                value=overlay[1],
+                format="%.4f",
+                step=0.0001
+            )
+            config["video"]["overlay"] = [new_overlay_1, new_overlay_2]
+            
+            # 字体大小
+            style_config = config["video"]["text"]["StyleConfig"]
+            new_font_size = st.number_input(
+                "字体大小",
+                min_value=1, max_value=200,
+                value=style_config.get("size", 32),
+                step=1
+            )
+            style_config["size"] = new_font_size
+        
+        with col2:
+            # 文本位置
+            position = style_config.get("position", [0.7594, 0.224])
+            new_pos_x = st.number_input(
+                "【文本】X 比例系数",
+                0.0, 1.0,
+                value=position[0],
+                format="%.4f",
+                step=0.0001
+            )
+            new_pos_y = st.number_input(
+                "【文本】Y 比例系数", 
+                0.0, 1.0,
+                value=position[1],
+                format="%.4f",
+                step=0.0001
+            )
+            style_config["position"] = [new_pos_x, new_pos_y]
+            
+            # 文本宽度
+            layout_config = config["video"]["text"]["layoutConfig"]
+            new_width = st.number_input(
+                "文本区域宽度",
+                min_value=100,
+                max_value=1920,
+                value=layout_config.get("width", 406),
+                step=10
+            )
+            layout_config["width"] = new_width
+        
+            # 颜色选择（RGB转Hex）
+            current_color = style_config.get("color", [120, 65, 14])
+            hex_color = f"#{current_color[0]:02x}{current_color[1]:02x}{current_color[2]:02x}"
+            new_color = st.color_picker("文本颜色", hex_color)
+            style_config["color"] = [
+                int(new_color[1:3], 16),
+                int(new_color[3:5], 16),
+                int(new_color[5:7], 16)
+            ]
+        
+        # 保存按钮
+        if st.button("保存视频参数", key="save_video_config", icon="💾", use_container_width=True):
+            try:
+                save_config(config_file_path, config)
+                st.toast("视频参数已保存！", icon="✅")
+            except Exception as e:
+                st.toast(f"保存失败：{str(e)}", icon="❌")
+                st.error(traceback.format_exc())
 
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
@@ -171,12 +278,6 @@ with st.container(border=True):
         st.stop()
 ### Savefile Management - End ###
 
-# TODO: 在这里添加开头结尾和评论的文字图像预览功能
-# 并且支持在此处预先生成需要使用的图像，将其存储在 (存档目录)/images/text 目录下
-# 以背景板图像的相同名称保存，减少因命名混乱导致评论所在片段错误
-# 同时在一定程度上可以解决无法显示 Emoji 的问题，并且加快渲染速度
-# 能将节省下来的时间用于在最终的拼接视频步骤上添加转场过渡效果
-
 if config:
     st.write("添加想要展示的文字内容，每一页最多可以展示约 250 字")
     st.info("""
@@ -192,6 +293,13 @@ if config:
     with col2:
         st.subheader("片尾")
         edit_context_widget("ending", config, video_config_file)
+
+# TODO: 在这里添加开头结尾和评论的文字图像预览功能
+# 并且支持在此处预先生成需要使用的图像，将其存储在 (存档目录)/images/text 目录下
+# 以背景板图像的相同名称保存，减少因命名混乱导致评论所在片段错误
+# 同时在一定程度上可以解决无法显示 Emoji 的问题，并且加快渲染速度
+# 能将节省下来的时间用于在最终的拼接视频步骤上添加转场过渡效果
+    video_settings_widget(config, current_paths['custom_style'])  # 新增这一行
     
     col1, col2 = st.columns(2, vertical_alignment="center")
     with col1:

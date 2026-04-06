@@ -9,6 +9,7 @@ font_path = f"{root_path}/fonts"
 bgclips_path = f"{root_path}/BgClips"
 audios_path = f"{root_path}/Audios"
 image_root_path = f"{root_path}/images"
+thumbnails_dir = f"{root_path}/thumbnails"
 combo_img_path = f"{image_root_path}/ComboStatus"
 comment_font_path = f"{font_path}/FOT_NewRodin_Pro_EB.otf"
 ui_font_path = f"{font_path}/SOURCEHANSANSSC-BOLD.OTF"
@@ -69,8 +70,14 @@ CHUNI_DATA_TYPE = {
     }
 }
 
-# 旧版本兼容（部分旧存档可能使用的字段名）
-LEGACY_LEVEL_LABELS = ["BASIC", "ADVANCED", "EXPERT", "MASTER"]
+# 更新曲目数据所使用的难度映射
+DIFFICULTY_MAP = {
+    "BAS": "BASIC",
+    "ADV": "ADVANCED",
+    "EXP": "EXPERT",
+    "MAS": "MASTER",
+    "ULT": "ULTIMA"
+}
 
 # ffmpeg xfade 滤镜支持的转场效果列表
 XFADE_TRANSITIONS = [

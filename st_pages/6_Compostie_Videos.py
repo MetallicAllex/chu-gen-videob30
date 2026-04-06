@@ -1,4 +1,5 @@
 import shutil, time
+import traceback
 import streamlit as st
 from datetime import datetime
 from utils.PathUtils import *
@@ -78,6 +79,107 @@ with st.container(border=True):
     if not save_id:
         st.stop()
 ### Savefile Management - End ###
+
+@st.fragment
+def video_settings_widget(config, config_file_path):
+    """视频参数设置组件"""
+    vid_cfg = load_config(config_file_path)
+    config = vid_cfg['position']
+    with st.expander("视频画面参数", expanded=True, icon="📺"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 黑暗度
+            new_darkness = st.slider(
+                "背景压暗",
+                min_value=-1.0,
+                max_value=1.0,
+                value=config["video"].get("darkness", -0.25),
+                step=0.01,
+                help="（负值变亮）"
+            )
+            config["video"]["darkness"] = new_darkness
+            
+            # Overlay
+            overlay = config["video"].get("overlay", [0.0641, 0.075])
+            new_overlay_1 = st.number_input(
+                "【谱面确认】X 比例系数",
+                0.0, 1.0,
+                value=overlay[0],
+                format="%.4f",
+                step=0.0001
+            )
+            new_overlay_2 = st.number_input(
+                "【谱面确认】Y 比例系数", 
+                0.0, 1.0,
+                value=overlay[1],
+                format="%.4f",
+                step=0.0001
+            )
+            config["video"]["overlay"] = [new_overlay_1, new_overlay_2]
+            
+            # 字体大小
+            style_config = config["video"]["text"]["StyleConfig"]
+            new_font_size = st.number_input(
+                "字体大小",
+                min_value=1, max_value=200,
+                value=style_config.get("size", 32),
+                step=1
+            )
+            style_config["size"] = new_font_size
+        
+        with col2:
+            # 文本位置
+            position = style_config.get("position", [0.7594, 0.224])
+            new_pos_x = st.number_input(
+                "【文本】X 比例系数",
+                0.0, 1.0,
+                value=position[0],
+                format="%.4f",
+                step=0.0001
+            )
+            new_pos_y = st.number_input(
+                "【文本】Y 比例系数", 
+                0.0, 1.0,
+                value=position[1],
+                format="%.4f",
+                step=0.0001
+            )
+            style_config["position"] = [new_pos_x, new_pos_y]
+            
+            # 文本宽度
+            layout_config = config["video"]["text"]["layoutConfig"]
+            new_width = st.number_input(
+                "文本区域宽度",
+                min_value=100,
+                max_value=1920,
+                value=layout_config.get("width", 406),
+                step=10
+            )
+            layout_config["width"] = new_width
+        
+            # 颜色选择（RGB转Hex）
+            current_color = style_config.get("color", [120, 65, 14])
+            hex_color = f"#{current_color[0]:02x}{current_color[1]:02x}{current_color[2]:02x}"
+            new_color = st.color_picker("文本颜色", hex_color)
+            style_config["color"] = [
+                int(new_color[1:3], 16),
+                int(new_color[3:5], 16),
+                int(new_color[5:7], 16)
+            ]
+        
+        # 保存按钮
+        if st.button("保存视频参数", key="save_video_config", icon="💾", use_container_width=True):
+            try:
+                save_config(config_file_path, config)
+                st.toast("视频参数已保存！", icon="✅")
+            except Exception as e:
+                st.toast(f"保存失败：{str(e)}", icon="❌")
+                st.error(traceback.format_exc())
+
+style_config = load_config(current_paths['custom_style'])
+video_settings_widget(style_config, current_paths['custom_style'])
+st.divider()
 
 st.write("渲染设置")
 _video_res = G_config['VIDEO_RES']
@@ -478,15 +580,14 @@ if st.session_state.global_rendering:
         classic_fast_render = (render_mode == 'standard')
         
         render_all_video_clips(video_configs, video_output_path, video_res, v_bitrate_kbps,
-                             trans_params, font_path=ui_font_path, encoder_param=encoder_param,
+                              font_path=ui_font_path, encoder_param=encoder_param,
                              force_render=force_render_clip, classic_fast_render=classic_fast_render,
                              clips_only=clips_only)
         
         if not clips_only:
             # 合并视频拼接逻辑：只有 classic_fast_render 参数不同
             combine_full_video_direct(video_output_path, 
-                                      username, 
-                                      trans_params,
+                                      username,
                                       v_bitrate_kbps,
                                       classic_fast_render)
             

@@ -1,6 +1,6 @@
 import os, time
 import streamlit as st
-from utils.DataUtils import fetch_music_data, should_update_metadata, music_info_path, jp_music_info_path
+from utils.DataUtils import fetch_music_data, music_info_path, jp_music_info_path
 
 col1, col2 = st.columns([.7, 1.3])
 with col1:
@@ -140,19 +140,16 @@ with col2:
 
 st.divider()
 with st.expander("（附加设置）下载或更新谱面数据", icon="🔄️"):
-    st.warning("""
-               若未拥有谱面数据，不正确或已修改（如添加了新歌曲等），请及时更新
-               - 此时间基于生成器上次启动时间计算，请以实际为准。
-               """, icon="⚠️")
-    update_status = should_update_metadata(24)
-    update_hint = "是在 24 小时内" if update_status == False else "已超 24 小时"
-    update_text = f"您上次完成更新的时间{update_hint}"
-    col1, col2 = st.columns([.5, 1.5], vertical_alignment="center")
+    # update_status = should_update_metadata(24)
+    # update_hint = "是在 24 小时内" if update_status == False else "已超 24 小时"
+    # update_text = f"您上次完成更新的时间{update_hint}"
+    col1, col2 = st.columns(2, vertical_alignment="center")
     with col1:
-        forced = st.checkbox("对谱面数据进行强制更新", help="无视缓存时间强制更新")
+        # forced = st.checkbox("对谱面数据进行强制更新", help="无视缓存时间强制更新")
+        st.warning("若未拥有、不正确或已更新新版本谱面数据，请及时更新", icon="⚠️")
     with col2:
-        if st.button(f"更新谱面数据", icon="🔄️", width='stretch', help=update_text):
-            fetch_music_data(forced=forced)
+        if st.button(f"更新谱面数据", icon="🔄️", width='stretch'):
+            fetch_music_data()
             st.toast("谱面数据更新完成！3 秒后刷新", icon="✅")
             time.sleep(3)
             st.rerun()
