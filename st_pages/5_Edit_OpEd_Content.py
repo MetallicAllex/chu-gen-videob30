@@ -1,8 +1,8 @@
 import os, traceback
 import streamlit as st
 from datetime import datetime
-from utils.Variables import ui_font_path, thumbnails_dir
-from utils.TextRenderer import TextStyle, LayoutConfig, render_text_to_image
+from utils.TextRenderer import render_text_to_image
+from utils.Variables import font_path, image_root_path
 from utils.PathUtils import read_global_config, save_config, load_config, get_data_paths, get_user_versions
 
 st.header("Step 4-2: 片头/片尾内容编辑")
@@ -50,7 +50,7 @@ def edit_context_widget(name, config, config_file_path):
                 with bg_col1:
                     info_page = st.checkbox("此页为背景板", help="可在此页展示您需要额外编辑的内容", key=f"{item['id']}_bg_page", value=item["bg_page"])
                 with bg_col2:
-                    use_overlay = st.checkbox("保留背景板底图", key=f"{item['id']}_overlay", help="此页非背景板时选项不可用" if not info_page else "用于框定文本区域，若手动添加文字可自行决定是否保留", disabled=not info_page)
+                    use_overlay = st.checkbox("保留背景板底图", key=f"{item['id']}_overlay", help="此页非背景板时选项不可用" if not info_page else "用于框定文本区域，若手动添加文字可自行决定是否保留", disabled=not info_page, value=item["overlay"])
                 
                 new_text = st.text_area(
                     "文本内容",
@@ -100,7 +100,7 @@ def edit_context_widget(name, config, config_file_path):
                     "duration": 10,
                     "text": "",
                     "bg_page": False,
-                    "overlay": False
+                    "overlay": True
                     # "version": "LUMINOUS"
                 }
                 items.append(new_item)
@@ -122,102 +122,515 @@ def edit_context_widget(name, config, config_file_path):
 
 # 在 edit_context_widget 函数后面添加这个新函数
 @st.fragment
-def video_settings_widget(config, config_file_path):
+def video_settings_widget(config_file_path):
     """视频参数设置组件"""
-    vid_cfg = load_config(config_file_path)
-    config = vid_cfg['position']
-    with st.expander("视频画面参数", expanded=True, icon="📺"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # 黑暗度
-            new_darkness = st.slider(
-                "背景压暗",
-                min_value=-1.0,
-                max_value=1.0,
-                value=config["video"].get("darkness", -0.25),
-                step=0.01,
-                help="（负值变亮）"
-            )
-            config["video"]["darkness"] = new_darkness
+    config = load_config(config_file_path)
+    with st.expander("文本渲染参数", expanded=True, icon="📺"):
+        setting_area = st.selectbox("选择要修改的区域", ["intro", "content"],
+                    key="video_setting_area", help="intro 为开头片尾，content 为谱面确认")
+        style_config = config['styleConfig'][setting_area]
+        with st.expander("文本样式", icon="🔧", expanded=True):
+            setting_col1, setting_col2, setting_col3 = st.columns(3)
+            with setting_col1:
+                # 设置 UI
+                font_options = os.listdir(font_path)
+                new_font = st.selectbox("字体", font_options, key="font_select", index=font_options.index(style_config['font']), 
+                                        help=f"字体文件名，将其放在 {os.path.abspath(font_path)} 目录下")
+                style_config['font'] = new_font
+                
+            with setting_col2:
+                # 字体大小
+                new_font_size = st.number_input(
+                    "字体大小", min_value=1, step=1,
+                    value=style_config["size"]
+                )
+                style_config["size"] = new_font_size
+
+            with setting_col3:            
+                # 颜色选择（RGB转Hex）
+                current_color = style_config["color"]
+                hex_color = f"#{current_color[0]:02x}{current_color[1]:02x}{current_color[2]:02x}"
+                new_color = st.color_picker("文本颜色", hex_color)
+                style_config["color"] = [
+                    int(new_color[1:3], 16),
+                    int(new_color[3:5], 16),
+                    int(new_color[5:7], 16)
+                ]
             
-            # Overlay
-            overlay = config["video"].get("overlay", [0.0641, 0.075])
-            new_overlay_1 = st.number_input(
-                "【谱面确认】X 比例系数",
-                0.0, 1.0,
-                value=overlay[0],
-                format="%.4f",
-                step=0.0001
-            )
-            new_overlay_2 = st.number_input(
-                "【谱面确认】Y 比例系数", 
-                0.0, 1.0,
-                value=overlay[1],
-                format="%.4f",
-                step=0.0001
-            )
-            config["video"]["overlay"] = [new_overlay_1, new_overlay_2]
-            
-            # 字体大小
-            style_config = config["video"]["text"]["StyleConfig"]
-            new_font_size = st.number_input(
-                "字体大小",
-                min_value=1, max_value=200,
-                value=style_config.get("size", 32),
-                step=1
-            )
-            style_config["size"] = new_font_size
-        
-        with col2:
-            # 文本位置
-            position = style_config.get("position", [0.7594, 0.224])
-            new_pos_x = st.number_input(
-                "【文本】X 比例系数",
-                0.0, 1.0,
-                value=position[0],
-                format="%.4f",
-                step=0.0001
-            )
-            new_pos_y = st.number_input(
-                "【文本】Y 比例系数", 
-                0.0, 1.0,
-                value=position[1],
-                format="%.4f",
-                step=0.0001
-            )
-            style_config["position"] = [new_pos_x, new_pos_y]
-            
-            # 文本宽度
-            layout_config = config["video"]["text"]["layoutConfig"]
-            new_width = st.number_input(
-                "文本区域宽度",
-                min_value=100,
-                max_value=1920,
-                value=layout_config.get("width", 406),
-                step=10
-            )
-            layout_config["width"] = new_width
-        
-            # 颜色选择（RGB转Hex）
-            current_color = style_config.get("color", [120, 65, 14])
-            hex_color = f"#{current_color[0]:02x}{current_color[1]:02x}{current_color[2]:02x}"
-            new_color = st.color_picker("文本颜色", hex_color)
-            style_config["color"] = [
-                int(new_color[1:3], 16),
-                int(new_color[3:5], 16),
-                int(new_color[5:7], 16)
-            ]
-        
+            stroke_settings = style_config['stroke']
+            with st.expander("描边设置", icon="🖼️"):
+                stroke_col1, stroke_col2, stroke_col3 = st.columns(3, vertical_alignment="center")
+                with stroke_col1:
+                    stroke_status = st.checkbox("启用文字描边", key="stroke_status", value=stroke_settings["enable"])
+                    stroke_settings["enable"] = stroke_status
+                with stroke_col2:
+                    # 颜色选择（RGB转Hex）
+                    stroke_current_color = stroke_settings["color"]
+                    hex_color = f"#{stroke_current_color[0]:02x}{stroke_current_color[1]:02x}{stroke_current_color[2]:02x}"
+                    stroke_new_color = st.color_picker("描边颜色", hex_color)
+                    stroke_settings["color"] = [
+                        int(stroke_new_color[1:3], 16),
+                        int(stroke_new_color[3:5], 16),
+                        int(stroke_new_color[5:7], 16)
+                    ]
+                with stroke_col3:
+                    # 线宽
+                    stroke_new_width = st.number_input(
+                        "描边线宽", min_value=0, step=1,
+                        value=stroke_settings["width"],
+                        help="px（0 则不显示）"
+                    )
+                    stroke_settings["width"] = stroke_new_width
+                    
+        layout_config = config['layoutConfig'][setting_area]
+        with st.expander(f"文本布局", icon="🔧", expanded=True):
+            # st.write(layout_config)
+            layout_col1, layout_col2 = st.columns(2)
+            with layout_col1:
+                col1, col2 = st.columns(2, vertical_alignment="center")
+                with col1:
+                    # 文本位置
+                    new_width = st.number_input(
+                        "宽度(px)", min_value=1, step=1,
+                        value=layout_config["width"]
+                    )
+                    layout_config["width"] = new_width
+                
+                with col2:
+                    new_line_spacing = st.number_input(
+                        "行间距(px)", min_value=1, step=1,
+                        value=layout_config["lineSpacing"]
+                    )
+                    layout_config["lineSpacing"] = new_line_spacing
+                
+                with st.expander("内边距"):
+                    top, right, bottom, left = layout_config["padding"]
+                    col1, col2 = st.columns(2, vertical_alignment="center")
+                    with col1:
+                        new_top = st.number_input("上(px)", min_value=0, step=1, value=top)
+                        new_right = st.number_input("右(px)", min_value=0, step=1, value=right)
+                    with col2:
+                        new_bottom = st.number_input("下(px)", min_value=0, step=1, value=bottom)
+                        new_left = st.number_input("左(px)", min_value=0, step=1, value=left)
+                    layout_config["padding"] = (new_top, new_right, new_bottom, new_left)
+                
+            with layout_col2:
+                col1, col2 = st.columns(2, vertical_alignment="center")
+                with col1:
+                    # 高度
+                    auto_height = st.checkbox("自动计算高度", key="auto_height", 
+                                            value=layout_config["autoHeight"], 
+                                            help="若启用，则高度将自动适配内容")
+                    layout_config["autoHeight"] = auto_height
+                
+                with col2:
+                    # 文本位置
+                    new_height = st.number_input(
+                        "高度(px)", min_value=1, step=1,
+                        value=layout_config["height"], disabled=auto_height
+                    )
+                    layout_config["height"] = new_height
+                
+                align_settings = layout_config['AlignConfig']
+                with st.expander(f"对齐设置"):
+                    horizontal_align = align_settings['horizontal']
+                    new_horizontal_align = st.selectbox(
+                        "水平对齐", ["left", "center", "right"],
+                        key="horizontal_align", index=horizontal_align.index(horizontal_align)
+                    )
+                    align_settings['horizontal'] = new_horizontal_align
+                    
+                    vertical_align = align_settings['vertical']
+                    new_vertical_align = st.selectbox(
+                        "垂直对齐", ["top", "center", "bottom"],
+                        key="vertical_align", index=vertical_align.index(vertical_align)
+                    )
+                    align_settings['vertical'] = new_vertical_align
+                    
         # 保存按钮
-        if st.button("保存视频参数", key="save_video_config", icon="💾", use_container_width=True):
+        if st.button("保存到文件", key="save_video_config", icon="💾", use_container_width=True):
             try:
                 save_config(config_file_path, config)
-                st.toast("视频参数已保存！", icon="✅")
+                st.toast("已保存到文件！", icon="✅")
             except Exception as e:
                 st.toast(f"保存失败：{str(e)}", icon="❌")
                 st.error(traceback.format_exc())
 
+# @st.fragment
+# def render_widget(video_config_file_path, style_config_file_path):
+#     """渲染组件（未完成）"""
+#     def rgb_to_hex(rgb):
+#         # 确保值在0-255范围内
+#         rgb = [max(0, min(255, x)) for x in rgb]
+#         return '#{:02x}{:02x}{:02x}'.format(*rgb)
+    
+#     config = load_config(style_config_file_path)
+#     config2 = load_config(video_config_file_path)
+#     # 读取配置
+#     styles = config['styleConfig']
+#     style_config = {
+#         "path": os.path.join(font_path, styles['font']),
+#         "size": styles['size'],
+#         "color": rgb_to_hex(styles['color']),
+#         "stroke_color": rgb_to_hex(styles['stroke']['color']),
+#         "stroke_width": styles['stroke']['width'],
+#     }
+#     layouts = config['layoutConfig']
+#     layout_config = {
+#         "width": layouts["width"],
+#         "height": layouts["height"],
+#         "auto_height": layouts["autoHeight"],
+#         "padding": layouts["padding"],
+#         "line_spacing": layouts["lineSpacing"],
+#         "horizontal_align": layouts["AlignConfig"]["horizontal"],
+#         "vertical_align": layouts["AlignConfig"]["vertical"],
+#     }
+#     # 创建样式和布局对象
+#     style = TextStyle(**style_config)
+#     layout = LayoutConfig(**layout_config)
+    
+#     renderer = TextRenderer(style, layout)
+#     renderer.render()
+
+def render_text(video_config_file, style_config_file_path, save_paths="rendered_texts", force_regen=False):
+    """根据视频配置渲染文本并保存为图片文件
+    
+    Args:
+        force_regen: 是否强制重新生成已存在的文件
+    """
+    
+    def rgb_to_hex(rgb):
+        return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
+    
+    def get_render_params(style, layout):
+        """提取渲染参数"""
+        return {
+            'font_path': os.path.join(font_path, style['font']),
+            'font_size': style['size'],
+            'color': rgb_to_hex(style['color']),
+            'stroke_color': rgb_to_hex(style['stroke']['color']) if style['stroke']['enable'] else None,
+            'stroke_width': style['stroke']['width'],
+            'width': layout['width'],
+            'padding': tuple(layout['padding']),
+            'line_spacing': layout['lineSpacing'],
+            'horizontal_align': layout['AlignConfig']['horizontal'],
+            'vertical_align': layout['AlignConfig']['vertical'],
+            'auto_height': layout['autoHeight'],
+        }
+    
+    try:
+        style_data = load_config(style_config_file_path)
+        video_data = load_config(video_config_file)
+        
+        styles = style_data['styleConfig']
+        layouts = style_data['layoutConfig']
+        
+        if not style_data or not video_data:
+            st.error("配置文件加载失败！", icon="❌")
+            return []
+        
+        text_dir = os.path.join(save_paths['image_dir'], 'text')
+        os.makedirs(text_dir, exist_ok=True)
+        
+        # 预定义渲染配置
+        render_configs = [
+            (video_data['intro'], 'intro',  get_render_params(styles['intro'], layouts['intro'])),
+            (video_data['ending'], 'ending', get_render_params(styles['intro'], layouts['intro'])),
+            (video_data['main'], 'main', get_render_params(styles['content'], layouts['content']))
+        ]
+        
+        rendered_files = []
+        skipped_files = []
+        failed_files = []
+        
+        for segments, seg_type, params in render_configs:
+            for seg in segments:
+                text = seg.get('text', '')
+                if not text or not text.strip():
+                    continue
+                
+                # 生成输出路径
+                file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
+                output_path = os.path.join(text_dir, file_name)
+                
+                # 检查文件是否已存在（除非强制重新生成）
+                if not force_regen and os.path.exists(output_path):
+                    skipped_files.append(file_name)
+                    rendered_files.append(output_path)
+                    continue
+                
+                # 如果需要强制重新生成，先删除旧文件
+                if force_regen and os.path.exists(output_path):
+                    os.remove(output_path)
+                    print(f"删除旧文件: {file_name}")
+                
+                print(f"正在生成 {file_name}")
+                try:
+                    _, saved_path = render_text_to_image(text=text.strip(), output_path=output_path, **params)
+                    rendered_files.append(saved_path)
+                except Exception as e:
+                    failed_files.append((file_name, str(e)))
+                    print(f"生成失败 {file_name}: {e}")
+        
+        # 显示生成结果摘要
+        if rendered_files:
+            summary_parts = []
+            new_count = len(rendered_files) - len(skipped_files)
+            if new_count > 0:
+                summary_parts.append(f"新生成 {new_count} 张")
+            if skipped_files:
+                summary_parts.append(f"跳过已存在的 {len(skipped_files)} 张")
+            if failed_files:
+                summary_parts.append(f"失败 {len(failed_files)} 张")
+            
+            st.toast(' '.join(summary_parts), icon="📊")
+            
+            # 如果有失败的文件，显示详细信息
+            if failed_files:
+                with st.expander("❌ 生成失败的文件"):
+                    for file_name, error in failed_files:
+                        st.write(f"- `{file_name}`: {error}")
+        else:
+            st.warning("没有找到可渲染的文本内容，请先添加文本并保存配置。", icon="⚠️")
+        
+        return rendered_files
+        
+    except Exception as e:
+        st.toast(f"生成失败：{str(e)}", icon="❌")
+        st.error(traceback.format_exc(), icon="❌")
+        return []
+
+
+# def render_widget(video_config_file_path, style_config_file_path, save_paths="rendered_texts"):
+#     """根据视频配置渲染文本并保存为图片文件"""
+    
+#     st.write("=== 调试：函数开始执行 ===")  # 添加这行
+#     st.write(f"video_config_file: {video_config_file}")  # 添加这行
+#     st.write(f"style_config_file_path: {style_config_file_path}")  # 添加这行
+    
+#     def rgb_to_hex(rgb):
+#         return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
+    
+#     # 加载配置
+#     style_data = load_config(style_config_file_path)
+#     video_data = load_config(video_config_file_path)
+    
+#     rendered_files = []
+    
+#     # 处理 intro 和 ending（使用 intro 配置）
+#     intro_config = style_data['styleConfig']['intro']
+#     intro_layout = style_data['layoutConfig']['intro']
+    
+#     for seg_type in ['intro', 'ending']:
+#         for seg in video_data.get(seg_type, []):
+#             if seg.get('text'):
+#                 output_path = os.path.join(f"{save_paths['image_dir']}/text", f"{seg_type}_{seg.get('id', seg_type)}.png")
+                
+#                 _, saved_path = render_text_to_image(
+#                     text=seg['text'],
+#                     font_path=os.path.join(font_path, intro_config['font']),
+#                     output_path=output_path,
+#                     font_size=intro_config['size'],
+#                     color=rgb_to_hex(intro_config['color']),
+#                     stroke_color=rgb_to_hex(intro_config['stroke']['color']) if intro_config['stroke']['enable'] else None,
+#                     stroke_width=intro_config['stroke']['width'],
+#                     width=intro_layout['width'],
+#                     padding=tuple(intro_layout['padding']),
+#                     line_spacing=intro_layout['lineSpacing'],
+#                     horizontal_align=intro_layout['AlignConfig']['horizontal'],
+#                     vertical_align=intro_layout['AlignConfig']['vertical'],
+#                     auto_height=intro_layout['autoHeight'],
+#                 )
+#                 # seg['rendered_text_path'] = saved_path
+#                 # rendered_files.append(saved_path)
+    
+#     # 处理 main（使用 content 配置）
+#     content_config = style_data['styleConfig']['content']
+#     content_layout = style_data['layoutConfig']['content']
+    
+#     for seg in video_data.get('main', []):
+#         if seg.get('text'):
+#             output_path = os.path.join(f"{save_paths['image_dir']}/text", f"main_{seg.get('clip_id', 'unknown')}.png")
+            
+#             _, saved_path = render_text_to_image(
+#                 text=seg['text'],
+#                 font_path=os.path.join(font_path, content_config['font']),
+#                 output_path=output_path,
+#                 font_size=content_config['size'],
+#                 color=rgb_to_hex(content_config['color']),
+#                 stroke_color=rgb_to_hex(content_config['stroke']['color']) if content_config['stroke']['enable'] else None,
+#                 stroke_width=content_config['stroke']['width'],
+#                 width=content_layout['width'],
+#                 padding=tuple(content_layout['padding']),
+#                 line_spacing=content_layout['lineSpacing'],
+#                 horizontal_align=content_layout['AlignConfig']['horizontal'],
+#                 vertical_align=content_layout['AlignConfig']['vertical'],
+#                 auto_height=content_layout['autoHeight'],
+#             )
+#             # seg['rendered_text_path'] = saved_path
+#             # rendered_files.append(saved_path)
+    
+#     return rendered_files
+    
+def render_all_images(video_config_file, style_config_file_path, save_paths, force_regen=False):
+    """
+    一键生成所有图片（文字图 + 完整背景图）
+    
+    Args:
+        video_config_file: 视频配置文件路径
+        style_config_file_path: 样式配置文件路径
+        save_paths: 保存路径配置
+        force_regen: 是否强制重新生成已存在的文件
+    """
+    from PIL import Image
+    import shutil
+    
+    def rgb_to_hex(rgb):
+        return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
+    
+    def get_render_params(style, layout):
+        """提取渲染参数"""
+        return {
+            'font_path': os.path.join(font_path, style['font']),
+            'font_size': style['size'],
+            'color': rgb_to_hex(style['color']),
+            'stroke_color': rgb_to_hex(style['stroke']['color']) if style['stroke']['enable'] else None,
+            'stroke_width': style['stroke']['width'],
+            'width': layout['width'],
+            'padding': tuple(layout['padding']),
+            'line_spacing': layout['lineSpacing'],
+            'horizontal_align': layout['AlignConfig']['horizontal'],
+            'vertical_align': layout['AlignConfig']['vertical'],
+            'auto_height': layout['autoHeight'],
+        }
+    
+    def merge_text_with_background(text_path, bg_path, output_path, position_ratio, bg_size=(1920, 1080)):
+        """合并单张文字图与背景图"""
+        background = Image.open(bg_path, 'r').convert("RGBA")
+        text_img = Image.open(text_path, 'r').convert("RGBA")
+        
+        text_width, text_height = text_img.size
+        bg_width, bg_height = bg_size
+        
+        x = int(bg_width * position_ratio[0])
+        y = int(bg_height * position_ratio[1])
+        x = max(0, min(x, bg_width - text_width))
+        y = max(0, min(y, bg_height - text_height))
+        
+        background.paste(text_img, (x, y), text_img)
+        background.save(output_path, "PNG")
+        return output_path
+    
+    try:
+        # 加载配置
+        style_data = load_config(style_config_file_path)
+        video_data = load_config(video_config_file)
+        
+        if not style_data or not video_data:
+            st.error("配置文件加载失败！", icon="❌")
+            return [], []
+        
+        styles = style_data['styleConfig']
+        layouts = style_data['layoutConfig']
+        theme = style_data['themes']
+        video_position = style_data['position']['video']
+        intro_position = video_position['intro']
+        content_position = video_position['content']
+        
+        # 创建目录
+        image_root = save_paths['image_dir']
+        text_dir = os.path.join(image_root, 'text')
+        fullbg_dir = os.path.join(image_root, 'fullbg')
+        os.makedirs(text_dir, exist_ok=True)
+        os.makedirs(fullbg_dir, exist_ok=True)
+        
+        # 准备背景路径
+        intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png"
+        content_bg_dir = f"{image_root}/background"
+        
+        # 渲染配置
+        render_configs = [
+            (video_data.get('intro', []), 'intro', get_render_params(styles['intro'], layouts['intro'])),
+            (video_data.get('ending', []), 'ending', get_render_params(styles['intro'], layouts['intro'])),
+            (video_data.get('main', []), 'main', get_render_params(styles['content'], layouts['content']))
+        ]
+        
+        text_files = []
+        fullbg_files = []
+        skipped_count = 0
+        
+        # 遍历渲染
+        for segments, seg_type, params in render_configs:
+            for seg in segments:
+                text = seg.get('text', '')
+                if not text or not text.strip():
+                    continue
+                
+                file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
+                
+                # 生成文件名和路径
+                # if seg_type == 'main':
+                #     file_name = f"{seg['clip_id']}.png"
+                # else:
+                #     file_name = f"{seg['id']}.png"
+                
+                text_path = os.path.join(text_dir, file_name)
+                fullbg_path = os.path.join(fullbg_dir, file_name)
+                
+                # 检查是否需要跳过
+                if not force_regen and os.path.exists(text_path) and os.path.exists(fullbg_path):
+                    skipped_count += 1
+                    text_files.append(text_path)
+                    fullbg_files.append(fullbg_path)
+                    continue
+                
+                # 生成文字图
+                _, saved_text_path = render_text_to_image(
+                    text=text.strip(),
+                    output_path=text_path,
+                    **params
+                )
+                text_files.append(saved_text_path)
+                
+                # 合并背景图
+                if seg_type == 'main':
+                    bg_path = os.path.join(content_bg_dir, file_name)
+                    if os.path.exists(bg_path):
+                        merge_text_with_background(
+                            saved_text_path,
+                            bg_path,
+                            fullbg_path,
+                            content_position
+                        )
+                        fullbg_files.append(fullbg_path)
+                    else:
+                        st.warning(f"背景图不存在，跳过合并: {file_name}")
+                else:
+                    if os.path.exists(intro_bg_path):
+                        merge_text_with_background(
+                            saved_text_path,
+                            intro_bg_path,
+                            fullbg_path,
+                            intro_position
+                        )
+                        fullbg_files.append(fullbg_path)
+                    else:
+                        st.warning(f"Intro 背景图不存在，跳过合并: {file_name}", icon="⚠️")
+        
+        # 显示结果
+        new_count = len(text_files) - skipped_count
+        if new_count > 0:
+            st.success(f"成功生成 {new_count} 张文字图 + {new_count} 张完整背景图", icon="✅")
+        if skipped_count > 0:
+            st.info(f"跳过已存在的 {skipped_count} 组图片", icon="⏭️")
+        
+        return text_files, fullbg_files
+        
+    except Exception as e:
+        st.error(f"生成失败：{str(e)}", icon="❌")
+        st.error(traceback.format_exc(), icon="❌")
+        return [], []
+    
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
@@ -299,8 +712,19 @@ if config:
 # 以背景板图像的相同名称保存，减少因命名混乱导致评论所在片段错误
 # 同时在一定程度上可以解决无法显示 Emoji 的问题，并且加快渲染速度
 # 能将节省下来的时间用于在最终的拼接视频步骤上添加转场过渡效果
-    video_settings_widget(config, current_paths['custom_style'])  # 新增这一行
-    
+    video_settings_widget(current_paths['custom_style'])  # 新增这一行
+    # render_widget(video_config_file, current_paths['custom_style'], current_paths)
+    st.divider()
+    render_info, force_render_text, render_btn = st.columns([1, .35, .65])
+    with render_info:
+        st.write("【可选】预先生成所需的评论文本图像，可减少渲染时间并提升渲染效率。")
+    with force_render_text:
+        force_render = st.checkbox("强制重新生成", value=False, help="强制重新生成已存在的文件，无论其是否已存在。")
+    with render_btn:
+        if st.button("生成评论图", width='stretch', icon="🖼️"):
+            st.toast("正在生成图像。", icon="⏳")
+            # render_text(video_config_file, current_paths['custom_style'], current_paths, force_render)
+            render_all_images(video_config_file, current_paths['custom_style'], current_paths, force_render)
     col1, col2 = st.columns(2, vertical_alignment="center")
     with col1:
         st.write("配置完毕后，即可准备生成您的 Best30 视频")

@@ -64,7 +64,6 @@ coverage.xml
 .pytest_cache/
 cover/
 runtime/
-runtime2/
 
 # Translations
 *.mo
@@ -144,11 +143,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-st_pages/Custom_Video_Style_Config.py
 st_pages/2_Search_For_Videoes_old.py
-st_pages/GPR_bak.txt
-utils/video_crawler_old.py
-utils/TextRenderer.py
 
 # Spyder project settings
 .spyderproject
@@ -181,12 +176,13 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Streamlit config
+# Every config
 .streamlit/
+.vscode/
 
-# DX rating HTML files
-*.html
-*.json
+# Beatmap datasets
+music_datasets/
+# *.json
 
 # debug and test resources
 ffmpeg.exe

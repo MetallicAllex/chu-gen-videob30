@@ -21,6 +21,13 @@ class SegmentConfig:
     main_image: Optional[str] = None
     bg_page: bool = False
 
+@dataclass
+class InfoSegmentConfig:
+    id: str
+    duration: float
+    text: str
+    bg_page: bool = False
+    overlay: bool = True
 
 class SegmentGenerator:
     """视频片段生成器类"""
@@ -59,28 +66,30 @@ class SegmentGenerator:
         # 预计算坐标和缩放因子
         self._update_coordinates()
     
-    def _update_coordinates(self, style_config: Dict[str, Any]):
+    def _update_coordinates(self):
         """更新坐标和缩放因子（基于分辨率）"""
         width, height = self.resolution
-        self.scale_factor = height / 1080
+        coordinates = self.style_config['video']['text']['content']['StyleConfig']['position']
+        # self.scale_factor = height / 1080
         
         # 文字相关坐标
-        self.text_size = int(32 * self.scale_factor)
-        self.text_x = int(0.7594 * width)
-        self.text_first_y = int(0.224 * height)
-        self.line_height = self.text_size + 10
+        # self.text_size = int(32 * self.scale_factor)
+        self.text_pos = (int(0.7594 * width), int(0.224 * height))
+        # self.text_y = int(0.224 * height)
+        # self.line_height = self.text_size + 10
         
         # 视频内框坐标
-        self.inner_box_left = int(135 * width / 1920)
-        self.inner_box_top = int(83 * height / 1080)
+        self.inner_box_xy = (int(135 * width / 1920), int(83 * height / 1080))
+        # self.inner_box_left = int(135 * width / 1920)
+        # self.inner_box_top = int(83 * height / 1080)
         self.inner_box_height = int(668 * height / 1080)
         
         # 视频位置
         self.video_pos = (int(0.0641 * width), int(0.075 * height))
         
         # 信息片段坐标
-        self.info_text_pos = (int(0.15 * width), int(0.17 * height))
-        self.additional_text_pos = (int(0.2 * width), int(0.89 * height))
+        # self.info_text_pos = (int(0.15 * width), int(0.17 * height))
+        # self.additional_text_pos = (int(0.2 * width), int(0.89 * height))
     
     def set_resolution(self, resolution: Tuple[int, int]):
         """动态设置分辨率"""
@@ -89,7 +98,7 @@ class SegmentGenerator:
     
     def create_info_segment(
         self,
-        clip_config: SegmentConfig,
+        clip_config: InfoSegmentConfig,
         text_size: int = 32,
         inline_max_len: int = 75,
         max_lines_per_page: int = 12
@@ -118,33 +127,34 @@ class SegmentGenerator:
         bg_video = self._create_background_video(clip_config.duration)
         bg_image = self._create_background_image(clip_config.duration)
         
-        # 文本分页
-        pages = self._split_text_into_pages(
-            clip_config.text,
-            inline_max_len,
-            max_lines_per_page,
-            clip_config.bg_page
-        )
+        # # 文本分页
+        # pages = self._split_text_into_pages(
+        #     clip_config.text,
+        #     inline_max_len,
+        #     max_lines_per_page,
+        #     clip_config.bg_page
+        # )
         
-        # 创建文字片段
-        text_clips = self._create_text_clips_for_pages(
-            pages,
-            clip_config.duration,
-            self.info_text_pos,
-            clip_config.bg_page
-        )
+        # # 创建文字片段
+        # text_clips = self._create_text_clips_for_pages(
+        #     pages,
+        #     clip_config.duration,
+        #     self.info_text_pos,
+        #     clip_config.bg_page
+        # )
         
-        # 创建底部文字
-        additional_clip = self._create_additional_text_clip(clip_config.duration)
+        # # 创建底部文字
+        # additional_clip = self._create_additional_text_clip(clip_config.duration)
         
         # 合成
         composite_clip = CompositeVideoClip(
             [
                 bg_video.with_position((0, 0)),
-                bg_image.with_position((0, 0)),
-                additional_clip.with_position(self.additional_text_pos)
-            ] + text_clips,
-            size=self.resolution,
+                bg_image.with_position((0, 0))
+            ],
+            #     additional_clip.with_position(self.additional_text_pos)
+            # ] + text_clips,
+            self.resolution,
             use_bgclip=True
         )
         
@@ -199,7 +209,7 @@ class SegmentGenerator:
     def create_video_segment_classic(
         self,
         clip_config: SegmentConfig,
-        text_size: Optional[int] = None
+        # text_size: Optional[int] = None
     ) -> CompositeVideoClip:
         """
         标准渲染模式（moviepy 实现）
@@ -207,15 +217,14 @@ class SegmentGenerator:
         Args:
             clip_config: 片段配置
             text_size: 文字大小
-            
         Returns:
             合成的视频片段
         """
         print(f"正在为您生成【{clip_config.song_name} - {REVERSE_LEVEL_LABELS.get(clip_config.level_index)}】的片段")
         
         # 设置文字大小
-        if text_size is None:
-            text_size = self.text_size
+        # if text_size is None:
+        #     text_size = self.text_size
         
         # 创建各图层
         bg_video = self._create_background_video(clip_config.duration)
@@ -223,11 +232,11 @@ class SegmentGenerator:
         video_clip = self._create_video_clip(clip_config)
         
         # 创建分页文字
-        text_clips = self._create_paginated_text_clips(
-            clip_config.text,
-            clip_config.duration,
-            text_size
-        )
+        # text_clips = self._create_paginated_text_clips(
+        #     clip_config.text,
+        #     clip_config.duration,
+        #     text_size
+        # )
         
         # 合成所有图层
         all_clips = [
@@ -235,7 +244,7 @@ class SegmentGenerator:
             main_image.with_position((0, 0)),
             video_clip.with_position(self.video_pos)
         ]
-        all_clips.extend(text_clips)
+        # all_clips.extend(text_clips)
         
         composite_clip = CompositeVideoClip(all_clips, size=self.resolution, use_bgclip=True)
         
@@ -259,94 +268,94 @@ class SegmentGenerator:
             vfx.Resize(width=self.resolution[0])
         ])
     
-    def _split_text_into_pages(
-        self,
-        text: str,
-        inline_max_len: int,
-        max_lines_per_page: int,
-        is_bg_page: bool
-    ) -> List[List[str]]:
-        """将文本分割成多页"""
-        text_list = get_splited_text(text, text_max_bytes=inline_max_len)
+    # def _split_text_into_pages(
+    #     self,
+    #     text: str,
+    #     inline_max_len: int,
+    #     max_lines_per_page: int,
+    #     is_bg_page: bool
+    # ) -> List[List[str]]:
+    #     """将文本分割成多页"""
+    #     text_list = get_splited_text(text, text_max_bytes=inline_max_len)
         
-        if not text_list or is_bg_page:
-            text_list = ["【无文本内容或背景页】"]
+    #     if not text_list or is_bg_page:
+    #         text_list = ["【无文本内容或背景页】"]
         
-        pages = []
-        current_page = []
+    #     pages = []
+    #     current_page = []
         
-        for line in text_list:
-            if len(current_page) >= max_lines_per_page:
-                pages.append(current_page)
-                current_page = [line]
-            else:
-                current_page.append(line)
+    #     for line in text_list:
+    #         if len(current_page) >= max_lines_per_page:
+    #             pages.append(current_page)
+    #             current_page = [line]
+    #         else:
+    #             current_page.append(line)
         
-        if current_page:
-            pages.append(current_page)
+    #     if current_page:
+    #         pages.append(current_page)
         
-        return pages
+    #     return pages
     
-    def _create_text_clips_for_pages(
-        self,
-        pages: List[List[str]],
-        duration: float,
-        position: Tuple[int, int],
-        is_bg_page: bool
-    ) -> List[TextClip]:
-        """为多页文本创建文字片段"""
-        if len(pages) <= 1:
-            # 单页情况
-            txt_clip = TextClip(
-                font=self.font_path,
-                text="\n".join(pages[0]),
-                method="label",
-                font_size=self.text_size,
-                margin=(20, 5),
-                interline=6.5,
-                vertical_align="top",
-                color="black" if not is_bg_page else "#FFFFFF00",
-                duration=duration,
-                transparent=is_bg_page
-            )
-            return [txt_clip.with_position(position)]
+    # def _create_text_clips_for_pages(
+    #     self,
+    #     pages: List[List[str]],
+    #     duration: float,
+    #     position: Tuple[int, int],
+    #     is_bg_page: bool
+    # ) -> List[TextClip]:
+    #     """为多页文本创建文字片段"""
+    #     if len(pages) <= 1:
+    #         # 单页情况
+    #         txt_clip = TextClip(
+    #             font=self.font_path,
+    #             text="\n".join(pages[0]),
+    #             method="label",
+    #             font_size=self.text_size,
+    #             margin=(20, 5),
+    #             interline=6.5,
+    #             vertical_align="top",
+    #             color="black" if not is_bg_page else "#FFFFFF00",
+    #             duration=duration,
+    #             transparent=is_bg_page
+    #         )
+    #         return [txt_clip.with_position(position)]
         
-        # 多页情况
-        page_duration = duration / len(pages)
-        text_clips = []
+    #     # 多页情况
+    #     page_duration = duration / len(pages)
+    #     text_clips = []
         
-        for i, page_lines in enumerate(pages):
-            page_text = "\n".join(page_lines)
-            start_time = i * page_duration
+    #     for i, page_lines in enumerate(pages):
+    #         page_text = "\n".join(page_lines)
+    #         start_time = i * page_duration
             
-            txt_clip = TextClip(
-                font=self.font_path,
-                text=page_text,
-                method="label",
-                font_size=self.text_size,
-                margin=(20, 5),
-                interline=6.5,
-                vertical_align="top",
-                color="black" if not is_bg_page else "white",
-                duration=page_duration
-            ).with_start(start_time)
+    #         txt_clip = TextClip(
+    #             font=self.font_path,
+    #             text=page_text,
+    #             method="label",
+    #             font_size=self.text_size,
+    #             margin=(20, 5),
+    #             interline=6.5,
+    #             vertical_align="top",
+    #             color="black" if not is_bg_page else "white",
+    #             duration=page_duration
+    #         ).with_start(start_time)
             
-            text_clips.append(txt_clip.with_position(position))
+    #         text_clips.append(txt_clip.with_position(position))
         
-        return text_clips
+    #     return text_clips
     
-    def _create_additional_text_clip(self, duration: float) -> TextClip:
-        """创建底部附加文字"""
-        addtional_text = "【本视频由 chu-gen-videob30 生成，版本 v0.6】"
-        return TextClip(
-            font=self.font_path,
-            text=addtional_text,
-            method="label",
-            font_size=20,
-            vertical_align="bottom",
-            color="white",
-            duration=duration
-        )
+    # def _create_additional_text_clip(self, duration: float) -> TextClip:
+    #     """创建底部附加文字"""
+    #     addtional_text = "【本视频由 chu-gen-videob30 生成，版本 v0.6】"
+    #     return TextClip(
+    #         font=self.font_path,
+    #         text=addtional_text,
+    #         method="label",
+    #         font_size=20,
+    #         vertical_align="bottom",
+    #         color="white",
+    #         duration=duration
+    #     )
     
     def _add_background_audio(self, clip: CompositeVideoClip, duration: float) -> CompositeVideoClip:
         """添加背景音乐"""
@@ -384,51 +393,51 @@ class SegmentGenerator:
             color=(0, 0, 0)
         ).with_duration(clip_config.duration)
     
-    def _create_paginated_text_clips(
-        self,
-        text: str,
-        duration: float,
-        text_size: int
-    ) -> List[TextClip]:
-        """创建分页文字剪辑"""
-        MAX_LINES_PER_PAGE = 12
-        line_height = text_size + 10
+    # def _create_paginated_text_clips(
+    #     self,
+    #     text: str,
+    #     duration: float,
+    #     text_size: int
+    # ) -> List[TextClip]:
+    #     """创建分页文字剪辑"""
+    #     MAX_LINES_PER_PAGE = 12
+    #     line_height = text_size + 10
         
-        # 分割文本
-        text_list = get_splited_text(text, text_max_bytes=20)
+    #     # 分割文本
+    #     text_list = get_splited_text(text, text_max_bytes=20)
         
-        # 分页
-        text_pages = []
-        for i in range(0, len(text_list), MAX_LINES_PER_PAGE):
-            text_pages.append(text_list[i:i + MAX_LINES_PER_PAGE])
+    #     # 分页
+    #     text_pages = []
+    #     for i in range(0, len(text_list), MAX_LINES_PER_PAGE):
+    #         text_pages.append(text_list[i:i + MAX_LINES_PER_PAGE])
         
-        total_pages = len(text_pages)
-        page_duration = duration / total_pages if total_pages > 0 else duration
+    #     total_pages = len(text_pages)
+    #     page_duration = duration / total_pages if total_pages > 0 else duration
         
-        text_clips = []
+    #     text_clips = []
         
-        for page_index, page_lines in enumerate(text_pages):
-            page_start_time = page_index * page_duration
+    #     for page_index, page_lines in enumerate(text_pages):
+    #         page_start_time = page_index * page_duration
             
-            for line_index, line in enumerate(page_lines):
-                y_offset = self.text_first_y + line_index * line_height
+    #         for line_index, line in enumerate(page_lines):
+    #             y_offset = self.text_first_y + line_index * line_height
                 
-                try:
-                    txt_clip = TextClip(
-                        text=line,
-                        font=self.font_path,
-                        font_size=text_size,
-                        color="rgb(120,65,14)",
-                        method="pango" if hasattr(TextClip, 'PANGO') else "label",
-                    ).with_duration(page_duration)
+    #             try:
+    #                 txt_clip = TextClip(
+    #                     text=line,
+    #                     font=self.font_path,
+    #                     font_size=text_size,
+    #                     color="rgb(120,65,14)",
+    #                     method="pango" if hasattr(TextClip, 'PANGO') else "label",
+    #                 ).with_duration(page_duration)
                     
-                    txt_clip = txt_clip.with_start(page_start_time)
-                    text_clips.append(txt_clip.with_position((self.text_x, y_offset)))
+    #                 txt_clip = txt_clip.with_start(page_start_time)
+    #                 text_clips.append(txt_clip.with_position((self.text_x, y_offset)))
                     
-                except Exception as e:
-                    print(f"创建文字剪辑失败: {e}")
+    #             except Exception as e:
+    #                 print(f"创建文字剪辑失败: {e}")
         
-        return text_clips
+    #     return text_clips
     
     def _build_ffmpeg_command(
         self,
@@ -535,45 +544,45 @@ class SegmentGenerator:
             )
             return 'bg_img'
     
-    def _add_text_filters(
-        self,
-        clip_config: SegmentConfig,
-        filter_complex_parts: List[str],
-        base_stream: str
-    ) -> str:
-        """添加文字滤镜"""
-        duration = clip_config.duration
-        text_lines = get_splited_text(clip_config.text, text_max_bytes=20)
-        lines_per_page = 12
+    # def _add_text_filters(
+    #     self,
+    #     clip_config: SegmentConfig,
+    #     filter_complex_parts: List[str],
+    #     base_stream: str
+    # ) -> str:
+    #     """添加文字滤镜"""
+    #     duration = clip_config.duration
+    #     text_lines = get_splited_text(clip_config.text, text_max_bytes=20)
+    #     lines_per_page = 12
         
-        pages = []
-        for i in range(0, len(text_lines), lines_per_page):
-            pages.append(text_lines[i:i + lines_per_page])
+    #     pages = []
+    #     for i in range(0, len(text_lines), lines_per_page):
+    #         pages.append(text_lines[i:i + lines_per_page])
         
-        total_pages = len(pages)
-        page_duration = duration / total_pages if total_pages > 0 else duration
+    #     total_pages = len(pages)
+    #     page_duration = duration / total_pages if total_pages > 0 else duration
         
-        print(f"分页信息: 总行数 = {len(text_lines)}, 总页数 = {total_pages}, 每页显示时间 = {page_duration:.2f} 秒")
+    #     print(f"分页信息: 总行数 = {len(text_lines)}, 总页数 = {total_pages}, 每页显示时间 = {page_duration:.2f} 秒")
         
-        for page_num, page_lines in enumerate(pages):
-            page_start = page_num * page_duration
-            page_end = (page_num + 1) * page_duration
+    #     for page_num, page_lines in enumerate(pages):
+    #         page_start = page_num * page_duration
+    #         page_end = (page_num + 1) * page_duration
             
-            for line_num, line in enumerate(page_lines):
-                y_offset = self.text_first_y + line_num * self.line_height
+    #         for line_num, line in enumerate(page_lines):
+    #             y_offset = self.text_first_y + line_num * self.line_height
                 
-                filter_complex_parts.append(
-                    f'[{base_stream}]drawtext=text=\"{line}\":fontfile={self.font_path}:'
-                    f'fontsize={self.text_size}:fontcolor=78410E:'
-                    f'x={self.text_x}:y={y_offset}:'
-                    f'enable=\'between(t,{page_start},{page_end})\''
-                )
+    #             filter_complex_parts.append(
+    #                 f'[{base_stream}]drawtext=text=\"{line}\":fontfile={self.font_path}:'
+    #                 f'fontsize={self.text_size}:fontcolor=78410E:'
+    #                 f'x={self.text_x}:y={y_offset}:'
+    #                 f'enable=\'between(t,{page_start},{page_end})\''
+    #             )
                 
-                current_label = f'page{page_num}_line{line_num}'
-                filter_complex_parts.append(f'[{current_label}];')
-                base_stream = current_label
+    #             current_label = f'page{page_num}_line{line_num}'
+    #             filter_complex_parts.append(f'[{current_label}];')
+    #             base_stream = current_label
         
-        return base_stream
+    #     return base_stream
     
     def _add_video_overlay(
         self,

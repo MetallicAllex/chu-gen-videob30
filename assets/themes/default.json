@@ -1,0 +1,107 @@
+{
+    "themes": "default",
+    "darkness": -0.25,
+    "position": {
+        "image": {
+            "frame": [65, 32],
+            "level": {
+                "integer": [100, 884],
+                "current": [1562, 1018],
+                "next": [1756, 1018]
+            },
+            "score": [706, 958],
+            "rating": [1216, 980],
+            "combo": [424, 971],
+            "chain": [423, 1015],
+            "title": [234, 876],
+            "artist": [234, 940],
+            "bestNum": [245, 1017],
+            "playCount": {
+                "base": [1170, 840],
+                "text": [1359, 865]
+            }
+        },
+        "video": {
+            "intro": [0.15, 0.17],
+            "overlay": [0.0641, 0.075],
+            "content": [0.7594, 0.224]
+        }
+    },
+    "styleConfig":{
+        "intro": {
+            "font": "SOURCEHANSANSSC-BOLD.OTF",
+            "size": 32,
+            "color": [0, 0, 0],
+            "stroke": {
+                "enable": false,
+                "color": [0, 0, 0],
+                "width": 0
+            }
+        },  
+        "content": {
+            "font": "SOURCEHANSANSSC-BOLD.OTF",
+            "size": 32,
+            "color": [120, 65, 14],
+            "stroke": {
+                "enable": false,
+                "color": [0, 0, 0],
+                "width": 0
+            }
+        }
+    },
+    "layoutConfig": {
+        "intro": {
+            "width": 1436,
+            "height": 800,
+            "padding": [20, 20, 20, 20],
+            "lineSpacing": 8,
+            "AlignConfig": {
+                "horizontal": "left",
+                "vertical": "top"
+            },
+            "autoHeight": true
+        },
+        "content": {
+            "width": 406,
+            "height": 800,
+            "padding": [20, 20, 20, 20],
+            "lineSpacing": 8,
+            "AlignConfig": {
+                "horizontal": "left",
+                "vertical": "top"
+            },
+            "autoHeight": true
+        }
+    },
+    "size": {
+        "level": 45,
+        "title": 48,
+        "artist": 36,
+        "bestNum": 28,
+        "playCount": 30
+    },
+    "color": {
+        "level": {
+            "integer": [255, 255, 255],
+            "current": [77, 77, 77],
+            "next": [77, 77, 77]
+        },
+        "title": [26, 0, 84],
+        "artist": [26, 0, 84],
+        "bestNum": [255, 255, 255],
+        "playCount": [248, 34, 117]
+    },
+    "maxWidth": {
+        "title": 900,
+        "artist": 420,
+        "bestNum": 200,
+        "playCount": 2000
+    },
+    "align": {
+        "level": "center",
+        "title": "left",
+        "artist": "left",
+        "bestNum": "center",
+        "playCount": "center"
+    }
+}

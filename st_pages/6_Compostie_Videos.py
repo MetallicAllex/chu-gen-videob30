@@ -588,7 +588,7 @@ if st.session_state.global_rendering:
             # 合并视频拼接逻辑：只有 classic_fast_render 参数不同
             combine_full_video_direct(video_output_path, 
                                       username,
-                                      v_bitrate_kbps,
+                                    #   v_bitrate_kbps,
                                       classic_fast_render)
             
         # 渲染成功

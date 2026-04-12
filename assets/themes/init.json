@@ -1,0 +1,87 @@
+{
+    "themes": "init",
+    "darkness": -0.25,
+    "position": {
+        "image": {
+            "title": [59, 860],
+            "level": [59, 1013],
+            "score": [1420, 864],
+            "rating": [1420, 1008],
+            "combined": [60, 875]
+        },
+        "video": {
+            "intro": [0.16, 0.18],
+            "overlay": [0.039, 0.069],
+            "content": [0.748, 0.069]
+        }
+    },
+    "styleConfig": {
+        "intro": {
+            "font": "SOURCEHANSANSSC-BOLD.OTF",
+            "size": 20,
+            "color": [255, 255, 255],
+            "stroke": {
+                "enable": false,
+                "color": [0, 0, 0],
+                "width": 0
+            }
+        },
+        "content": {
+            "font": "SOURCEHANSANSSC-BOLD.OTF",
+            "size": 32,
+            "color": [120, 65, 14],
+            "stroke": {
+                "enable": false,
+                "color": [0, 0, 0],
+                "width": 0
+            }
+        }
+    },
+    "layoutConfig": {
+        "intro": {
+            "width": 1307,
+            "height": 746,
+            "padding": [20, 20, 20, 20],
+            "lineSpacing": 8,
+            "AlignConfig": {
+                "horizontal": "left",
+                "vertical": "top"
+            },
+            "autoHeight": true
+        },
+        "content": {
+            "width": 406,
+            "height": 716,
+            "padding": [20, 20, 20, 20],
+            "lineSpacing": 8,
+            "AlignConfig": {
+                "horizontal": "left",
+                "vertical": "top"
+            },
+            "autoHeight": true
+        }
+    },
+    "size": {
+        "title": 32,
+        "rating": 36,
+        "score": 64,
+        "level": 36,
+        "number": 64
+    },
+    "color": {
+        "prefix": [0, 0, 0],
+        "number": [255, 255, 255],
+        "title": [0, 0, 0],
+        "level": [0, 0, 0],
+        "score": [0, 0, 0],
+        "rating": [0, 0, 0]
+    },
+    "align": {
+        "prefix": "center",
+        "number": "center",
+        "title": "center",
+        "level": "center",
+        "score": "center",
+        "rating": "center"
+    }
+}

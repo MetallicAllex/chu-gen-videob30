@@ -856,7 +856,7 @@ def render_all_video_clips(
     if 'ending' in resources:
         render_selected_clips(resources['ending'], 'info')
 
-def combine_full_video_direct(video_clip_path, username, trans_params, bitrate, classic_fast_render=False):
+def combine_full_video_direct(video_clip_path, username, classic_fast_render=False):
     print("[信息] ==================== 开始拼接视频 ==================")
     video_files = [f for f in os.listdir(video_clip_path) if f.endswith(".mp4")]
     sorted_files = sort_video_files(video_files)
