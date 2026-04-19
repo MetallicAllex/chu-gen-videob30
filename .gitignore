@@ -189,5 +189,8 @@ ffmpeg.exe
 start.bat
 global_config.yaml
 assets/thumbnails/
-chu-gen-videob30_v1.1-fix4.zip
-utils/SegmentUtils.py
+chu-gen-videob30_v1.1.2.zip
+utils/VideoUtils-ori.py
+utils/VideoUtilsAlt.py
+utils/TaichiAccel.py
+utils/AccelRenderer.py

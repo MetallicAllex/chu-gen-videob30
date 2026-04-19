@@ -10,6 +10,7 @@
             "combined": [60, 875]
         },
         "video": {
+            "height": 716,
             "intro": [0.16, 0.18],
             "overlay": [0.039, 0.069],
             "content": [0.748, 0.069]
@@ -19,7 +20,7 @@
         "intro": {
             "font": "SOURCEHANSANSSC-BOLD.OTF",
             "size": 20,
-            "color": [255, 255, 255],
+            "color": [0, 0, 0],
             "stroke": {
                 "enable": false,
                 "color": [0, 0, 0],
@@ -29,7 +30,7 @@
         "content": {
             "font": "SOURCEHANSANSSC-BOLD.OTF",
             "size": 32,
-            "color": [120, 65, 14],
+            "color": [255, 255, 255],
             "stroke": {
                 "enable": false,
                 "color": [0, 0, 0],
@@ -62,7 +63,7 @@
         }
     },
     "size": {
-        "title": 32,
+        "title": 28,
         "rating": 36,
         "score": 64,
         "level": 36,

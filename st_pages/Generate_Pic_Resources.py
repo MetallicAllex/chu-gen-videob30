@@ -112,7 +112,7 @@ def st_generate_b30_images(placeholder, save_paths):
                         progress_text = (
                             f"进度: {completed} / {total_to_generate} | "
                             f"成功: {stats['success']} | "
-                            f"失败: {stats['failed']} | "
+                            # f"失败: {stats['failed']} | "
                             f"剩余: {remaining:.1f} 秒"
                         )
                         

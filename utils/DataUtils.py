@@ -170,7 +170,8 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         "duration": 10,
         "text": "【请填写前言部分】" if default_comment_placeholders else "",
         "bg_page": False,
-        "overlay": True
+        "no_overlay": False,
+        "no_sound": False
         # "version": "LUMINOUS"
     }
 
@@ -179,7 +180,8 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         "duration": 10,
         "text": "【请填写后记部分】" if default_comment_placeholders else "",
         "bg_page": False,
-        "overlay": True
+        "no_overlay": False,
+        "no_sound": False
         # "version": "LUMINOUS"
     }
 
@@ -233,6 +235,7 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
             "full_combo": song["full_combo"],
             "full_chain": song["full_chain"],
             "main_image": __image_path,
+            "full_image": None,
             "video": __video_path,
             "duration": duration,
             "start": start,
@@ -689,60 +692,10 @@ def _fetch_music_data(name, url, filepath, transformer=None):
     except Exception as e:
         print(f"❌［{name}］获取谱面数据时出错：{e}")
 
-# fetch_music_data 函数用于调用（可选检查缓存）
-# def fetch_music_data(forced, threshold_hours=24):
-#     """
-#     直接获取谱面数据（不检查缓存时间）
-#     """
-#     # 检查是否需要更新
-#     if should_update_metadata(threshold_hours) or forced == False:
-#         print("⏩ 未达到更新阈值，跳过数据更新")
-#         return
-    
-#     else:
-#         print("🔄️ 开始更新谱面数据。")
-#         _fetch_music_data(
-#             name="国服",
-#             url=song_data_cn,
-#             filepath=music_info_path,
-#             transformer=lambda d: d.get("songs", [])
-#         )
-
-#         difficulty_map = {
-#             "BAS": "BASIC",
-#             "ADV": "ADVANCED",
-#             "EXP": "EXPERT",
-#             "MAS": "MASTER",
-#             "ULT": "ULTIMA"
-#         }
-
-#         def transformer(data):
-#             for song in data:
-#                 if "data" in song:
-#                     song["data"] = {
-#                         difficulty_map.get(k, k): v for k, v in song["data"].items()
-#                     }
-#             return data
-        
-#         _fetch_music_data(
-#             name="日服",
-#             url=base64.b64decode(song_data_jp),
-#             filepath=jp_music_info_path,
-#             transformer=transformer
-#         )
-        
-#         print("✅ 谱面数据更新完成")
-
-
 def fetch_music_data():
     """
     获取谱面数据
     """
-    # 检查是否需要更新
-    # if not forced and not should_update_metadata(threshold_hours):
-    #     print("⏩ 未达到更新阈值，跳过数据更新")
-    #     return
-    
     print("🔄️ 开始更新谱面数据...")
     
     # 1. 获取国服别名数据

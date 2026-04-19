@@ -1,11 +1,13 @@
-import shutil, time
-import traceback
 import streamlit as st
 from datetime import datetime
 from utils.PathUtils import *
-from utils.VideoUtils import render_all_video_clips, combine_full_video_direct
+import shutil, time, traceback
+from utils.ImageUtils import render_all_images
+from utils.Variables import ACCEL_BRAND, HARD_RENDER_METHOD
 from utils.PageUtils import format_time_difference, get_ffmpeg_version
-from utils.Variables import ACCEL_BRAND, ui_font_path, HARD_RENDER_METHOD, XFADE_TRANSITIONS, HARDWARE_ENCODER, SOFTWARE_ENCODER
+# from utils.VideoUtils import render_all_video_clips, combine_full_video_direct
+from utils.SegmentUtils import render_all_video_clips, combine_full_video_direct
+
 st.header("Step 5: 视频渲染")
 
 st.info("渲染视频前，请确保已完成 4-1 和 4-2，并且所有配置无误。", icon="ℹ️")
@@ -83,105 +85,51 @@ with st.container(border=True):
 @st.fragment
 def video_settings_widget(config, config_file_path):
     """视频参数设置组件"""
-    vid_cfg = load_config(config_file_path)
-    config = vid_cfg['position']
+    styles = load_config(config_file_path)
+    position = styles['position']['video']
     with st.expander("视频画面参数", expanded=True, icon="📺"):
-        col1, col2 = st.columns(2)
-        
+        col1, col2, col3 = st.columns(3)
         with col1:
-            # 黑暗度
-            new_darkness = st.slider(
-                "背景压暗",
-                min_value=-1.0,
-                max_value=1.0,
-                value=config["video"].get("darkness", -0.25),
-                step=0.01,
-                help="（负值变亮）"
-            )
-            config["video"]["darkness"] = new_darkness
-            
-            # Overlay
-            overlay = config["video"].get("overlay", [0.0641, 0.075])
-            new_overlay_1 = st.number_input(
-                "【谱面确认】X 比例系数",
-                0.0, 1.0,
-                value=overlay[0],
-                format="%.4f",
-                step=0.0001
-            )
-            new_overlay_2 = st.number_input(
-                "【谱面确认】Y 比例系数", 
-                0.0, 1.0,
-                value=overlay[1],
-                format="%.4f",
-                step=0.0001
-            )
-            config["video"]["overlay"] = [new_overlay_1, new_overlay_2]
-            
-            # 字体大小
-            style_config = config["video"]["text"]["StyleConfig"]
-            new_font_size = st.number_input(
-                "字体大小",
-                min_value=1, max_value=200,
-                value=style_config.get("size", 32),
-                step=1
-            )
-            style_config["size"] = new_font_size
+            # 背景压暗
+            new_darkness = st.number_input(f"背景亮度[当前 {config['darkness'] * 100:.0f} %]", -1.0, 1.0, config["darkness"], 0.01, help="（- 变暗，+ 变亮，0 则不修改）")
+            styles["darkness"] = new_darkness
         
         with col2:
-            # 文本位置
-            position = style_config.get("position", [0.7594, 0.224])
-            new_pos_x = st.number_input(
-                "【文本】X 比例系数",
+            # Overlay
+            overlay = position["overlay"]
+            new_overlay_x = st.number_input(
+                "【谱面确认】X 比例系数",
                 0.0, 1.0,
-                value=position[0],
-                format="%.4f",
-                step=0.0001
+                overlay[0], 0.0001, "%.4f", 
+                help=f"在 1080p（图像分辨率）下为 {int(overlay[0] * 1080)}px（取整）"
             )
-            new_pos_y = st.number_input(
-                "【文本】Y 比例系数", 
-                0.0, 1.0,
-                value=position[1],
-                format="%.4f",
-                step=0.0001
-            )
-            style_config["position"] = [new_pos_x, new_pos_y]
-            
-            # 文本宽度
-            layout_config = config["video"]["text"]["layoutConfig"]
-            new_width = st.number_input(
-                "文本区域宽度",
-                min_value=100,
-                max_value=1920,
-                value=layout_config.get("width", 406),
-                step=10
-            )
-            layout_config["width"] = new_width
         
-            # 颜色选择（RGB转Hex）
-            current_color = style_config.get("color", [120, 65, 14])
-            hex_color = f"#{current_color[0]:02x}{current_color[1]:02x}{current_color[2]:02x}"
-            new_color = st.color_picker("文本颜色", hex_color)
-            style_config["color"] = [
-                int(new_color[1:3], 16),
-                int(new_color[3:5], 16),
-                int(new_color[5:7], 16)
-            ]
+        with col3:
+            new_overlay_y = st.number_input(
+                "【谱面确认】Y 比例系数", 
+                0.0, 1.0,
+                overlay[1],
+                0.0001,
+                "%.4f",
+                help=f"在 1080p（图像分辨率）下为 {int(overlay[1] * 1080)}px（取整）"
+            )
+            position["overlay"] = [new_overlay_x, new_overlay_y]
         
         # 保存按钮
         if st.button("保存视频参数", key="save_video_config", icon="💾", use_container_width=True):
             try:
-                save_config(config_file_path, config)
+                save_config(config_file_path, styles)
                 st.toast("视频参数已保存！", icon="✅")
+                time.sleep(3)
+                st.rerun()
             except Exception as e:
                 st.toast(f"保存失败：{str(e)}", icon="❌")
                 st.error(traceback.format_exc())
 
+st.divider()
 style_config = load_config(current_paths['custom_style'])
 video_settings_widget(style_config, current_paths['custom_style'])
-st.divider()
 
-st.write("渲染设置")
 _video_res = G_config['VIDEO_RES']
 _trans_enable = G_config['VIDEO_TRANS_ENABLE']
 _trans_time = G_config['VIDEO_TRANS_TIME']
@@ -191,128 +139,58 @@ trans_enable = _trans_enable
 trans_time = _trans_time
 
 with st.container(border=True):
-    encoder_param = {"hwaccel": False, "brand": None, "encoder": None, "cq": None, "preset": None} 
-    col1, col2, col3 = st.columns(3)
+    st.write("渲染设置")
+    st.info("已生成的片段不会受到影响，除非您重新渲染它们", icon="ℹ️")
+    encoder_param = {
+        "hwaccel": False,
+        "brand": None,
+        # "cq": None,
+        # "preset": None,
+        "bitrate": 5000,
+        "resolution": [1920, 1080]
+    } 
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         force_render_clip = st.checkbox("覆盖已存在的视频", value=False, help="强制对所有片段重新渲染，不论其是否存在。")
 
     with col2:
-        clips_only = st.checkbox("仅渲染每个片段", help="只渲染片段，不拼接为完整视频，勾选此项则不会再添加过渡效果。", key='clips_only')
+        clips_only = st.checkbox("仅渲染每个片段", help="只渲染片段，不拼接为完整视频。", key='clips_only')
 
     with col3:
         hwaccel = st.checkbox("使用 GPU 硬件加速", value=False, help="一定程度上可提升渲染速度和分担 CPU 负载，但画质可能会降低")
         encoder_param["hwaccel"] = hwaccel
     
-    # hwaccel_col1, hwaccel_col2 = st.columns(2)
-    # with hwaccel_col1:
-    #     if hwaccel:
-    #         accel_brand = st.selectbox("选择您的 GPU 品牌", ACCEL_BRAND, index=0,
-    #             help="d3d12va 在 Windows 下为自动选择（可能不准确），其他请根据自己机器 GPU 品牌选择"
-    #         )
-    #         encoder_param["brand"] = accel_brand if hwaccel else "CPU"
-    
-    # with hwaccel_col2:
-    #     vcoder = st.selectbox(f"编码类型（{'硬编' if hwaccel else '软编'}）", 
-    #                         SOFTWARE_ENCODER if not hwaccel else HARDWARE_ENCODER,
-    #                         index=0, key="select_encode_type", 
-    #                         help="""
-    #                         部分编码可能无法使用，如果您不知道怎么选，请保持默认！
-    #                         - `lib` 均为软件编码前缀，硬件编码**仅显示对口专用编码器**
-    #                             - 不显示非专用图形 API 的编码器（如 `Vulkan` 和 `VAAPI` 等）
-    #                         - 硬件编码：`h264 + h265`，出现以下问题时，`请考虑使用软件编码`
-    #                             - GPU 编码和软件编码速度并无差别
-    #                             - 使用 GPU 加速就提示失败
-    #                         """ if hwaccel else """
-    #                         部分编码可能无法使用，如果您不知道怎么选，请保持默认！
-    #                         - `lib` 均为软件编码前缀，硬件编码**仅显示对口专用编码器**
-    #                             - 不显示非专用图形 API 的编码器（如 `Vulkan` 和 `VAAPI` 等）
-    #                         - 软件编码：`h264 + h265`
-    #                         """)
-    #     encoder_param["encoder"] = vcoder
-    #     if not hwaccel:
-    #         st.warning("为保证视频片段可拼接，任何非 libx264 视频在拼接时将重新编码为 libx264", icon="⚠️")
-    
-    if hwaccel:
-        # 如果启用硬件加速，创建两列
-        hwaccel_col1, hwaccel_col2 = st.columns(2)
-        
-        with hwaccel_col1:
-            accel_brand = st.selectbox("设备 GPU 品牌", ACCEL_BRAND, index=0,
-                help="d3d12va 在 Windows 下为自动选择（可能不准确），如果有问题请根据机器 GPU 品牌选择"
-            )
-            encoder_param["brand"] = accel_brand
-        
-        with hwaccel_col2:
-            vcoder = st.selectbox(f"编码类型（硬编）", 
-                                HARDWARE_ENCODER,
-                                index=0, key="select_encode_type_hw", 
-                                help="""
-                                部分编码可能无法使用，如果您不知道怎么选，请保持默认！
-                                - `lib` 均为软件编码前缀，硬件编码**仅显示对口专用编码器**
-                                    - 不显示非专用图形 API 的编码器（如 `Vulkan` 和 `VAAPI` 等）
-                                - 硬件编码：`h264 + h265`，出现以下问题时，`请考虑使用软件编码`
-                                    - GPU 编码和软件编码速度并无差别
-                                    - 使用 GPU 加速就提示失败
-                                """)
-            encoder_param["encoder"] = vcoder
-    else:
-        # 如果未启用硬件加速，创建单列并占满宽度
-        hwaccel_col2 = st.container()  # 使用 container 代替 column，会自动占满宽度
-        
-        with hwaccel_col2:
-            vcoder = st.selectbox(f"编码类型（软编）", 
-                                SOFTWARE_ENCODER,
-                                index=0, key="select_encode_type_sw", 
-                                help="""
-                                部分编码可能无法使用，如果您不知道怎么选，请保持默认！
-                                - `lib` 均为软件编码前缀，硬件编码**仅显示对口专用编码器**
-                                    - 不显示非专用图形 API 的编码器（如 `Vulkan` 和 `VAAPI` 等）
-                                - 软件编码：`h264 + h265`
-                                """)
-            encoder_param["encoder"] = vcoder
-    
-    st.divider()
-    st.write("画质设置")
-    st.info("已生成的片段不会受到影响，除非您重新渲染它们", icon="ℹ️")
-    # 画面设置代码（分辨率部分优化）
-    row1_col1, row1_col2 = st.columns([1, 3])
-    with row1_col1:
-        use_preset_res = st.checkbox("使用预设分辨率", value=True, help="均为 16:9")
+    with col4:
+        preset_bitrate = st.checkbox("使用预设的码率", True, help="均为常用值，如自定义可删除填入的数值查看范围")
 
-    with row1_col2:
-        if use_preset_res:
-            res_presets = {
-                "480p (640 × 480)": (640, 480),
-                "720p (1280 × 720)": (1280, 720),
-                "1080p (1920 × 1080)": (1920, 1080),
-                "2K (2560 × 1440)": (2560, 1440),
-                "4K (3840 × 2160)": (3840, 2160)
-            }
-            selected_preset_res = st.selectbox(
-                "生成清晰度",
-                options=list(res_presets.keys()),
-                placeholder="选择一个预设分辨率",
-                label_visibility="collapsed",
-                index=2
-            )
-            v_res_width, v_res_height = res_presets[selected_preset_res]
-            res_display = selected_preset_res  # 使用完整预设字符串
-        else:
-            if 'prev_use_preset_res' not in st.session_state or st.session_state.prev_use_preset_res:
-                st.toast("不建议使用非预设分辨率生成视频，这可能会导致画面与文字排版错位", icon="⚠️")
-            col1, col2 = st.columns(2)
-            v_res_width = col1.number_input("宽度 (px)", min_value=360, max_value=4096, value=_video_res[0])
-            v_res_height = col2.number_input("高度 (px)", min_value=360, max_value=4096, value=_video_res[1])
-            res_display = f"自定义 ({v_res_width} × {v_res_height})"
-        
-        st.session_state.prev_use_preset_res = use_preset_res
+    # 画面设置代码（分辨率部分优化）
+    display_col1, display_col2, display_col3 = st.columns(3, vertical_alignment="center")
+
+    with display_col1:
+        accel_brand = st.selectbox("设备 GPU 品牌", ACCEL_BRAND, 0,
+            help="d3d12va 为自动选择（可能不准确），如果有问题请根据机器 GPU 品牌选择",
+            disabled=button_disable_stat or not hwaccel
+        )
+        encoder_param["brand"] = accel_brand
+
+    with display_col2:
+        res_presets = {
+            "480p (640 × 480)": (640, 480),
+            "720p (1280 × 720)": (1280, 720),
+            "1080p (1920 × 1080)": (1920, 1080),
+            "2K (2560 × 1440)": (2560, 1440),
+            "4K (3840 × 2160)": (3840, 2160)
+        }
+        selected_preset_res = st.selectbox("生成清晰度与分辨率", list(res_presets.keys()), 
+                                           list(res_presets.values()).index(tuple(_video_res)), 
+                                           help="不再支持自定义分辨率，这会导致排版错位")
+        v_res_width, v_res_height = res_presets[selected_preset_res]
+        encoder_param["resolution"] = res_presets[selected_preset_res]
+        res_display = selected_preset_res  # 使用完整预设字符串
 
     # 码率设置部分（关键优化）
-    bitrate_col1, bitrate_col2 = st.columns([1, 3])
-    with bitrate_col1:
-        preset_bitrate = st.checkbox("使用预设的码率", value=True, help="均为常用值，如自定义可删除填入的数值查看范围")
-
-    with bitrate_col2:
+    # bitrate_col1, bitrate_col2 = st.columns([1, 3])
+    with display_col3:
         if preset_bitrate:
             bitrate_presets = {
                 "低（1500kbps）": 1500,
@@ -322,44 +200,28 @@ with st.container(border=True):
                 "超高（8000kbps）": 8000,
                 "极高（10000kbps）": 10000
             }
-            selected_bitrate = st.selectbox(
-                "码率（以 kbps 为单位）",
-                options=list(bitrate_presets.keys()),
-                index=2,
+            selected_bitrate = st.selectbox("选择预设值码率 (kbps)", list(bitrate_presets.keys()), 2,
                 placeholder="选择一个预设的码率",
-                label_visibility="collapsed",
                 help="不会影响视频长度，且越大越不容易糊，但文件大小和生成时间也会随之增加"
             )
             v_bitrate = bitrate_presets[selected_bitrate]
+            encoder_param["bitrate"] = bitrate_presets[selected_bitrate]
             bitrate_display = selected_bitrate  # 直接使用预设的完整字符串
         else:
-            if 'prev_preset_bitrate' not in st.session_state or st.session_state.prev_preset_bitrate:
-                st.toast("高码率可使您的视频更清晰，但视频生成时间会变得更长，且输出文件大小也会变的更大", icon="⚠️")
-            v_bitrate = st.number_input(
-                "输入自定义码率 (kbps)",
-                help="若使用极速模式将添加上限【两倍码率】和缓冲区【四倍码率】，防止因超限导致生成时间变长",
-                min_value=1000,
-                max_value=20000,
-                value=None,
-                step=100,
+            st.toast("高码率可使您的视频更清晰，但视频生成时间会变得更长，且输出文件大小也会变的更大", icon="⚠️")
+            v_bitrate = st.number_input("输入自定义码率 (kbps)",1000,20000, None, 100,
+                help="将添加上限【两倍码率】和缓冲区【四倍码率】，防止因超限导致生成时间变长",
                 placeholder="1000 ≤ 码率 ≤ 20000"
             )
             bitrate_display = f"自定义（{v_bitrate}kbps）"  # 自定义码率的显示格式
-        
-        st.session_state.prev_preset_bitrate = preset_bitrate
         
 # trans_config_placeholder = st.empty()
 # 仅当选择 "完整视频" 时才显示过渡选项
     if not clips_only:
         st.divider()
-        # with trans_config_placeholder.container(border=True):
         trans_params = {
             'enabled': G_config['VIDEO_TRANS_ENABLE'],
-            'duration': G_config['VIDEO_TRANS_TIME'],
-            'enable_custom': False,
-            'effect': 'fade',  # fade, slide（MoviePy 只有这两种能用）
-            'range': 'both',  # start, end, both
-            'slide_direction': 'right',  # top, bottom, left, right
+            'duration': G_config['VIDEO_TRANS_TIME']
         }
         st.write("片段过渡（仅渲染完整视频时有效）")
         col1, col2, col3 = st.columns([1, 2, .15], vertical_alignment="center")
@@ -367,52 +229,14 @@ with st.container(border=True):
             trans_enable = st.checkbox("启用，过渡时间为：", value=_trans_enable, help="勾选此设置但不自定义过渡效果时，默认使用 fade")
             trans_params["enable"] = trans_enable
         with col2:
-            trans_time = st.number_input(
-                "过渡时间",
+            trans_time = st.number_input("过渡时间", 0.5, 10.0, _trans_time, 0.5,
                 placeholder="过渡时间(s)",
-                min_value=0.5,
-                max_value=10.0,
-                value=_trans_time,
-                step=0.5,
                 disabled=not trans_enable,
                 label_visibility="collapsed"
             )
             trans_params["duration"] = trans_time
         with col3:
             st.write("秒")
-        if trans_enable:
-            trans_col1, trans_col2 = st.columns(2)
-            with trans_col1:
-                use_custom_trans_effect = st.checkbox("使用自定义过渡效果，您当前已选择", help="fade【淡入淡出】，slide【滑入滑出】")
-                trans_params["enable_custom"] = use_custom_trans_effect
-            with trans_col2:
-                sel_custom_trans = st.selectbox("选择自定义过渡",
-                                                XFADE_TRANSITIONS if hwaccel == True else ["fade", "slide"],
-                                                index=0, placeholder="选择一个效果", label_visibility="collapsed", disabled=not use_custom_trans_effect
-                                                )
-                trans_params["effect"] = sel_custom_trans
-            if sel_custom_trans:
-                with st.expander("细节设置", icon="🔧"):
-                    trans_range = st.radio("应用范围", ["start", "end", "both"],captions=["开头", "结尾", "开头 + 结尾"] , help="设置渲染过渡效果应用的范围（片段开头[start]/结尾[end]/整个[both]）", horizontal=True, disabled=not use_custom_trans_effect)
-                    trans_params["range"] = trans_range
-                    if sel_custom_trans == "slide":
-                        location = st.selectbox("方向",
-                                    ["top", "bottom", "left", "right"],
-                                    help="滑入滑出的方向",
-                                    disabled=not use_custom_trans_effect
-                                    )
-                        trans_params["slide_direction"] = location
-                    elif sel_custom_trans == "自定义（高级）":
-                        st.text_input("输入数学表达式", help="""
-可用变量：
-- X, Y: 当前像素坐标
-- W, H: 视频宽度和高度
-- P: 过渡进度 (0.0 - 1.0)
-- A: 第一个输入的值
-- B: 第二个输入的值
-- a0(x, y) - a3(x, y): 第一个输入的像素值
-- b0(x, y) - b3(x, y): 第二个输入的像素值"""
-                    )
 
 v_mode_index = clips_only
 v_bitrate_kbps = f"{v_bitrate}"
@@ -439,108 +263,40 @@ def save_video_render_config():
     st.toast("配置已保存！", icon="✅")
 
 if hwaccel:
-    opt_encoder = f"{vcoder}_{HARD_RENDER_METHOD[accel_brand]['codec']}"
+    opt_encoder = f"h264_{HARD_RENDER_METHOD[accel_brand]['codec']}"
 else:
-    opt_encoder = vcoder
-    
-abs_path = os.path.abspath(video_output_path)
-if st.button("打开视频输出文件夹", help=abs_path, width='stretch', icon="📂"):
-    open_file_explorer(abs_path)
-    st.toast(f"若没有跳转，请手动访问输出文件夹【鼠标指着“打开”就会显示】", icon="ℹ️")
+    opt_encoder = "libx264"
 
-with st.expander("选择渲染模式", icon="⏩"):
-    # 方案选择
-    scheme_option = st.radio(
-        "选择渲染方案",
-        ["标准渲染（时间换稳定性）", "快速渲染（稳定性换时间）"],
-        captions=["只使用 CPU 完成渲染，再使用 FFmpeg 拼接", "配合上方 GPU 加速渲染，再使用 FFmpeg 拼接"],
-        horizontal=True, disabled=button_disable_stat,
-        help="选择不同的视频渲染方案", index=0,
-        label_visibility="collapsed"
-    )
-
-    # 根据方案显示不同内容
-    if scheme_option == "标准渲染（时间换稳定性）":
-        # st.write("【快速模式】先渲染所有视频片段，再拼接为完整视频")
-        # 快速模式
-        st.error(f"""
+st.error(f"""
         **注意事项：**
-        - ~无论是哪种选项，片段之间都将只有黑屏过渡，且无法更改~
-            - ［开发中］正在尝试编写自定义过渡支持
-        - 尽可能保证所有片段分辨率一致，否则会出现部分片段无法播放的问题
-        - 成片大小 ≠ 所有片段总大小（相差很大）时请重新渲染，这是重复拼接导致的
+        - 生成平均时间会因片段长度之间不同码率而变化
+            - 如果您单个片段很长，渲染时间也会变久，这是事实
+        - 片段之间只有黑屏过渡，且无法更改
+            - ［开发者］正在尝试编写自定义过渡支持
+        - 若 GPU （或驱动）太旧而不支持当前 FFmpeg 版本将无法使用硬件加速
+            - 当前 FFmpeg 版本为 `{get_ffmpeg_version()}`
+        - 如有以下情况，请立即终止生成并检查素材（或同时反馈问题）：
+            - 某个片段生成时间过长（超过其本身长度或不显示进度）
+            - 生成时（非机器本身性能原因所引起）的异常卡顿和占用
+                - 包括 GPU 占用，生成时 GPU 不会持续高占，它只会跳这么一小会。
         """, icon="❗")
+btn_col1, btn_col2 = st.columns(2)
+with btn_col1:
+    abs_path = os.path.abspath(video_output_path)
+    if st.button("打开视频输出文件夹", help=abs_path, width='stretch', icon="📂"):
+        open_file_explorer(abs_path)
+        st.toast(f"若没有跳转，请手动访问输出文件夹【鼠标指着“打开”就会显示】", icon="ℹ️")
 
-        if st.button("开始渲染", key="render_standard",
-                    width='stretch', icon="▶️",
-                    disabled=button_disable_stat or (vcoder == "vp9" and accel_brand != "Intel") or hwaccel,
+    with btn_col2:
+        if st.button("开始渲染", "render", width='stretch', icon="▶️", disabled=button_disable_stat,
                     help=f"""
                     您的参数（除路径和文件名外，其他参数请于上方调整）：
                     - 输出路径: `{video_output_path}`
-                    - 文件名：`{username}_Best50.mp4`
-                    - 分辨率和码率: `{res_display} / {bitrate_display}`
-                    """ if not hwaccel else 
-                    """
-                    这些设置不允许您使用此渲染模式：
-                    
-                    - 使用 GPU 硬件加速（`会导致某些参数异常致使渲染失败`）
+                    - 文件名和编码器：`{username}_Best50.mp4（{opt_encoder}）`
+                    - 分辨率、码率: `{res_display} / {bitrate_display}`
                     """):
             st.session_state.global_rendering = True
-            st.session_state.current_render_mode = "standard"
-            st.rerun()
-
-    # 极速模式
-    else:
-        st.info("""
-            **相较于标准渲染：**
-            - 减少 70% 片段渲染时间（理论半小时可出片）
-                - 原先的【2 ~ 3min/片段】渲染时间降至【30s ~ 1min/片段】
-                - 生成平均时间会因片段长度之间不同分辨率和码率而变化
-                    - 如果您单个片段很长，渲染时间也会变久，这是不会改变的事实
-            - 设置上限码率【两倍】和缓冲区【四倍】，提升渲染效率
-            """, icon="ℹ️")
-        st.error(f"""
-                **注意事项：**
-                - ~无论是哪种选项，片段之间都将只有黑屏过渡，且无法更改~
-                    - ［开发者］正在尝试编写自定义过渡支持
-                - 此模式生成的叠加层（谱面确认）有概率掉帧
-                - 若 GPU （或驱动）太旧而不支持当前 FFmpeg 版本将无法使用硬件加速
-                    - 当前 FFmpeg 版本为 `{get_ffmpeg_version()}`
-                - 如有以下情况，请立即终止生成并检查素材（或同时反馈问题）：
-                    - 某个片段生成时间过长（超过其本身长度或不显示进度）
-                    - 生成时（非机器本身性能原因所引起）的异常卡顿和占用
-                        - 包括 GPU 占用，生成时 GPU 不会持续高占，它只会跳这么一小会。
-                """, icon="⚠️")
-        st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            cq = st.number_input("cq(量化参数)", min_value=0, max_value=63,
-                            value=33, step=1, key="cq_range", disabled=button_disable_stat or encoder_param["brand"] == 'AMD',
-                            help="""
-                            此项会影响编码文件大小和画面质量，如果您不知道怎么调，请保持默认
-                            
-                            `（使用 AMD 加速的此参数对您无效，您无需调整【自动忽略】）`
-                            """)
-            encoder_param["cq"] = cq
-        with col2:
-            preset_options_amf = ['speed' ,'balanced', 'quality']
-            default_preset = ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
-            preset = st.selectbox("预设编码参数", default_preset if encoder_param["brand"] != 'AMD' else preset_options_amf,
-                        index=3 if encoder_param["brand"] != 'AMD' else 1, key="select_preset", help="往上生成越快，往下文件越小（AMD 往下为质量越好）", disabled=button_disable_stat)
-            encoder_param["preset"] = preset
-        
-        if st.button("开始渲染", key="render_fast",
-                    width='stretch', icon="▶️",
-                    disabled=button_disable_stat or (vcoder == "vp9" and encoder_param["brand"] != "Intel"),
-                    help=f"""
-                    您的参数（除路径和文件名外，其他参数请于上方调整）：
-                    - 输出路径: `{video_output_path}`
-                    - 文件名：`{username}_Best50_fast.mp4`
-                    - 分辨率、量化参数: `{res_display} / {encoder_param.get("cq")}`
-                    - 码率、编码器和编码预设: `{bitrate_display} / {opt_encoder} / {encoder_param.get("preset")}`
-                    """):
-            st.session_state.global_rendering = True
-            st.session_state.current_render_mode = "fast"
+            # st.session_state.current_render_mode = "fast"
             st.rerun()
 
     def cleanup_after_render():
@@ -553,8 +309,8 @@ with st.expander("选择渲染模式", icon="⏩"):
             
         # 恢复状态
         st.session_state.global_rendering = False
-        if 'current_render_mode' in st.session_state:
-            del st.session_state.current_render_mode
+        # if 'current_render_mode' in st.session_state:
+        #     del st.session_state.current_render_mode
         
         # 延迟后刷新
         time.sleep(2)
@@ -562,8 +318,8 @@ with st.expander("选择渲染模式", icon="⏩"):
 
 # 统一的渲染控制器
 if st.session_state.global_rendering:
-    render_mode = st.session_state.get('current_render_mode', 'standard')
-    clips_only = st.session_state.get('clips_only', False)
+    # render_mode = st.session_state.get('current_render_mode', 'standard')
+    # clips_only = st.session_state.get('clips_only', False)
     start_time = time.time()  # 记录开始时间
     print("开始记录生成时间。")
     st.info("""
@@ -575,22 +331,48 @@ if st.session_state.global_rendering:
         start_time = time.time()
         save_video_render_config()
         video_res = (v_res_width, v_res_height)
+
+        image_root = current_paths['image_dir']
+        fullbg_dir = os.path.join(image_root, 'fullbg')
+        if not os.path.exists(fullbg_dir):
+            print("正在预先渲染背景板图像。")
+            render_all_images(video_config_file, current_paths['custom_style'], current_paths)
         
         # 合并渲染逻辑：只有 classic_fast_render 参数不同
-        classic_fast_render = (render_mode == 'standard')
+        # classic_fast_render = (render_mode == 'standard')
+
+        # render_all_video_clips(video_configs, 
+        #                        video_output_path, 
+        #                        video_res, 
+        #                        v_bitrate_kbps,
+        #                       trans_params,
+        #                       encoder_param, 
+        #                       force_render_clip, 
+        #                       classic_fast_render)
         
-        render_all_video_clips(video_configs, video_output_path, video_res, v_bitrate_kbps,
-                              font_path=ui_font_path, encoder_param=encoder_param,
-                             force_render=force_render_clip, classic_fast_render=classic_fast_render,
-                             clips_only=clips_only)
+        # render_all_video_clips(video_configs,
+        #                        video_output_path,
+        #                        trans_params,
+        #                        encoder_param,
+        #                        style_config,
+        #                        force_render_clip)
+        
+        # if not clips_only:
+        #     # 合并视频拼接逻辑：只有 classic_fast_render 参数不同
+        #     combine_full_video_direct(video_output_path, username)
+        
+        render_all_video_clips(
+            video_configs,           # 视频配置数据
+            video_output_path,     # 最终片段存储目录（如 './videos/clips'）
+            trans_params,         # 过渡参数 {'enabled': True, 'duration': 1}
+            encoder_param,       # 编码参数 {'resolution': (1920,1080), 'bitrate': 5000, ...}
+            style_config,        # 样式配置 {'darkness': 0.3, 'position': {...}}
+            force_render_clip   # 是否强制重新渲染
+        )
         
         if not clips_only:
-            # 合并视频拼接逻辑：只有 classic_fast_render 参数不同
-            combine_full_video_direct(video_output_path, 
-                                      username,
-                                    #   v_bitrate_kbps,
-                                      classic_fast_render)
-            
+            combine_full_video_direct(video_output_path, username)
+        
         # 渲染成功
         duration = time.time() - start_time  # 用完成的当前时间减去开始时间获取生成时长
         formatted_total_time = format_time_difference(duration)

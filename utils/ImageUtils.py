@@ -1,9 +1,12 @@
 import numpy as np
 import os, traceback
+import streamlit as st
 from PIL.Image import Resampling
 from PIL import Image, ImageDraw, ImageFont
 from utils.PageUtils import calculate_rating
-from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, REVERSE_LEVEL_LABELS
+from utils.PathUtils import load_config, save_config
+from utils.TextRenderer import render_text_to_image
+from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, font_path, REVERSE_LEVEL_LABELS
 
 def get_splited_text(text, text_max_bytes=70):
     """
@@ -310,7 +313,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
     # 只允许一个下划线分隔符（对应 Best_xx 格式）
     prefix, index = record_detail['clip_id'].split('_', 1)
     try:
-        if template == 'default':
+        if template == ('default' or 'custom_default'):
             assert record_detail['level_index'] in range(0, 5)
             image_base_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
             with Image.open(image_base_path) as background:
@@ -465,13 +468,13 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 # 将temp_img合成到background上
                 background = Image.alpha_composite(background, temp_img)
         
-        elif template == 'init':
+        elif template == ('init' or 'custom_init'):
             CORNER_IMG_PATH = f"{image_root_path}/CornerMark.png"
 
             # （此函数只能调用微软字体库中的字体）
             def load_fonts(base_font: str, size: dict):
                 config = {
-                    'title': ('bd', size['title']), 'number': ('', size['number']), 'song_name': ('l', size['song_name']),
+                    'title': ('bd', size['title']), 'number': ('', size['number']), 'song_name': ('l', size['score']),
                     'level': ('l', size['level']), 'score': ('l', size['score']), 'rating': ('l', size['rating'])
                 }
                 
@@ -657,3 +660,234 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
             background = Image.alpha_composite(background, temp_img)
     finally:
         background.save(os.path.join(output_path, f"{prefix}_{index}.png"))
+
+def render_all_images(video_config_file, style_config_file_path, save_paths, force_regen=False):
+    """
+    一键生成所有图片（文字图 + 完整背景图）
+    
+    Args:
+        video_config_file: 视频配置文件路径
+        style_config_file_path: 样式配置文件路径
+        save_paths: 保存路径配置
+        force_regen: 是否强制重新生成已存在的文件
+    """
+    from PIL import Image
+    
+    def rgb_to_hex(rgb):
+        return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
+    
+    def get_render_params(style, layout):
+        """提取渲染参数"""
+        return {
+            'font_path': os.path.join(font_path, style['font']),
+            'font_size': style['size'],
+            'color': rgb_to_hex(style['color']),
+            'stroke_color': rgb_to_hex(style['stroke']['color']) if style['stroke']['enable'] else None,
+            'stroke_width': style['stroke']['width'],
+            'width': layout['width'],
+            'padding': tuple(layout['padding']),
+            'line_spacing': layout['lineSpacing'],
+            'horizontal_align': layout['AlignConfig']['horizontal'],
+            'vertical_align': layout['AlignConfig']['vertical'],
+            'auto_height': layout['autoHeight'],
+        }
+    
+    def merge_text_with_background(text_path, bg_path, output_path, position_ratio, bg_size=(1920, 1080)):
+        """合并单张文字图与背景图"""
+        background = Image.open(bg_path, 'r').convert("RGBA")
+        text_img = Image.open(text_path, 'r').convert("RGBA")
+        
+        text_width, text_height = text_img.size
+        bg_width, bg_height = bg_size
+        
+        x = int(bg_width * position_ratio[0])
+        y = int(bg_height * position_ratio[1])
+        x = max(0, min(x, bg_width - text_width))
+        y = max(0, min(y, bg_height - text_height))
+        
+        background.paste(text_img, (x, y), text_img)
+        background.save(output_path, "PNG")
+        return output_path
+    
+    def update_config_with_image_paths():
+        """更新配置文件中的 full_image 路径"""
+        try:
+            # 重新加载配置（确保获取最新数据）
+            config_to_update = load_config(video_config_file)
+            style_cfg = load_config(style_config_file_path)
+            
+            if not config_to_update or not style_cfg:
+                st.warning("无法更新配置：配置文件加载失败", icon="⚠️")
+                return
+            
+            theme = style_cfg['themes']
+            image_root = save_paths['image_dir']
+            intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png".replace("./", "").replace("/", "\\")
+            fullbg_dir = os.path.join(image_root, 'fullbg')
+            
+            # 统计
+            total = 0
+            filled = 0
+            
+            # 处理 intro 和 ending
+            for seg_type in ['intro', 'ending']:
+                for seg in config_to_update.get(seg_type, []):
+                    total += 1
+                    file_name = f"{seg['id']}.png"
+                    bg_page = seg['bg_page']
+                    no_overlay = seg['no_overlay']
+
+                    if bg_page:
+                        if no_overlay:  # 勾选 = 不需要背景板底图
+                            full_image_path = ""  # 留空
+                            filled += 1
+                        else:  # 不勾选 = 需要背景板底图
+                            full_image_path = intro_bg_path if os.path.exists(intro_bg_path) else ""
+                            if full_image_path:
+                                filled += 1
+                    else:
+                        # 普通文本页面
+                        full_image_path = os.path.join(fullbg_dir, file_name)
+                        filled += 1
+                    
+                    # if bg_page:
+                    #     if no_overlay:
+                    #         # 背景板页面 + 保留背景板底图
+                    #         full_image_path = intro_bg_path if os.path.exists(intro_bg_path) else ""
+                    #         if full_image_path:
+                    #             filled += 1
+                    #     else:
+                    #         # 背景板页面且不保留背景板 → 留空
+                    #         full_image_path = ""
+                    # else:
+                    #     # 普通文本页面，使用生成的完整背景图
+                    #     full_image_path = os.path.join(fullbg_dir, file_name)
+                    #     # if os.path.exists(full_image_path):
+                    #     filled += 1
+                    #     # else:
+                    #         # full_image_path = ""
+                    
+                    seg['full_image'] = full_image_path
+            
+            # 处理 main
+            for seg in config_to_update.get('main', []):
+                total += 1
+                file_name = f"{seg['clip_id']}.png"
+                full_image_path = os.path.join(fullbg_dir, file_name)
+                seg['full_image'] = full_image_path if os.path.exists(full_image_path) else ""
+                if seg['full_image']:
+                    filled += 1
+            
+            # 保存配置
+            save_config(video_config_file, config_to_update)
+            st.toast(f"已更新 {filled}/{total} 个图像路径到配置文件", icon="✅")
+            
+        except Exception as e:
+            st.warning(f"更新配置失败：{str(e)}", icon="⚠️")
+    
+    try:
+        # 加载配置
+        style_data = load_config(style_config_file_path)
+        video_data = load_config(video_config_file)
+        
+        if not style_data or not video_data:
+            st.error("配置文件加载失败！", icon="❌")
+            return [], []
+        
+        styles = style_data['styleConfig']
+        layouts = style_data['layoutConfig']
+        theme = style_data['themes']
+        video_position = style_data['position']['video']
+        intro_position = video_position['intro']
+        content_position = video_position['content']
+        
+        # 创建目录
+        image_root = save_paths['image_dir']
+        text_dir = os.path.join(image_root, 'text')
+        fullbg_dir = os.path.join(image_root, 'fullbg')
+        os.makedirs(text_dir, exist_ok=True)
+        os.makedirs(fullbg_dir, exist_ok=True)
+        
+        # 准备背景路径
+        intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png"
+        content_bg_dir = f"{image_root}/background"
+        
+        # 渲染配置
+        render_configs = [
+            (video_data.get('intro', []), 'intro', get_render_params(styles['intro'], layouts['intro'])),
+            (video_data.get('ending', []), 'ending', get_render_params(styles['intro'], layouts['intro'])),
+            (video_data.get('main', []), 'main', get_render_params(styles['content'], layouts['content']))
+        ]
+        
+        text_files = []
+        fullbg_files = []
+        skipped_count = 0
+        
+        # 遍历渲染
+        for segments, seg_type, params in render_configs:
+            for seg in segments:
+                text = seg.get('text', '')
+                if not text or not text.strip():
+                    continue
+                
+                file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
+                
+                text_path = os.path.join(text_dir, file_name)
+                fullbg_path = os.path.join(fullbg_dir, file_name)
+                
+                # 检查是否需要跳过
+                if not force_regen and os.path.exists(text_path) and os.path.exists(fullbg_path):
+                    skipped_count += 1
+                    text_files.append(text_path)
+                    fullbg_files.append(fullbg_path)
+                    continue
+                
+                # 生成文字图
+                _, saved_text_path = render_text_to_image(
+                    text=text.strip(),
+                    output_path=text_path,
+                    **params
+                )
+                text_files.append(saved_text_path)
+                
+                # 合并背景图
+                if seg_type == 'main':
+                    bg_path = os.path.join(content_bg_dir, file_name)
+                    if os.path.exists(bg_path):
+                        merge_text_with_background(
+                            saved_text_path,
+                            bg_path,
+                            fullbg_path,
+                            content_position
+                        )
+                        fullbg_files.append(fullbg_path)
+                    else:
+                        st.warning(f"背景图不存在，跳过合并: {file_name}", icon="⚠️")
+                else:
+                    if os.path.exists(intro_bg_path):
+                        merge_text_with_background(
+                            saved_text_path,
+                            intro_bg_path,
+                            fullbg_path,
+                            intro_position
+                        )
+                        fullbg_files.append(fullbg_path)
+                    else:
+                        st.warning(f"Intro 背景图不存在，跳过合并: {file_name}", icon="⚠️")
+        
+        # 显示结果
+        new_count = len(text_files) - skipped_count
+        if new_count > 0:
+            st.success(f"成功生成 {new_count} 张文字图 + {new_count} 张完整背景图", icon="✅")
+        if skipped_count > 0:
+            st.info(f"跳过已存在的 {skipped_count} 组图片", icon="⏭️")
+        
+        # ========== 关键：更新配置文件中的图像路径 ==========
+        update_config_with_image_paths()
+        
+        return text_files, fullbg_files
+        
+    except Exception as e:
+        st.error(f"生成失败：{str(e)}", icon="❌")
+        st.error(traceback.format_exc(), icon="❌")
+        return [], []

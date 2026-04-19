@@ -1,7 +1,8 @@
+import time
 import os, traceback
 import streamlit as st
 from datetime import datetime
-from utils.TextRenderer import render_text_to_image
+from utils.ImageUtils import render_all_images
 from utils.Variables import font_path, image_root_path
 from utils.PathUtils import read_global_config, save_config, load_config, get_data_paths, get_user_versions
 
@@ -46,19 +47,19 @@ def edit_context_widget(name, config, config_file_path):
                 #     horizontal=True
                 # )
                 # 文本编辑框
-                bg_col1, bg_col2 = st.columns(2)
+                bg_col1, bg_col2, bg_col3 = st.columns(3)
                 with bg_col1:
-                    info_page = st.checkbox("此页为背景板", help="可在此页展示您需要额外编辑的内容", key=f"{item['id']}_bg_page", value=item["bg_page"])
+                    bg_page = st.checkbox("此页为背景板", help="可在此页展示您需要额外编辑的内容", key=f"{item['id']}_bg_page", value=item["bg_page"])
                 with bg_col2:
-                    use_overlay = st.checkbox("保留背景板底图", key=f"{item['id']}_overlay", help="此页非背景板时选项不可用" if not info_page else "用于框定文本区域，若手动添加文字可自行决定是否保留", disabled=not info_page, value=item["overlay"])
-                
+                    no_overlay = st.checkbox("不需要底图", key=f"{item['id']}_overlay", help="此页非背景板时选项不可用" if not bg_page else "用于框定文本区域，若手动添加文字可自行决定是否保留", disabled=not bg_page, value=item["no_overlay"])
+                with bg_col3:
+                    no_sound = st.checkbox("不需要 BGM", key=f"{item['id']}_sound", help="在生成片段时不对此片段放入 bgm（如果您想使用自己的音乐作为 bgm，请勾选此项）", value=item["no_sound"])
                 new_text = st.text_area(
-                    "文本内容",
-                    value=item["text"],
+                    "文本内容", item["text"],
                     key=f"{item['id']}_text",
-                    help="每超过 16 行将多分 1 个平均时长的文本页" if not info_page else "背景板页不可输入任何内容，若要添加其他内容请多留空白区域",
-                    placeholder="输入要展示的文本（emoji 无法被渲染，请不要输入，其他内容请查看右上角的问号）",
-                    disabled=info_page
+                    help="若要添加其他内容请多留空白区域",
+                    placeholder="输入要展示的文本（若作为背景板展示则不可输入）",
+                    disabled=bg_page
                 )
                 # items[idx]["text"] = new_text
                 # items[idx]["bg_page"] = info_page
@@ -78,8 +79,9 @@ def edit_context_widget(name, config, config_file_path):
                 #     key=f"{item['id']}_duration"
                 # )
                 items[idx]["text"] = new_text
-                items[idx]["bg_page"] = info_page
-                items[idx]['overlay'] = use_overlay
+                items[idx]["bg_page"] = bg_page
+                items[idx]['no_overlay'] = no_overlay
+                items[idx]['no_sound'] = no_sound
                 items[idx]["duration"] = new_duration
                 
         # 删除按钮（只有当列表长度大于 1 时才显示）
@@ -100,7 +102,8 @@ def edit_context_widget(name, config, config_file_path):
                     "duration": 10,
                     "text": "",
                     "bg_page": False,
-                    "overlay": True
+                    "no_overlay": False,
+                    "no_sound": False
                     # "version": "LUMINOUS"
                 }
                 items.append(new_item)
@@ -255,382 +258,165 @@ def video_settings_widget(config_file_path):
             except Exception as e:
                 st.toast(f"保存失败：{str(e)}", icon="❌")
                 st.error(traceback.format_exc())
-
-# @st.fragment
-# def render_widget(video_config_file_path, style_config_file_path):
-#     """渲染组件（未完成）"""
-#     def rgb_to_hex(rgb):
-#         # 确保值在0-255范围内
-#         rgb = [max(0, min(255, x)) for x in rgb]
-#         return '#{:02x}{:02x}{:02x}'.format(*rgb)
     
-#     config = load_config(style_config_file_path)
-#     config2 = load_config(video_config_file_path)
-#     # 读取配置
-#     styles = config['styleConfig']
-#     style_config = {
-#         "path": os.path.join(font_path, styles['font']),
-#         "size": styles['size'],
-#         "color": rgb_to_hex(styles['color']),
-#         "stroke_color": rgb_to_hex(styles['stroke']['color']),
-#         "stroke_width": styles['stroke']['width'],
-#     }
-#     layouts = config['layoutConfig']
-#     layout_config = {
-#         "width": layouts["width"],
-#         "height": layouts["height"],
-#         "auto_height": layouts["autoHeight"],
-#         "padding": layouts["padding"],
-#         "line_spacing": layouts["lineSpacing"],
-#         "horizontal_align": layouts["AlignConfig"]["horizontal"],
-#         "vertical_align": layouts["AlignConfig"]["vertical"],
-#     }
-#     # 创建样式和布局对象
-#     style = TextStyle(**style_config)
-#     layout = LayoutConfig(**layout_config)
+# def render_all_images(video_config_file, style_config_file_path, save_paths, force_regen=False):
+#     """
+#     一键生成所有图片（文字图 + 完整背景图）
     
-#     renderer = TextRenderer(style, layout)
-#     renderer.render()
-
-def render_text(video_config_file, style_config_file_path, save_paths="rendered_texts", force_regen=False):
-    """根据视频配置渲染文本并保存为图片文件
-    
-    Args:
-        force_regen: 是否强制重新生成已存在的文件
-    """
-    
-    def rgb_to_hex(rgb):
-        return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
-    
-    def get_render_params(style, layout):
-        """提取渲染参数"""
-        return {
-            'font_path': os.path.join(font_path, style['font']),
-            'font_size': style['size'],
-            'color': rgb_to_hex(style['color']),
-            'stroke_color': rgb_to_hex(style['stroke']['color']) if style['stroke']['enable'] else None,
-            'stroke_width': style['stroke']['width'],
-            'width': layout['width'],
-            'padding': tuple(layout['padding']),
-            'line_spacing': layout['lineSpacing'],
-            'horizontal_align': layout['AlignConfig']['horizontal'],
-            'vertical_align': layout['AlignConfig']['vertical'],
-            'auto_height': layout['autoHeight'],
-        }
-    
-    try:
-        style_data = load_config(style_config_file_path)
-        video_data = load_config(video_config_file)
-        
-        styles = style_data['styleConfig']
-        layouts = style_data['layoutConfig']
-        
-        if not style_data or not video_data:
-            st.error("配置文件加载失败！", icon="❌")
-            return []
-        
-        text_dir = os.path.join(save_paths['image_dir'], 'text')
-        os.makedirs(text_dir, exist_ok=True)
-        
-        # 预定义渲染配置
-        render_configs = [
-            (video_data['intro'], 'intro',  get_render_params(styles['intro'], layouts['intro'])),
-            (video_data['ending'], 'ending', get_render_params(styles['intro'], layouts['intro'])),
-            (video_data['main'], 'main', get_render_params(styles['content'], layouts['content']))
-        ]
-        
-        rendered_files = []
-        skipped_files = []
-        failed_files = []
-        
-        for segments, seg_type, params in render_configs:
-            for seg in segments:
-                text = seg.get('text', '')
-                if not text or not text.strip():
-                    continue
-                
-                # 生成输出路径
-                file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
-                output_path = os.path.join(text_dir, file_name)
-                
-                # 检查文件是否已存在（除非强制重新生成）
-                if not force_regen and os.path.exists(output_path):
-                    skipped_files.append(file_name)
-                    rendered_files.append(output_path)
-                    continue
-                
-                # 如果需要强制重新生成，先删除旧文件
-                if force_regen and os.path.exists(output_path):
-                    os.remove(output_path)
-                    print(f"删除旧文件: {file_name}")
-                
-                print(f"正在生成 {file_name}")
-                try:
-                    _, saved_path = render_text_to_image(text=text.strip(), output_path=output_path, **params)
-                    rendered_files.append(saved_path)
-                except Exception as e:
-                    failed_files.append((file_name, str(e)))
-                    print(f"生成失败 {file_name}: {e}")
-        
-        # 显示生成结果摘要
-        if rendered_files:
-            summary_parts = []
-            new_count = len(rendered_files) - len(skipped_files)
-            if new_count > 0:
-                summary_parts.append(f"新生成 {new_count} 张")
-            if skipped_files:
-                summary_parts.append(f"跳过已存在的 {len(skipped_files)} 张")
-            if failed_files:
-                summary_parts.append(f"失败 {len(failed_files)} 张")
-            
-            st.toast(' '.join(summary_parts), icon="📊")
-            
-            # 如果有失败的文件，显示详细信息
-            if failed_files:
-                with st.expander("❌ 生成失败的文件"):
-                    for file_name, error in failed_files:
-                        st.write(f"- `{file_name}`: {error}")
-        else:
-            st.warning("没有找到可渲染的文本内容，请先添加文本并保存配置。", icon="⚠️")
-        
-        return rendered_files
-        
-    except Exception as e:
-        st.toast(f"生成失败：{str(e)}", icon="❌")
-        st.error(traceback.format_exc(), icon="❌")
-        return []
-
-
-# def render_widget(video_config_file_path, style_config_file_path, save_paths="rendered_texts"):
-#     """根据视频配置渲染文本并保存为图片文件"""
-    
-#     st.write("=== 调试：函数开始执行 ===")  # 添加这行
-#     st.write(f"video_config_file: {video_config_file}")  # 添加这行
-#     st.write(f"style_config_file_path: {style_config_file_path}")  # 添加这行
+#     Args:
+#         video_config_file: 视频配置文件路径
+#         style_config_file_path: 样式配置文件路径
+#         save_paths: 保存路径配置
+#         force_regen: 是否强制重新生成已存在的文件
+#     """
+#     from PIL import Image
     
 #     def rgb_to_hex(rgb):
 #         return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
     
-#     # 加载配置
-#     style_data = load_config(style_config_file_path)
-#     video_data = load_config(video_config_file_path)
+#     def get_render_params(style, layout):
+#         """提取渲染参数"""
+#         return {
+#             'font_path': os.path.join(font_path, style['font']),
+#             'font_size': style['size'],
+#             'color': rgb_to_hex(style['color']),
+#             'stroke_color': rgb_to_hex(style['stroke']['color']) if style['stroke']['enable'] else None,
+#             'stroke_width': style['stroke']['width'],
+#             'width': layout['width'],
+#             'padding': tuple(layout['padding']),
+#             'line_spacing': layout['lineSpacing'],
+#             'horizontal_align': layout['AlignConfig']['horizontal'],
+#             'vertical_align': layout['AlignConfig']['vertical'],
+#             'auto_height': layout['autoHeight'],
+#         }
     
-#     rendered_files = []
+#     def merge_text_with_background(text_path, bg_path, output_path, position_ratio, bg_size=(1920, 1080)):
+#         """合并单张文字图与背景图"""
+#         background = Image.open(bg_path, 'r').convert("RGBA")
+#         text_img = Image.open(text_path, 'r').convert("RGBA")
+        
+#         text_width, text_height = text_img.size
+#         bg_width, bg_height = bg_size
+        
+#         x = int(bg_width * position_ratio[0])
+#         y = int(bg_height * position_ratio[1])
+#         x = max(0, min(x, bg_width - text_width))
+#         y = max(0, min(y, bg_height - text_height))
+        
+#         background.paste(text_img, (x, y), text_img)
+#         background.save(output_path, "PNG")
+#         return output_path
     
-#     # 处理 intro 和 ending（使用 intro 配置）
-#     intro_config = style_data['styleConfig']['intro']
-#     intro_layout = style_data['layoutConfig']['intro']
-    
-#     for seg_type in ['intro', 'ending']:
-#         for seg in video_data.get(seg_type, []):
-#             if seg.get('text'):
-#                 output_path = os.path.join(f"{save_paths['image_dir']}/text", f"{seg_type}_{seg.get('id', seg_type)}.png")
+#     try:
+#         # 加载配置
+#         style_data = load_config(style_config_file_path)
+#         video_data = load_config(video_config_file)
+        
+#         if not style_data or not video_data:
+#             st.error("配置文件加载失败！", icon="❌")
+#             return [], []
+        
+#         styles = style_data['styleConfig']
+#         layouts = style_data['layoutConfig']
+#         theme = style_data['themes']
+#         video_position = style_data['position']['video']
+#         intro_position = video_position['intro']
+#         content_position = video_position['content']
+        
+#         # 创建目录
+#         image_root = save_paths['image_dir']
+#         text_dir = os.path.join(image_root, 'text')
+#         fullbg_dir = os.path.join(image_root, 'fullbg')
+#         os.makedirs(text_dir, exist_ok=True)
+#         os.makedirs(fullbg_dir, exist_ok=True)
+        
+#         # 准备背景路径
+#         intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png"
+#         content_bg_dir = f"{image_root}/background"
+        
+#         # 渲染配置
+#         render_configs = [
+#             (video_data.get('intro', []), 'intro', get_render_params(styles['intro'], layouts['intro'])),
+#             (video_data.get('ending', []), 'ending', get_render_params(styles['intro'], layouts['intro'])),
+#             (video_data.get('main', []), 'main', get_render_params(styles['content'], layouts['content']))
+#         ]
+        
+#         text_files = []
+#         fullbg_files = []
+#         skipped_count = 0
+        
+#         # 遍历渲染
+#         for segments, seg_type, params in render_configs:
+#             for seg in segments:
+#                 text = seg.get('text', '')
+#                 if not text or not text.strip():
+#                     continue
                 
-#                 _, saved_path = render_text_to_image(
-#                     text=seg['text'],
-#                     font_path=os.path.join(font_path, intro_config['font']),
-#                     output_path=output_path,
-#                     font_size=intro_config['size'],
-#                     color=rgb_to_hex(intro_config['color']),
-#                     stroke_color=rgb_to_hex(intro_config['stroke']['color']) if intro_config['stroke']['enable'] else None,
-#                     stroke_width=intro_config['stroke']['width'],
-#                     width=intro_layout['width'],
-#                     padding=tuple(intro_layout['padding']),
-#                     line_spacing=intro_layout['lineSpacing'],
-#                     horizontal_align=intro_layout['AlignConfig']['horizontal'],
-#                     vertical_align=intro_layout['AlignConfig']['vertical'],
-#                     auto_height=intro_layout['autoHeight'],
+#                 file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
+                
+#                 # 生成文件名和路径
+#                 # if seg_type == 'main':
+#                 #     file_name = f"{seg['clip_id']}.png"
+#                 # else:
+#                 #     file_name = f"{seg['id']}.png"
+                
+#                 text_path = os.path.join(text_dir, file_name)
+#                 fullbg_path = os.path.join(fullbg_dir, file_name)
+                
+#                 # 检查是否需要跳过
+#                 if not force_regen and os.path.exists(text_path) and os.path.exists(fullbg_path):
+#                     skipped_count += 1
+#                     text_files.append(text_path)
+#                     fullbg_files.append(fullbg_path)
+#                     continue
+                
+#                 # 生成文字图
+#                 _, saved_text_path = render_text_to_image(
+#                     text=text.strip(),
+#                     output_path=text_path,
+#                     **params
 #                 )
-#                 # seg['rendered_text_path'] = saved_path
-#                 # rendered_files.append(saved_path)
-    
-#     # 处理 main（使用 content 配置）
-#     content_config = style_data['styleConfig']['content']
-#     content_layout = style_data['layoutConfig']['content']
-    
-#     for seg in video_data.get('main', []):
-#         if seg.get('text'):
-#             output_path = os.path.join(f"{save_paths['image_dir']}/text", f"main_{seg.get('clip_id', 'unknown')}.png")
-            
-#             _, saved_path = render_text_to_image(
-#                 text=seg['text'],
-#                 font_path=os.path.join(font_path, content_config['font']),
-#                 output_path=output_path,
-#                 font_size=content_config['size'],
-#                 color=rgb_to_hex(content_config['color']),
-#                 stroke_color=rgb_to_hex(content_config['stroke']['color']) if content_config['stroke']['enable'] else None,
-#                 stroke_width=content_config['stroke']['width'],
-#                 width=content_layout['width'],
-#                 padding=tuple(content_layout['padding']),
-#                 line_spacing=content_layout['lineSpacing'],
-#                 horizontal_align=content_layout['AlignConfig']['horizontal'],
-#                 vertical_align=content_layout['AlignConfig']['vertical'],
-#                 auto_height=content_layout['autoHeight'],
-#             )
-#             # seg['rendered_text_path'] = saved_path
-#             # rendered_files.append(saved_path)
-    
-#     return rendered_files
-    
-def render_all_images(video_config_file, style_config_file_path, save_paths, force_regen=False):
-    """
-    一键生成所有图片（文字图 + 完整背景图）
-    
-    Args:
-        video_config_file: 视频配置文件路径
-        style_config_file_path: 样式配置文件路径
-        save_paths: 保存路径配置
-        force_regen: 是否强制重新生成已存在的文件
-    """
-    from PIL import Image
-    import shutil
-    
-    def rgb_to_hex(rgb):
-        return '#{:02x}{:02x}{:02x}'.format(*[max(0, min(255, x)) for x in rgb])
-    
-    def get_render_params(style, layout):
-        """提取渲染参数"""
-        return {
-            'font_path': os.path.join(font_path, style['font']),
-            'font_size': style['size'],
-            'color': rgb_to_hex(style['color']),
-            'stroke_color': rgb_to_hex(style['stroke']['color']) if style['stroke']['enable'] else None,
-            'stroke_width': style['stroke']['width'],
-            'width': layout['width'],
-            'padding': tuple(layout['padding']),
-            'line_spacing': layout['lineSpacing'],
-            'horizontal_align': layout['AlignConfig']['horizontal'],
-            'vertical_align': layout['AlignConfig']['vertical'],
-            'auto_height': layout['autoHeight'],
-        }
-    
-    def merge_text_with_background(text_path, bg_path, output_path, position_ratio, bg_size=(1920, 1080)):
-        """合并单张文字图与背景图"""
-        background = Image.open(bg_path, 'r').convert("RGBA")
-        text_img = Image.open(text_path, 'r').convert("RGBA")
-        
-        text_width, text_height = text_img.size
-        bg_width, bg_height = bg_size
-        
-        x = int(bg_width * position_ratio[0])
-        y = int(bg_height * position_ratio[1])
-        x = max(0, min(x, bg_width - text_width))
-        y = max(0, min(y, bg_height - text_height))
-        
-        background.paste(text_img, (x, y), text_img)
-        background.save(output_path, "PNG")
-        return output_path
-    
-    try:
-        # 加载配置
-        style_data = load_config(style_config_file_path)
-        video_data = load_config(video_config_file)
-        
-        if not style_data or not video_data:
-            st.error("配置文件加载失败！", icon="❌")
-            return [], []
-        
-        styles = style_data['styleConfig']
-        layouts = style_data['layoutConfig']
-        theme = style_data['themes']
-        video_position = style_data['position']['video']
-        intro_position = video_position['intro']
-        content_position = video_position['content']
-        
-        # 创建目录
-        image_root = save_paths['image_dir']
-        text_dir = os.path.join(image_root, 'text')
-        fullbg_dir = os.path.join(image_root, 'fullbg')
-        os.makedirs(text_dir, exist_ok=True)
-        os.makedirs(fullbg_dir, exist_ok=True)
-        
-        # 准备背景路径
-        intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png"
-        content_bg_dir = f"{image_root}/background"
-        
-        # 渲染配置
-        render_configs = [
-            (video_data.get('intro', []), 'intro', get_render_params(styles['intro'], layouts['intro'])),
-            (video_data.get('ending', []), 'ending', get_render_params(styles['intro'], layouts['intro'])),
-            (video_data.get('main', []), 'main', get_render_params(styles['content'], layouts['content']))
-        ]
-        
-        text_files = []
-        fullbg_files = []
-        skipped_count = 0
-        
-        # 遍历渲染
-        for segments, seg_type, params in render_configs:
-            for seg in segments:
-                text = seg.get('text', '')
-                if not text or not text.strip():
-                    continue
+#                 text_files.append(saved_text_path)
                 
-                file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
-                
-                # 生成文件名和路径
-                # if seg_type == 'main':
-                #     file_name = f"{seg['clip_id']}.png"
-                # else:
-                #     file_name = f"{seg['id']}.png"
-                
-                text_path = os.path.join(text_dir, file_name)
-                fullbg_path = os.path.join(fullbg_dir, file_name)
-                
-                # 检查是否需要跳过
-                if not force_regen and os.path.exists(text_path) and os.path.exists(fullbg_path):
-                    skipped_count += 1
-                    text_files.append(text_path)
-                    fullbg_files.append(fullbg_path)
-                    continue
-                
-                # 生成文字图
-                _, saved_text_path = render_text_to_image(
-                    text=text.strip(),
-                    output_path=text_path,
-                    **params
-                )
-                text_files.append(saved_text_path)
-                
-                # 合并背景图
-                if seg_type == 'main':
-                    bg_path = os.path.join(content_bg_dir, file_name)
-                    if os.path.exists(bg_path):
-                        merge_text_with_background(
-                            saved_text_path,
-                            bg_path,
-                            fullbg_path,
-                            content_position
-                        )
-                        fullbg_files.append(fullbg_path)
-                    else:
-                        st.warning(f"背景图不存在，跳过合并: {file_name}")
-                else:
-                    if os.path.exists(intro_bg_path):
-                        merge_text_with_background(
-                            saved_text_path,
-                            intro_bg_path,
-                            fullbg_path,
-                            intro_position
-                        )
-                        fullbg_files.append(fullbg_path)
-                    else:
-                        st.warning(f"Intro 背景图不存在，跳过合并: {file_name}", icon="⚠️")
+#                 # 合并背景图
+#                 if seg_type == 'main':
+#                     bg_path = os.path.join(content_bg_dir, file_name)
+#                     if os.path.exists(bg_path):
+#                         merge_text_with_background(
+#                             saved_text_path,
+#                             bg_path,
+#                             fullbg_path,
+#                             content_position
+#                         )
+#                         fullbg_files.append(fullbg_path)
+#                     else:
+#                         st.warning(f"背景图不存在，跳过合并: {file_name}")
+#                 else:
+#                     if os.path.exists(intro_bg_path):
+#                         merge_text_with_background(
+#                             saved_text_path,
+#                             intro_bg_path,
+#                             fullbg_path,
+#                             intro_position
+#                         )
+#                         fullbg_files.append(fullbg_path)
+#                     else:
+#                         st.warning(f"Intro 背景图不存在，跳过合并: {file_name}", icon="⚠️")
         
-        # 显示结果
-        new_count = len(text_files) - skipped_count
-        if new_count > 0:
-            st.success(f"成功生成 {new_count} 张文字图 + {new_count} 张完整背景图", icon="✅")
-        if skipped_count > 0:
-            st.info(f"跳过已存在的 {skipped_count} 组图片", icon="⏭️")
+#         # 显示结果
+#         new_count = len(text_files) - skipped_count
+#         if new_count > 0:
+#             st.success(f"成功生成 {new_count} 张文字图 + {new_count} 张完整背景图", icon="✅")
+#         if skipped_count > 0:
+#             st.info(f"跳过已存在的 {skipped_count} 组图片", icon="⏭️")
         
-        return text_files, fullbg_files
+#         return text_files, fullbg_files
         
-    except Exception as e:
-        st.error(f"生成失败：{str(e)}", icon="❌")
-        st.error(traceback.format_exc(), icon="❌")
-        return [], []
-    
+#     except Exception as e:
+#         st.error(f"生成失败：{str(e)}", icon="❌")
+#         st.error(traceback.format_exc(), icon="❌")
+#         return [], []
+
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
@@ -658,7 +444,7 @@ with st.container(border=True):
         # 因此需要在读取存档的过程中更新
         video_config_file = current_paths['video_config']
         if not os.path.exists(video_config_file):
-            st.error(f"未找到 {video_config_file} ，请检查前置步骤是否完成，以及 b30 存档数据完整性！", icon="❌")
+            st.error(f"未找到 {video_config_file} ，请检查前置步骤是否完成，以及 b50 存档数据完整性！", icon="❌")
             config = None
         else:
             config = load_config(video_config_file)
@@ -693,10 +479,7 @@ with st.container(border=True):
 
 if config:
     st.write("添加想要展示的文字内容，每一页最多可以展示约 250 字")
-    st.info("""
-            左右两侧填写完毕后，需要分别点击保存才可生效！
-            - 文本页（展示页内文本）显示时长将按画面页（整个展示页）时长平均切分
-            """, icon="ℹ️")
+    st.info("左右两侧填写完毕后，需要分别点击保存才可生效！", icon="ℹ️")
 
     # 分为两栏，左栏读取intro部分的配置，右栏读取outro部分的配置
     col1, col2 = st.columns(2)
@@ -714,17 +497,36 @@ if config:
 # 能将节省下来的时间用于在最终的拼接视频步骤上添加转场过渡效果
     video_settings_widget(current_paths['custom_style'])  # 新增这一行
     # render_widget(video_config_file, current_paths['custom_style'], current_paths)
+    with st.expander("图像预览", expanded=False, icon="🖼️"):
+        st.info("""
+                使用您当前存档的 Best #1 和片头图像作为预览，修改请在上方和上一页进行。
+                - 片头/尾若以背景板展示，则下方不会显示片头/尾图像
+                """, icon="ℹ️")
+        col1, col2 = st.columns(2)
+        with col1:
+            if os.path.exists(f"{current_paths['image_dir']}/fullbg/Best_1.png"):
+                st.image(f"{current_paths['image_dir']}/fullbg/Best_1.png",  caption="Best #1 预览")
+            else:
+                st.warning("未找到 Best #1 图像，将显示 Best #1 无文字版本！", icon="⚠️")
+                st.image(f"{current_paths['image_dir']}/background/Best_1.png",  caption="Best #1（无文字）预览")
+        with col2:
+            if os.path.exists(f"{current_paths['image_dir']}/fullbg/intro_1.png"):
+                st.image(f"{current_paths['image_dir']}/fullbg/intro_1.png",  caption="片头/尾预览")
+            else:
+                st.warning("未找到片头/尾图像，您是否【作为背景板展示】或【未渲染图像】！", icon="⚠️")
     st.divider()
     render_info, force_render_text, render_btn = st.columns([1, .35, .65])
     with render_info:
-        st.write("【可选】预先生成所需的评论文本图像，可减少渲染时间并提升渲染效率。")
+        st.write("【可选】预先生成所需的评论文本图像，可减少部分渲染时间。")
     with force_render_text:
         force_render = st.checkbox("强制重新生成", value=False, help="强制重新生成已存在的文件，无论其是否已存在。")
     with render_btn:
-        if st.button("生成评论图", width='stretch', icon="🖼️"):
+        if st.button("生成评论图", width='stretch', icon="🖼️", help="如果上方没有文字版图像预览，也请使用此按钮生成"):
             st.toast("正在生成图像。", icon="⏳")
             # render_text(video_config_file, current_paths['custom_style'], current_paths, force_render)
             render_all_images(video_config_file, current_paths['custom_style'], current_paths, force_render)
+            time.sleep(3)
+            st.rerun()
     col1, col2 = st.columns(2, vertical_alignment="center")
     with col1:
         st.write("配置完毕后，即可准备生成您的 Best30 视频")

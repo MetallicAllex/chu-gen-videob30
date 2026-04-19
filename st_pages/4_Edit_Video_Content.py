@@ -311,12 +311,9 @@ def update_preview(preview_placeholder, config, current_index):
                            - 随后重新加载存档，如果没生效请手动修改配置文件
                            """, icon="⚠️")
         # 显示当前视频片段的评论
-        item['text'] = st.text_area("编辑评论",
-                                    value=item.get('text', ''),
+        item['text'] = st.text_area("编辑评论", value=item.get('text', ''),
                                     key=f"text_{item['id']}_{current_index}",
-                                    placeholder="填写 Best50 评论（emoji 无法被渲染，请尽可能不要输入 emoji）",
-                                    help="每超过 12 行将多分 1 个平均时长的评论页"
-                                    )
+                                    placeholder="填写 Best50 评论")
 
         # 从文件中获取视频的时长
         video_path = item['video']
