@@ -194,3 +194,6 @@ utils/VideoUtils-ori.py
 utils/VideoUtilsAlt.py
 utils/TaichiAccel.py
 utils/AccelRenderer.py
+utils/transition.py
+.gitignore
+utils/Accels.py

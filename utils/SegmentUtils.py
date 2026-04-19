@@ -405,9 +405,10 @@ class VideoSegmentGenerator(VideoGenerator):
     def _get_main_image_path(self, clip_config: dict) -> Optional[str]:
         """获取主图片路径"""
         full_image = clip_config.get('full_image')
-        if full_image and os.path.exists(full_image):
-            return os.path.abspath(full_image).replace('\\', '/')
-        return None
+        main_image = clip_config['main_image']
+        # if full_image and os.path.exists(full_image):
+        return os.path.abspath(full_image if full_image and os.path.exists(full_image) else main_image).replace('\\', '/')
+        # return os.path.abspath(main_image).replace('\\', '/')
     
     def _get_video_path(self, clip_config: dict) -> Optional[str]:
         """获取视频路径"""
