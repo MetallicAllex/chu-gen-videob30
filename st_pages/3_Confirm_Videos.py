@@ -525,9 +525,9 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                 placeholder="输入视频 ID 或 BV 号",
                 help="请输入 YouTube 视频 ID（例如 在具体网址中 "
                      "https://www.youtube.com/watch?v=EQr_jf0gHpQ 中的"
-                     "EQr_jf0gHpQ）或 B 站 BV 号（例如 在具体网址中 "
+                     "EQr_jf0gHpQ）或者 B 站 BV 号（例如 在具体网址中 "
                      "https://www.bilibili.com/video/BV1h14y1x71C/?spm_id_from=333.337.search-card.all.click"
-                     "中的 BV1h14y1x71C）。"
+                     "中的 BV1h14y1x71C）"
             )
         with col2:
             # 添加分P序号输入

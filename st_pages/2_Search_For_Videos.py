@@ -91,8 +91,8 @@ use_custom_po_token = _use_custom_po_token
 use_auto_po_token = _use_auto_po_token
 po_token = _customer_po_token.get('po_token', '')
 visitor_data = _customer_po_token.get('visitor_data', '')
-# 新增 YouTube API 变量
 download_high_res = _download_high_res
+# 新增 YouTube API 变量
 use_youtube_api = _use_youtube_api
 youtube_api_key = _youtube_api_key
 
