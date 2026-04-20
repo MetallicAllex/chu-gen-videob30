@@ -92,6 +92,7 @@ use_auto_po_token = _use_auto_po_token
 po_token = _customer_po_token.get('po_token', '')
 visitor_data = _customer_po_token.get('visitor_data', '')
 # 新增 YouTube API 变量
+download_high_res = _download_high_res
 use_youtube_api = _use_youtube_api
 youtube_api_key = _youtube_api_key
 
@@ -353,7 +354,7 @@ def search_b50_videos(dl_instance, placeholder, search_wait_time):
                 save_config(b50_config_file, b50_config)
                 
                 # 等待几秒，以减少被检测为bot的风险
-                if search_wait_time[0] > 0 and search_wait_time[1] > search_wait_time[0]:
+                if 0 < search_wait_time[0] < search_wait_time[1]:
                     time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
             
             # 搜索完成后显示100%

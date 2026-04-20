@@ -520,9 +520,14 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
         col1, col2 = st.columns([1.35, .65])
         with col1:
             replace_id = st.text_input(
-                "谱面确认的 youtube ID 或 BV 号", 
+                "谱面确认的 youtube ID 或 BV 号",
                 key=f"replace_id_{song['clip_id']}",
-                placeholder="输入视频 ID 或 BV 号"
+                placeholder="输入视频 ID 或 BV 号",
+                help="请输入 YouTube 视频 ID（例如 在具体网址中 "
+                     "https://www.youtube.com/watch?v=EQr_jf0gHpQ 中的"
+                     "EQr_jf0gHpQ）或 B 站 BV 号（例如 在具体网址中 "
+                     "https://www.bilibili.com/video/BV1h14y1x71C/?spm_id_from=333.337.search-card.all.click"
+                     "中的 BV1h14y1x71C）。"
             )
         with col2:
             # 添加分P序号输入
