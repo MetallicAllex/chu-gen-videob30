@@ -100,7 +100,7 @@ with col2:
     </div>
     
     <div style="text-align: left; margin-top: 15px;">
-        <div class="version-info">当前版本为：<span style="font-weight: bold;">[基于 mai-gen-videob30 修改] v1.1-fix3</span></div>
+        <div class="version-info">当前版本为：<span style="font-weight: bold;">[基于 mai-gen-videob30 修改] v1.1.2.1</span></div>
         <div class="guide-info">请按照引导步骤进行操作，以生成您的 Best30 视频。</div>
     </div>
     """, unsafe_allow_html=True)
