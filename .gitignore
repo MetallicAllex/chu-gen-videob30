@@ -186,14 +186,15 @@ music_datasets/
 
 # debug and test resources
 ffmpeg.exe
+ffprobe.exe
 start.bat
 global_config.yaml
 assets/thumbnails/
-chu-gen-videob30_v1.1.2.zip
+chu-gen-videob30-v1.1.2.1.zip
 utils/VideoUtils-ori.py
 utils/VideoUtilsAlt.py
-utils/TaichiAccel.py
-utils/AccelRenderer.py
-utils/transition.py
-.gitignore
-utils/Accels.py
+utils/Taichi
+# utils/TaichiAccel.py
+# utils/AccelRenderer.py
+# utils/transition.py
+COMMITMSG.txt

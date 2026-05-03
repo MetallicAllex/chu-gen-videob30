@@ -735,7 +735,7 @@ class PurePytubefixDownloader(Downloader):
             }
         ]
     
-    def download_video(self, video_id, output_name, output_path, high_res=False, p_index=0):
+    def download_video(self, video_id, output_name, output_path, high_res=False):
         try:
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
@@ -760,14 +760,14 @@ class PurePytubefixDownloader(Downloader):
                 video = yt.streams.filter(adaptive=True, file_extension='mp4').\
                     order_by('resolution').desc().first()
                 audio = yt.streams.filter(only_audio=True).first()
-                down_video = video.download(output_path, filename="video_temp")
-                down_audio = audio.download(output_path, filename="audio_temp")
+                down_video = video.download(output_path, "video_temp")
+                down_audio = audio.download(output_path, "audio_temp")
                 print(f"下载完成，正在合并视频和音频")
                 output_file = os.path.join(output_path, f"{output_name}.mp4")
                 os.system(f'{FFMPEG_PATH} -y -i {down_video} -i {down_audio} -vcodec copy -acodec copy {output_file} {REDIRECT}')
                 # 删除临时文件
-                os.remove(f"{down_video}")
-                os.remove(f"{down_audio}")
+                os.remove(down_video)
+                os.remove(down_audio)
                 print(f"合并完成，存储为: {output_name}.mp4")
             else:
                 downloaded_file = yt.streams.filter(progressive=True, file_extension='mp4').\

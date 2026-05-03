@@ -1,4 +1,6 @@
+import os
 import streamlit as st
+from utils.Variables import music_info_path, jp_music_info_path
 
 st.set_page_config(
     page_title="chu-gen-videob30",
@@ -53,6 +55,8 @@ st.set_page_config(
 # pg.run()
 
 # ========== 初始化会话状态 ==========
+if 'has_data' not in st.session_state:
+    st.session_state.has_data = bool(os.path.exists(music_info_path) and os.path.exists(jp_music_info_path))
 if 'config_saved' not in st.session_state:
     st.session_state.config_saved = False
 if 'data_updated_step1' not in st.session_state:
@@ -63,6 +67,9 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 
 # ========== 检查存档状态 ==========
+def has_datas():
+    return st.session_state.get('has_data', False)
+
 def has_valid_save():
     """检查是否有有效存档"""
     return (st.session_state.get('config_saved', False) and 
@@ -76,7 +83,9 @@ homepage = st.Page("st_pages/0_homepage.py",
 
 setup = st.Page("st_pages/1_Setup_Achivments.py",
                 title="获取 / 管理存档",
-                icon=":material/leaderboard:")
+                icon=":material/leaderboard:",
+                visibility="visible" if has_datas() else "hidden"
+                )
 
 # 需要存档的页面 - 根据状态决定是否可见
 img_gen = st.Page("st_pages/Generate_Pic_Resources.py",

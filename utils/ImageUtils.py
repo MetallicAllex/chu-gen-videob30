@@ -612,12 +612,12 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 rating_center_x = rating_layer.width // 2
                 rating_center_y = rating_layer.height // 2
                 
-                base_rating = record_detail["rating"]
+                base_rating = f"{record_detail["rating"]:.2f}"
                 new_rating = calculate_rating(record_detail['score'], new_const)
                 if new_const != old_const:
-                    rating_text = f'{base_rating} → {new_rating}(NEXT)'
+                    rating_text = f'{base_rating:.2f} → {new_rating:.2f}(NEXT)'
                 else:
-                    rating_text = f'{base_rating}(NEXT)'
+                    rating_text = f'{base_rating:.2f}(NEXT)'
                 
                 TextDraw(
                     rating_layer,

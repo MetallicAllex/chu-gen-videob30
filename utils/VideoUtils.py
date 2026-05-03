@@ -211,7 +211,7 @@ def create_info_segment(clip_config, encoder_param, style_config, output_path='.
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
-        print(f"已生成您的视频片段，名称为: {output_path}")
+        print(f"已生成您的视频片段，名称为：{output_path}")
         print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
         return VideoFileClip(output_path)
     except subprocess.CalledProcessError as e:
@@ -486,7 +486,7 @@ def create_video_segment(clip_config, encoder_param, style_config, output_path='
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
-        print(f"已生成您的视频片段，名称为: {output_path}")
+        print(f"已生成您的视频片段，名称为：{output_path}")
         print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
         return VideoFileClip(output_path)
     except subprocess.CalledProcessError as e:

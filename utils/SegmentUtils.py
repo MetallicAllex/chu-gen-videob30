@@ -6,10 +6,7 @@
 import numpy as np
 from datetime import datetime
 from queue import Queue, Empty
-import os
-import threading
-import subprocess
-import time
+import os, threading, subprocess, time
 from typing import Any, Dict, List, Tuple, Optional
 
 from moviepy import VideoFileClip, ImageClip, vfx, afx
@@ -17,7 +14,7 @@ from moviepy import VideoFileClip, ImageClip, vfx, afx
 from utils.DataUtils import sort_video_files
 from utils.ImageUtils import create_blank_image
 from utils.PageUtils import format_time_difference
-from utils.Variables import HARD_RENDER_METHOD, REVERSE_LEVEL_LABELS
+from utils.Variables import HARD_RENDER_METHOD, REVERSE_LEVEL_LABELS, image_root_path
 
 
 # ==================== 常量定义 ====================
@@ -102,6 +99,11 @@ class VideoGenerator:
         self.style_config = style_config
         self.resolution = encoder_param['resolution']
         self.bitrate = encoder_param['bitrate']
+
+    def _build_encoding_arg(self) -> str:
+        hwaccel = self.encoder_param['hwaccel']
+        codec = self.encoder_param['codec']
+        return codec if hwaccel else "libx264"
     
     def _build_encoding_args(self) -> List[str]:
         """构建编码参数"""
@@ -141,8 +143,7 @@ class VideoGenerator:
                    error: subprocess.CalledProcessError):
         """记录FFmpeg错误日志"""
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_content = f"""
-========================== FFmpeg 生成失败！============================
+        log_content = f"""========================== FFmpeg 生成失败！============================
 生成时间：{timestamp}，
 视频 ID: {clip_config.get('id', 'N/A')}，
 输出路径: {output_path}，
@@ -197,7 +198,8 @@ class InfoSegmentGenerator(VideoGenerator):
         
         # 构建FFmpeg命令
         input_args, filter_complex, audio_stream = self._build_ffmpeg_command(
-            clip_config, bg_video_path, bg_image_path, bg_audio_path
+            clip_config, bg_video_path, 
+            bg_image_path, bg_audio_path
         )
         
         output_path = self._prepare_output_path(clip_config, temp_output_path)
@@ -220,7 +222,8 @@ class InfoSegmentGenerator(VideoGenerator):
         
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
-            print(f"已生成您的视频片段，名称为: {output_path}")
+            # print(f"已生成您的视频片段，名称为：{output_path}")
+            print(f"已生成您的视频片段，名称为：{clip_config['id']}.mp4")
             print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
             return VideoFileClip(output_path)
         except subprocess.CalledProcessError as e:
@@ -243,22 +246,74 @@ class InfoSegmentGenerator(VideoGenerator):
         if bg_page and no_overlay:
             print(f"信息: 片段 {clip_config['id']} 已禁用底板图像")
             return None
-        elif clip_config.get('full_image'):
-            return os.path.abspath(clip_config['full_image']).replace('\\', '/')
-        return None
+        elif bg_page and no_overlay == False:
+            print(f"信息: 片段 {clip_config['id']} 已启用底板图像，但未填写内容，使用默认底板")
+        return os.path.abspath(clip_config['full_image']).replace('\\', '/')
+        # return None
     
     def _get_bg_audio_path(self, clip_config: dict) -> Optional[str]:
         """获取背景音频路径"""
         from utils.Variables import audios_path
         
-        if clip_config.get('no_sound'):
-            return None
+        # if clip_config.get('no_sound'):
+        #     return None
         
         path = os.path.abspath(f"{audios_path}/bgm.mp3").replace('\\', '/')
-        return path if os.path.exists(path) else None
+        return path if (os.path.exists(path) or clip_config['no_sound']) else None
+    
+    # def _build_ffmpeg_command(self, clip_config: dict, bg_video_path: str,
+    #                         bg_image_path: Optional[str], bg_audio_path: Optional[str]) -> Tuple[List[str], str, str]:
+    #     """构建FFmpeg命令组件（仅用于 info 片段）"""
+    #     duration = clip_config['duration']
+    #     darkness = self.style_config['darkness']
+        
+    #     input_args = ['-i', bg_video_path]
+    #     filter_parts = []
+        
+    #     # 动态索引计数器
+    #     next_input_idx = 1
+        
+    #     # 背景视频处理
+    #     filter_parts.append(
+    #         f'[0:v]loop=loop=-1:size=1000:start=0,'
+    #         f'trim=duration={duration},'
+    #         f'eq=brightness={darkness}[bg_processed];'
+    #     )
+        
+    #     # 背景图片叠加（动态索引）
+    #     if bg_image_path:
+    #         input_args.extend(['-i', bg_image_path])
+    #         filter_parts.append(
+    #             f'[bg_processed][{next_input_idx}:v]overlay=0:0[bg_combined];'
+    #         )
+    #         base_stream = 'bg_combined'
+    #         next_input_idx += 1
+    #     else:
+    #         base_stream = 'bg_processed'
+        
+    #     # 最终缩放
+    #     filter_parts.append(
+    #         f'[{base_stream}]scale={self.resolution[0]}:{self.resolution[1]},'
+    #         f'trim=duration={duration},'
+    #         f'setpts=PTS-STARTPTS[v_out];'
+    #     )
+        
+    #     # 音频处理（info 片段可选静音）
+    #     audio_stream = 'a_out'
+    #     if bg_audio_path:
+    #         # 有背景音乐
+    #         input_args.extend(['-i', bg_audio_path])
+    #         filter_parts.append(
+    #             f'[{next_input_idx}:a]atrim=duration={duration},asetpts=PTS-STARTPTS[a_out]'
+    #         )
+    #     else:
+    #         # 静音（no_sound = True）
+    #         filter_parts.append(f'aevalsrc=0:duration={duration}[a_out]')
+        
+    #     return input_args, ''.join(filter_parts), audio_stream
     
     def _build_ffmpeg_command(self, clip_config: dict, bg_video_path: str,
-                            bg_image_path: Optional[str], bg_audio_path: Optional[str]) -> Tuple[List[str], str, str]:
+                        bg_image_path: Optional[str], bg_audio_path: Optional[str]) -> Tuple[List[str], str, str]:
         """构建FFmpeg命令组件（仅用于 info 片段）"""
         duration = clip_config['duration']
         darkness = self.style_config['darkness']
@@ -266,24 +321,24 @@ class InfoSegmentGenerator(VideoGenerator):
         input_args = ['-i', bg_video_path]
         filter_parts = []
         
-        # 动态索引计数器
-        next_input_idx = 1
+        # 文件索引计数器，从0开始
+        file_idx = 0
         
         # 背景视频处理
         filter_parts.append(
-            f'[0:v]loop=loop=-1:size=1000:start=0,'
+            f'[{file_idx}:v]loop=loop=-1:size=1000:start=0,'  # 使用计数器
             f'trim=duration={duration},'
             f'eq=brightness={darkness}[bg_processed];'
         )
         
-        # 背景图片叠加（动态索引）
+        # 背景图片叠加
         if bg_image_path:
+            file_idx += 1  # 递增到1
             input_args.extend(['-i', bg_image_path])
             filter_parts.append(
-                f'[bg_processed][{next_input_idx}:v]overlay=0:0[bg_combined];'
+                f'[bg_processed][{file_idx}:v]overlay=0:0[bg_combined];'  # 使用递增后的值
             )
             base_stream = 'bg_combined'
-            next_input_idx += 1
         else:
             base_stream = 'bg_processed'
         
@@ -294,16 +349,15 @@ class InfoSegmentGenerator(VideoGenerator):
             f'setpts=PTS-STARTPTS[v_out];'
         )
         
-        # 音频处理（info 片段可选静音）
+        # 音频处理
         audio_stream = 'a_out'
         if bg_audio_path:
-            # 有背景音乐
+            file_idx += 1  # 递增到下一个可用索引
             input_args.extend(['-i', bg_audio_path])
             filter_parts.append(
-                f'[{next_input_idx}:a]atrim=duration={duration},asetpts=PTS-STARTPTS[a_out]'
+                f'[{file_idx}:a]atrim=duration={duration},asetpts=PTS-STARTPTS[a_out]'
             )
         else:
-            # 静音（no_sound = True）
             filter_parts.append(f'aevalsrc=0:duration={duration}[a_out]')
         
         return input_args, ''.join(filter_parts), audio_stream
@@ -350,14 +404,14 @@ class VideoSegmentGenerator(VideoGenerator):
             output_path
         ]
         
-        song_name = clip_config.get('song_name', 'Unknown')
-        level = REVERSE_LEVEL_LABELS.get(clip_config.get('level_index'), '')
+        song_name = clip_config['song_name']
+        level = REVERSE_LEVEL_LABELS[clip_config['level_index']]
         print(f"正在为您生成【{song_name} - {level}】的片段")
         print("正在执行 FFmpeg 生成命令。")
         
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
-            print(f"已生成您的视频片段，名称为: {output_path}")
+            print(f"已生成您的视频片段，名称为：{clip_config['id']}-{level}.mp4")
             print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
             return VideoFileClip(output_path)
         except subprocess.CalledProcessError as e:
@@ -376,29 +430,104 @@ class VideoSegmentGenerator(VideoGenerator):
             'height': int(height * self.resolution[1] / 1080)
         }
     
+    # def _build_ffmpeg_command(self, clip_config: dict) -> Tuple[List[str], str, str]:
+    #     from utils.Variables import bgclips_path
+        
+    #     duration = clip_config['duration']
+    #     start_time = clip_config['start']
+    #     darkness = self.style_config['darkness']
+        
+    #     # 文件路径
+    #     bg_video_path = os.path.abspath(f"{bgclips_path}/bg.mp4").replace('\\', '/')
+    #     main_image_path = self._get_main_image_path(clip_config)
+    #     video_path = self._get_video_path(clip_config)
+        
+    #     # 检查视频路径
+    #     if not video_path or not os.path.exists(video_path):
+    #         raise ValueError(f"视频文件不存在: {video_path}")
+        
+    #     input_args = ['-i', bg_video_path]
+    #     filter_parts = []
+        
+    #     # 动态追踪当前输入索引
+    #     bg_idx = 0  # 背景视频索引
+    #     img_idx = 1
+    #     video_idx = 2
+        
+    #     # 处理背景和图片叠加
+    #     if main_image_path:
+    #         input_args.extend(['-i', main_image_path])
+            
+    #         filter_parts.append(f'[{img_idx}:v]scale={self.resolution[0]}:{self.resolution[1]}[img];')
+    #         filter_parts.append(
+    #             f'[{bg_idx}:v]loop=loop=-1:size=1000:start=0,'
+    #             f'trim=duration={duration},'
+    #             f'scale={self.resolution[0]}:{self.resolution[1]},'
+    #             f'eq=brightness={darkness}[bg_processed];'
+    #         )
+    #         filter_parts.append('[bg_processed][img]overlay=0:0[bg_img];')
+    #         base_stream = 'bg_img'
+    #     else:
+    #         filter_parts.append(
+    #             f'[{bg_idx}:v]loop=loop=-1:size=1000:start=0,'
+    #             f'trim=duration={duration},'
+    #             f'scale={self.resolution[0]}:{self.resolution[1]},'
+    #             f'eq=brightness={darkness}[bg_img];'
+    #         )
+    #         base_stream = 'bg_img'
+        
+    #     # 处理视频叠加
+    #     input_args.extend(['-i', video_path])
+    #     # video_idx = len(input_args) - 1
+        
+    #     coords = self._get_coordinates()
+    #     filter_parts.append(
+    #         f'[{video_idx}:v]scale=-1:{coords["height"]},'
+    #         f'trim=start={start_time}:duration={duration},'
+    #         f'setpts=PTS-STARTPTS[overlay_vid];'
+    #     )
+    #     filter_parts.append(
+    #         f'[{base_stream}][overlay_vid]overlay={coords["left"]}:{coords["top"]}[final_video];'
+    #     )
+    #     filter_parts.append(f'[final_video]trim=duration={duration}[v_out];')
+    #     filter_parts.append(
+    #         f'[{video_idx}:a]atrim=start={start_time}:duration={duration},'
+    #         f'asetpts=PTS-STARTPTS[a_out]'
+    #     )
+        
+    #     return input_args, ''.join(filter_parts), 'a_out'
+    
     def _build_ffmpeg_command(self, clip_config: dict) -> Tuple[List[str], str, str]:
-        """构建FFmpeg命令组件（仅用于 main 片段）"""
         from utils.Variables import bgclips_path
         
         duration = clip_config['duration']
         start_time = clip_config['start']
         darkness = self.style_config['darkness']
         
-        # 文件路径
         bg_video_path = os.path.abspath(f"{bgclips_path}/bg.mp4").replace('\\', '/')
         main_image_path = self._get_main_image_path(clip_config)
         video_path = self._get_video_path(clip_config)
         
-        input_args = ['-i', bg_video_path]
+        input_args = [
+            '-i', bg_video_path,
+            '-i', main_image_path,
+            '-i', video_path,
+        ]
+        
         filter_parts = []
         
-        # 背景处理
-        base_stream = self._process_background(filter_parts, input_args, main_image_path, duration, darkness)
+        # 索引硬编码，清晰明确
+        bg_video_idx = 0
+        img_idx = 1
+        video_idx = 2
         
-        # 视频叠加处理（main 片段始终有音频，不需要静音分支）
-        audio_stream = self._process_video_overlay(
-            filter_parts, input_args, video_path, base_stream, start_time, duration
-        )
+        # 处理背景
+        base_stream = self._process_background(filter_parts, bg_video_idx,
+                                    img_idx, duration, darkness)
+        
+        # 处理视频叠加
+        audio_stream = self._process_video_overlay(filter_parts, video_idx, 
+                                base_stream, start_time, duration)
         
         return input_args, ''.join(filter_parts), audio_stream
     
@@ -406,9 +535,9 @@ class VideoSegmentGenerator(VideoGenerator):
         """获取主图片路径"""
         full_image = clip_config.get('full_image')
         main_image = clip_config['main_image']
-        # if full_image and os.path.exists(full_image):
-        return os.path.abspath(full_image if full_image and os.path.exists(full_image) else main_image).replace('\\', '/')
-        # return os.path.abspath(main_image).replace('\\', '/')
+        if full_image is not None and os.path.exists(full_image):
+            return os.path.abspath(full_image).replace('\\', '/')
+        return os.path.abspath(main_image).replace('\\', '/')
     
     def _get_video_path(self, clip_config: dict) -> Optional[str]:
         """获取视频路径"""
@@ -417,40 +546,70 @@ class VideoSegmentGenerator(VideoGenerator):
             return os.path.abspath(video).replace('\\', '/')
         return None
     
-    def _process_background(self, filter_parts: List[str], input_args: List[str],
-                        main_image_path: Optional[str], duration: float, darkness: float) -> str:
-        """处理背景（使用动态索引）"""
-        current_idx = 0  # 背景视频索引
+    # def _process_background(self, filter_parts: List[str], input_args: List[str],
+    #                     main_image_path: Optional[str], duration: float, darkness: float) -> str:
+    #     """处理背景（使用动态索引）"""
+    #     current_idx = 0  # 背景视频索引
         
-        if main_image_path:
-            input_args.extend(['-i', main_image_path])
-            next_idx = len(input_args) - 1  # 动态获取刚添加的图片索引
+    #     if main_image_path:
+    #         input_args.extend(['-i', main_image_path])
+    #         next_idx = len(input_args) - 1  # 动态获取刚添加的图片索引
             
-            filter_parts.append(f'[{next_idx}:v]scale={self.resolution[0]}:{self.resolution[1]}[img];')
-            filter_parts.append(
-                f'[{current_idx}:v]loop=loop=-1:size=1000:start=0,'
-                f'trim=duration={duration},'
-                f'scale={self.resolution[0]}:{self.resolution[1]},'
-                f'eq=brightness={darkness}[bg_processed];'
-            )
-            filter_parts.append('[bg_processed][img]overlay=0:0[bg_img];')
-            return 'bg_img'
-        else:
-            filter_parts.append(
-                f'[{current_idx}:v]loop=loop=-1:size=1000:start=0,'
-                f'trim=duration={duration},'
-                f'scale={self.resolution[0]}:{self.resolution[1]},'
-                f'eq=brightness={darkness}[bg_img];'
-            )
-            return 'bg_img'
+    #         filter_parts.append(f'[{next_idx}:v]scale={self.resolution[0]}:{self.resolution[1]}[img];')
+    #         filter_parts.append(
+    #             f'[{current_idx}:v]loop=loop=-1:size=1000:start=0,'
+    #             f'trim=duration={duration},'
+    #             f'scale={self.resolution[0]}:{self.resolution[1]},'
+    #             f'eq=brightness={darkness}[bg_processed];'
+    #         )
+    #         filter_parts.append('[bg_processed][img]overlay=0:0[bg_img];')
+    #         return 'bg_img'
+    #     else:
+    #         filter_parts.append(
+    #             f'[{current_idx}:v]loop=loop=-1:size=1000:start=0,'
+    #             f'trim=duration={duration},'
+    #             f'scale={self.resolution[0]}:{self.resolution[1]},'
+    #             f'eq=brightness={darkness}[bg_img];'
+    #         )
+    #         return 'bg_img'
 
-    def _process_video_overlay(self, filter_parts: List[str], input_args: List[str],
-                            video_path: str, base_stream: str, start_time: float, duration: float) -> str:
-        """处理视频叠加（使用动态索引）"""
-        coords = self._get_coordinates()
+    def _process_background(self, filter_parts, bg_video_idx, img_idx, duration, darkness):
+        filter_parts.append(f'[{img_idx}:v]scale={self.resolution[0]}:{self.resolution[1]}[img];')
+        filter_parts.append(
+            f'[{bg_video_idx}:v]loop=loop=-1:size=1000:start=0,'
+            f'trim=duration={duration},'
+            f'scale={self.resolution[0]}:{self.resolution[1]},'
+            f'eq=brightness={darkness}[bg_processed];'
+        )
+        filter_parts.append('[bg_processed][img]overlay=0:0[bg_img];')
+        return 'bg_img'
+
+    # def _process_video_overlay(self, filter_parts: List[str], input_args: List[str],
+    #                         video_path: str, base_stream: str, start_time: float, duration: float) -> str:
+    #     """处理视频叠加（使用动态索引）"""
+    #     coords = self._get_coordinates()
         
-        input_args.extend(['-i', video_path])
-        video_idx = len(input_args) - 1  # 动态获取视频索引
+    #     input_args.extend(['-i', video_path])
+    #     video_idx = len(input_args) - 1  # 动态获取视频索引
+        
+    #     filter_parts.append(
+    #         f'[{video_idx}:v]scale=-1:{coords["height"]},'
+    #         f'trim=start={start_time}:duration={duration},'
+    #         f'setpts=PTS-STARTPTS[overlay_vid];'
+    #     )
+    #     filter_parts.append(
+    #         f'[{base_stream}][overlay_vid]overlay={coords["left"]}:{coords["top"]}[final_video];'
+    #     )
+    #     filter_parts.append(f'[final_video]trim=duration={duration}[v_out];')
+    #     filter_parts.append(
+    #         f'[{video_idx}:a]atrim=start={start_time}:duration={duration},'
+    #         f'asetpts=PTS-STARTPTS[a_out]'
+    #     )
+        
+    #     return 'a_out'
+    
+    def _process_video_overlay(self, filter_parts, video_idx, base_stream, start_time, duration):
+        coords = self._get_coordinates()
         
         filter_parts.append(
             f'[{video_idx}:v]scale=-1:{coords["height"]},'
@@ -471,7 +630,7 @@ class VideoSegmentGenerator(VideoGenerator):
     def _prepare_output_path(self, clip_config: dict, temp_output_path: str) -> str:
         """准备临时输出路径"""
         if os.path.isdir(temp_output_path):
-            level_label = REVERSE_LEVEL_LABELS.get(clip_config.get('level_index'), '')
+            level_label = REVERSE_LEVEL_LABELS[clip_config['level_index']]
             return os.path.join(temp_output_path, f"{clip_config['id']}-{level_label}.mp4")
         return temp_output_path
 
@@ -638,7 +797,7 @@ def render_all_video_clips(
                     clip.write_videofile(
                         final_output_file,
                         fps=DEFAULT_FPS,
-                        threads=8,
+                        threads=4,
                         codec="libx264",
                         bitrate=f'{bitrate}k'
                     )

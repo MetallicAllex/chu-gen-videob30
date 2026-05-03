@@ -5,6 +5,7 @@ import shutil, time, traceback
 from utils.ImageUtils import render_all_images
 from utils.Variables import ACCEL_BRAND, HARD_RENDER_METHOD
 from utils.PageUtils import format_time_difference, get_ffmpeg_version
+from utils.Taichi.AccelRenderer2 import render_all_clips_accel2
 # from utils.VideoUtils import render_all_video_clips, combine_full_video_direct
 from utils.SegmentUtils import render_all_video_clips, combine_full_video_direct
 
@@ -138,6 +139,11 @@ os.makedirs('./videos/temp_generated', exist_ok=True)
 trans_enable = _trans_enable
 trans_time = _trans_time
 
+trans_params = {
+    'enabled': G_config['VIDEO_TRANS_ENABLE'],
+    'duration': G_config['VIDEO_TRANS_TIME']
+}
+
 with st.container(border=True):
     st.write("渲染设置")
     st.info("已生成的片段不会受到影响，除非您重新渲染它们", icon="ℹ️")
@@ -214,7 +220,8 @@ with st.container(border=True):
                 placeholder="1000 ≤ 码率 ≤ 20000"
             )
             bitrate_display = f"自定义（{v_bitrate}kbps）"  # 自定义码率的显示格式
-        
+            
+
 # trans_config_placeholder = st.empty()
 # 仅当选择 "完整视频" 时才显示过渡选项
     if not clips_only:
@@ -264,8 +271,10 @@ def save_video_render_config():
 
 if hwaccel:
     opt_encoder = f"h264_{HARD_RENDER_METHOD[accel_brand]['codec']}"
+    encoder_param['codec'] = opt_encoder
 else:
     opt_encoder = "libx264"
+    encoder_param['codec'] = opt_encoder
 
 st.error(f"""
         **注意事项：**
@@ -361,6 +370,33 @@ if st.session_state.global_rendering:
         #     # 合并视频拼接逻辑：只有 classic_fast_render 参数不同
         #     combine_full_video_direct(video_output_path, username)
         
+        # 定义进度回调函数
+        # def progress_callback(clip_index, total_clips, frame, total_frames, clip_name):
+        #     """进度回调
+        #     Args:
+        #         clip_index: 当前是第几个片段（从0开始）
+        #         total_clips: 总片段数
+        #         frame: 当前帧（从1开始）
+        #         total_frames: 当前片段总帧数
+        #         clip_name: 片段名称
+        #     """
+        #     clip_progress = frame / total_frames * 100
+        #     # overall_progress = (clip_index + frame / total_frames) / total_clips * 100
+        #     print(f"正在渲染 ID 为 {clip_name} 的第 {clip_index} 个片段：当前已完成 {clip_progress:.0f} %（{frame}/{total_frames} 帧）")
+        
+        # # 在调用前初始化 GPU（放在 try 块开始处，第 241 行附近）
+        # # init_taichi()  # 自动选择最佳 GPU 后端
+
+        # render_all_clips_accel2(
+        #     video_configs,
+        #     video_output_path,
+        #     encoder_param,
+        #     trans_params,
+        #     style_config,
+        #     force_render_clip,
+        #     progress_callback
+        # )
+        
         render_all_video_clips(
             video_configs,           # 视频配置数据
             video_output_path,     # 最终片段存储目录（如 './videos/clips'）
@@ -380,8 +416,8 @@ if st.session_state.global_rendering:
         st.toast("渲染完成！", icon="✅")
         
     except Exception as e:
-        st.error(f"渲染失败（显示 5 秒）: {str(e)}", icon="❌")
-        time.sleep(5)
+        st.error(f"渲染失败（显示 10 秒）: {str(e)}", icon="❌")
+        time.sleep(10)
         
     finally:
         # 清理和恢复状态

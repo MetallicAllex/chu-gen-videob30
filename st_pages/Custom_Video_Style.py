@@ -417,7 +417,8 @@ if os.path.exists(custom_dir):
             tab_video, tab_audio = st.tabs(["🎬 背景视频", "🎵 背景音乐"])
             # 添加悬停效果CSS（和上面共用）
             with tab_video:
-                st.info("上传视频背景素材（.mp4，分辨率 1080p 或更高）")
+                st.info("上传视频背景素材（.mp4，分辨率推荐 1080p）", icon="ℹ️")
+                st.warning("请不要上传过长过大的文件（> 1min | > 10MB），否则会导致生成时因内存不足直接失败", icon="⚠️")
                 
                 # 初始化状态
                 if "video_upload_info" not in st.session_state:
