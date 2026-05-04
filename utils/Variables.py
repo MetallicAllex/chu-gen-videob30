@@ -181,5 +181,5 @@ HARD_RENDER_METHOD = {
     "d3d12va": { "codec": "d3d12va" }
 }
 
-ACCEL_BRAND = ["d3d12va", "NVIDIA", "AMD", "Intel"]
-# ACCEL_BRAND_CAPTIONS = ["自动选择(可能不准确)", "NVENCoder(NVENC)", "AMFramework(含集显)", "QSyncVideo(含集显)"]
+ACCEL_BRAND = ["NVIDIA", "AMD", "Intel"]
+# ACCEL_BRAND_CAPTIONS = ["NVENCoder(NVENC)", "AMFramework(含集显)", "QSyncVideo(含集显)"]

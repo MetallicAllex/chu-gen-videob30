@@ -173,8 +173,8 @@ with st.container(border=True):
     display_col1, display_col2, display_col3 = st.columns(3, vertical_alignment="center")
 
     with display_col1:
-        accel_brand = st.selectbox("设备 GPU 品牌", ACCEL_BRAND, 0,
-            help="d3d12va 为自动选择（可能不准确），如果有问题请根据机器 GPU 品牌选择",
+        accel_brand = st.selectbox("加速方案", ACCEL_BRAND, 0,
+            help="请根据机器 GPU 品牌选择",
             disabled=button_disable_stat or not hwaccel
         )
         encoder_param["brand"] = accel_brand
