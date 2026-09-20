@@ -3,51 +3,51 @@ import os, traceback
 import streamlit as st
 from PIL.Image import Resampling
 from PIL import Image, ImageDraw, ImageFont
-from utils.PageUtils import calculate_rating
+from utils.PageUtils import calculate_rating, parse_oped_text_markers
 from utils.PathUtils import load_config, save_config
 from utils.TextRenderer import render_text_to_image
 from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, font_path, REVERSE_LEVEL_LABELS
 
-def get_splited_text(text, text_max_bytes=70):
-    """
-    将说明文本按照最大字节数限制切割成多行
+# def get_splited_text(text, text_max_bytes=70):
+#     """
+#     将说明文本按照最大字节数限制切割成多行
     
-    Args:
-        text (str): 输入文本
-        text_max_bytes (int): 每行最大字节数限制（utf-8编码）
+#     Args:
+#         text (str): 输入文本
+#         text_max_bytes (int): 每行最大字节数限制（utf-8编码）
         
-    Returns:
-        str: 按规则切割并用换行符连接的文本
-    """
-    lines = []
-    current_line = ""
+#     Returns:
+#         str: 按规则切割并用换行符连接的文本
+#     """
+#     lines = []
+#     current_line = ""
     
-    # 按现有换行符先分割
-    for line in text.split('\n'):
-        current_length = 0
-        current_line = ""
+#     # 按现有换行符先分割
+#     for line in text.split('\n'):
+#         current_length = 0
+#         current_line = ""
         
-        for char in line:
-            # 计算字符长度：中日文为2，其他为1
-            if '\u4e00' <= char <= '\u9fff' or '\u3040' <= char <= '\u30ff':
-                char_length = 2
-            else:
-                char_length = 1
+#         for char in line:
+#             # 计算字符长度：中日文为2，其他为1
+#             if '\u4e00' <= char <= '\u9fff' or '\u3040' <= char <= '\u30ff':
+#                 char_length = 2
+#             else:
+#                 char_length = 1
             
-            # 如果添加这个字符会超出限制，保存当前行并重新开始
-            if current_length + char_length > text_max_bytes:
-                lines.append(current_line)
-                current_line = char
-                current_length = char_length
-            else:
-                current_line += char
-                current_length += char_length
+#             # 如果添加这个字符会超出限制，保存当前行并重新开始
+#             if current_length + char_length > text_max_bytes:
+#                 lines.append(current_line)
+#                 current_line = char
+#                 current_length = char_length
+#             else:
+#                 current_line += char
+#                 current_length += char_length
         
-        # 处理剩余的字符
-        if current_line:
-            lines.append(current_line)
+#         # 处理剩余的字符
+#         if current_line:
+#             lines.append(current_line)
     
-    return lines
+#     return lines
 
 def create_blank_image(width, height, color=(0, 0, 0, 0)):
     """
@@ -127,8 +127,16 @@ def ScoreLoader(score: int = 0):
                     char_img = char_img.resize(digit_size, Resampling.LANCZOS)
                 
                 char_y = 28 if char == ',' else 4
+                
+                # ========== 修改这里：只调整逗号的 X 偏移 ==========
+                if char == ',':
+                    comma_x_offset = -12  # 向左偏移3px，根据需要调整
+                    paste_x = current_x + comma_x_offset
+                else:
+                    paste_x = current_x
+                    
                 # 正确使用 paste：第三个参数是蒙版（alpha通道）
-                score_number_img.paste(char_img, (current_x, char_y), char_img)
+                score_number_img.paste(char_img, (paste_x, char_y), char_img)
                 current_x += char_width
         except Exception as e:
             print(f"加载字符 '{char}' 失败: {e}")
@@ -194,30 +202,27 @@ def RatingLoader(rating: float):
     return ra_number_img  # 修正：在循环结束后返回
         
 def ComboStatusLoader(combo_status: str = "", score: int = 0):
-    match combo_status:
-        case _ if combo_status == '' or combo_status is None:
-            return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
-        case _ if combo_status == 'alljustice' and score == 1010000:
-            with Image.open(f"{combo_img_path}/13.png") as _comboStatus:
-                return _comboStatus.copy()
-        case _ if combo_status == 'alljustice':
-            with Image.open(f"{combo_img_path}/12.png") as _comboStatus:
-                return _comboStatus.copy()
-        case _ if combo_status == 'fullcombo' :
-            with Image.open(f"{combo_img_path}/11.png") as _comboStatus:
-                return _comboStatus.copy()
+    if not combo_status:
+        return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
+    badge = '13' if combo_status == 'alljustice' and score == 1010000 else \
+            '12' if combo_status == 'alljustice' else \
+            '11' if combo_status == 'fullcombo' else None
+    if badge is None:
+        # 无法识别的取值不能返回 None：调用方会直接 .resize()，报错会和真实原因无关
+        raise ValueError(f"未知的 Combo 类型: {combo_status!r}（可选：''、fullcombo、alljustice）")
+    with Image.open(f"{combo_img_path}/{badge}.png") as _comboStatus:
+        return _comboStatus.copy()
 
 
 def ChainStatusLoader(chain_status: str = ""):
-    match chain_status:
-        case _ if chain_status == '' or chain_status is None:
-            return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
-        case _ if chain_status == 'fullchain2':
-            with Image.open(f"{combo_img_path}/22.png") as _chainStatus:
-                return _chainStatus.copy()
-        case _ if chain_status == 'fullchain':
-            with Image.open(f"{combo_img_path}/21.png") as _chainStatus:
-                return _chainStatus.copy()
+    if not chain_status:
+        return Image.new('RGBA', (80, 80), (0, 0, 0, 0))
+    badge = '22' if chain_status == 'fullchain2' else \
+            '21' if chain_status == 'fullchain' else None
+    if badge is None:
+        raise ValueError(f"未知的 Chain 类型: {chain_status!r}（可选：''、fullchain、fullchain2）")
+    with Image.open(f"{combo_img_path}/{badge}.png") as _chainStatus:
+        return _chainStatus.copy()
 
 
 def TextDraw(image, text: str = "", pos: tuple = (0, 0), offset: tuple = (0, 0), max_width: int = 2000,
@@ -300,10 +305,8 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
         prefix (str): 文件名前缀(deprecated)
         index (int): 索引编号(deprecated)
 
-    Returns:
-        file: Best50 图像
+    渲染失败时抛异常且不落盘：下游把"文件存在"当成"已生成"，写一张错误占位图会被永久当成成品。
     """
-    background = None
     template = style_config['themes']
     position = style_config['position']['image']
     size = style_config['size']
@@ -313,12 +316,14 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
     # 只允许一个下划线分隔符（对应 Best_xx 格式）
     prefix, index = record_detail['clip_id'].split('_', 1)
     try:
-        if template == ('default' or 'custom_default'):
-            assert record_detail['level_index'] in range(0, 5)
-            image_base_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
+        if template in ("default", "custom_default"):
+            if record_detail['level_index'] not in range(0, 5):
+                raise ValueError(f"未知的等级索引: {record_detail['level_index']!r}（可选：0-4）")
+            image_base_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base.png")
             with Image.open(image_base_path) as background:
                 background = background.convert("RGBA")
-                assert background.size == (1920, 1080)
+                if background.size != (1920, 1080):
+                    raise ValueError(f"底图尺寸应为 1920×1080，实际 {background.size}：{image_base_path}")
                 
                 # 载入元素
                 temp_img = Image.new('RGBA', background.size, (0, 0, 0, 0))
@@ -353,7 +358,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 # 成绩数据
                 cur_level = record_detail['level']
                 next_level = record_detail['level_next']
-                cur_text = str(cur_level)
+                cur_text = f"{cur_level:.1f}"
                 if cur_level <= 0.0:
                     cur_text = "--"
                 temp_img = TextDraw(temp_img, cur_text, cur_pos,
@@ -361,13 +366,13 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                                     font_size=cur_next_size, font_color=cur_color, h_align=cur_next_align)
                 
                 if cur_level <= 0:
-                    next_text = str(next_level)
+                    next_text = f"{next_level:.1f}"
                 elif next_level > cur_level:
-                    next_text = str(next_level) + "↑" 
+                    next_text = f"{next_level:.1f}" + "↑" 
                 elif next_level < cur_level:
-                    next_text = str(next_level) + "↓"
+                    next_text = f"{next_level:.1f}" + "↓"
                 else:
-                    next_text = str(next_level) + "→"
+                    next_text = f"{next_level:.1f}" + "→"
                 temp_img = TextDraw(temp_img, next_text, next_pos,
                                     font_path=title_font_path,
                                     font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
@@ -468,7 +473,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 # 将temp_img合成到background上
                 background = Image.alpha_composite(background, temp_img)
         
-        elif template == ('init' or 'custom_init'):
+        elif template in ("init", "custom_init"):
             CORNER_IMG_PATH = f"{image_root_path}/CornerMark.png"
 
             # （此函数只能调用微软字体库中的字体）
@@ -525,7 +530,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 return Image.alpha_composite(corner, text_layer)
             
             fonts = load_fonts("msyh", size)
-            background_path = os.path.join(f"{image_root_path}/Base/content", f"{record_detail['level_index']}.png")
+            background_path = os.path.join(f"{image_root_path}/Base/content/init", f"{record_detail['level_index']}.png")
             with Image.open(background_path) as background:
                 background = background.convert('RGBA')
                 
@@ -559,11 +564,11 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 new_const = record_detail['level_next']
                 
                 if new_const > old_const:
-                    level_text = f"{difficulty_name}[{old_const} ↑ {new_const}(NEXT)]"
+                    level_text = f"{difficulty_name}[{old_const:.1f} ↑ {new_const:.1f}(NEXT)]"
                 elif new_const < old_const:
-                    level_text = f"{difficulty_name}[{old_const} ↓ {new_const}(NEXT)]"
+                    level_text = f"{difficulty_name}[{old_const:.1f} ↓ {new_const:.1f}(NEXT)]"
                 else:
-                    level_text = f"{difficulty_name}[{old_const}(NEXT)]"
+                    level_text = f"{difficulty_name}[{old_const:.1f}(NEXT)]"
                 
                 TextDraw(
                     level_layer,
@@ -612,12 +617,12 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 rating_center_x = rating_layer.width // 2
                 rating_center_y = rating_layer.height // 2
                 
-                base_rating = f"{record_detail["rating"]:.2f}"
+                base_rating = f"{record_detail['rating']:.2f}"
                 new_rating = calculate_rating(record_detail['score'], new_const)
                 if new_const != old_const:
-                    rating_text = f'{base_rating:.2f} → {new_rating:.2f}(NEXT)'
+                    rating_text = f'{base_rating} → {new_rating:.2f}(NEXT)'
                 else:
-                    rating_text = f'{base_rating:.2f}(NEXT)'
+                    rating_text = f'{base_rating}(NEXT)'
                 
                 TextDraw(
                     rating_layer,
@@ -649,17 +654,12 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 
                 for layer, position in layers:
                     background.paste(layer, position, layer)
-    except Exception as e:
-            print(f"在生成图像时出现错误：{e}")
-            print(traceback.format_exc())
-            background = Image.new('RGBA', background.size, (0, 0, 0, 255))
-            error_text = f"生成图像时出现错误：{e}"
-            temp_img = TextDraw(temp_img, error_text, (0, 50), max_width=background.size[0],
-                                 font_path=title_font_path, font_size=32,
-                                 font_color=(255, 255, 255), h_align="left")
-            background = Image.alpha_composite(background, temp_img)
-    finally:
+
         background.save(os.path.join(output_path, f"{prefix}_{index}.png"))
+    except Exception as e:
+        print(f"生成 {prefix} 第 {index} 张图像失败：{e}")
+        print(traceback.format_exc())
+        raise
 
 def render_all_images(video_config_file, style_config_file_path, save_paths, force_regen=False):
     """
@@ -721,8 +721,10 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                 return
             
             theme = style_cfg['themes']
+            # custom_ 前缀（自定义模式）回退到原模板目录
+            intro_theme = theme[7:] if theme.startswith("custom_") else theme
             image_root = save_paths['image_dir']
-            intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png".replace("./", "").replace("/", "\\")
+            intro_bg_path = f"{image_root_path}/Base/intro/{intro_theme}/IntroBase.png".replace("./", "").replace("/", "\\")
             fullbg_dir = os.path.join(image_root, 'fullbg')
             
             # 统计
@@ -737,18 +739,22 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                     bg_page = seg['bg_page']
                     no_overlay = seg['no_overlay']
 
-                    if bg_page:
-                        if no_overlay:  # 勾选 = 不需要背景板底图
-                            full_image_path = ""  # 留空
+                    if no_overlay:
+                        # [无底图] 标记：不叠加任何底图（不再依赖 bg_page 前置）
+                        full_image_path = ""
+                    elif bg_page:
+                        # 旧存档兼容：背景板页使用静态模板底图
+                        full_image_path = intro_bg_path if os.path.exists(intro_bg_path) else ""
+                        if full_image_path:
                             filled += 1
-                        else:  # 不勾选 = 需要背景板底图
-                            full_image_path = intro_bg_path if os.path.exists(intro_bg_path) else ""
-                            if full_image_path:
-                                filled += 1
                     else:
-                        # 普通文本页面
-                        full_image_path = os.path.join(fullbg_dir, file_name)
-                        filled += 1
+                        # 普通文本页面：底图只有真实生成过才写入路径——
+                        # 文本为空/生成失败时留下幽灵路径，会让两条渲染路径
+                        # 行为分歧（quad 优雅跳过、SegmentUtils 直接炸）
+                        candidate = os.path.join(fullbg_dir, file_name)
+                        full_image_path = candidate if os.path.exists(candidate) else ""
+                        if full_image_path:
+                            filled += 1
                     
                     # if bg_page:
                     #     if no_overlay:
@@ -809,7 +815,9 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
         os.makedirs(fullbg_dir, exist_ok=True)
         
         # 准备背景路径
-        intro_bg_path = f"{image_root_path}/Base/intro/{theme}/IntroBase.png"
+        # custom_ 前缀（自定义模式）回退到原模板目录
+        intro_theme = theme[7:] if theme.startswith("custom_") else theme
+        intro_bg_path = f"{image_root_path}/Base/intro/{intro_theme}/IntroBase.png"
         content_bg_dir = f"{image_root}/background"
         
         # 渲染配置
@@ -829,6 +837,17 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                 text = seg.get('text', '')
                 if not text or not text.strip():
                     continue
+                # 防御：剥离可能残留在配置里的内联标记（[静音]/[无底图]），
+                # 它们是行为开关，绝不能被渲染到展示图上。
+                # 仅限 intro/ending——标记是片头片尾专属特性，main 评论没有
+                # 对应开关，字面量方括号文本应原样保留
+                if seg_type in ('intro', 'ending'):
+                    text, _ = parse_oped_text_markers(text)
+                    if not text or not text.strip():
+                        continue
+                    # [无底图] 页没有可附着文字的底图，跳过文字图生成
+                    if seg.get('no_overlay'):
+                        continue
                 
                 file_name = f"{seg['clip_id'] if seg_type == 'main' else seg['id']}.png"
                 

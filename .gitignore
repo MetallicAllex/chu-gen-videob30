@@ -10,6 +10,7 @@ cred_datas/
 # B30 cache directories
 b30_datas/
 videos/  
+cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -143,6 +144,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+utils/quad-docs
 st_pages/2_Search_For_Videoes_old.py
 
 # Spyder project settings
@@ -154,6 +156,7 @@ st_pages/2_Search_For_Videoes_old.py
 
 # mkdocs documentation
 /site
+oauth_docs/
 
 # mypy
 .mypy_cache/
@@ -182,6 +185,7 @@ cython_debug/
 
 # Beatmap datasets
 music_datasets/
+cloudflare/
 # *.json
 
 # debug and test resources
@@ -190,11 +194,21 @@ ffprobe.exe
 start.bat
 global_config.yaml
 assets/thumbnails/
-chu-gen-videob30-v1.1.2.1.zip
-utils/VideoUtils-ori.py
-utils/VideoUtilsAlt.py
-utils/Taichi
-# utils/TaichiAccel.py
-# utils/AccelRenderer.py
-# utils/transition.py
 COMMITMSG.txt
+experiments/
+output/
+script/
+_chat_text_split.txt
+_chat_text.txt
+.dsh-edit-review-archive.json
+.dsh-edit-review.json
+
+# 素材兜底备份：样式编辑器在覆写前自动 copy2(当前→bak)，不随仓库/包体分发
+assets/BgClips/bg_bak.mp4
+assets/Audios/bgm_bak.mp3
+assets/images/Base/content/content_base-bak.png
+assets/images/Base/content/default/content_base-bak.png
+assets/images/Base/content/init/*-bak.png
+assets/images/Frames/*-bak.png
+# 定数版本对比的预留底图，渲染实现尚未接入，先不入库
+assets/images/Base/content/versions/

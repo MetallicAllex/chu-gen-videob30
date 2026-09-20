@@ -1,8 +1,8 @@
 import streamlit as st
-import time, os, traceback
+import time, os, shutil, traceback
 from datetime import datetime
 from utils.PathUtils import *
-from utils.DataUtils import gen_video_config
+from utils.DataUtils import gen_video_config, merge_b50_data
 from utils.Variables import REVERSE_LEVEL_LABELS
 
 DEFAULT_VIDEO_MAX_DURATION = 180
@@ -67,6 +67,9 @@ with st.container(border=True):
                 if st.button("使用此存档", help="（只需要点击一次！）", width='stretch', icon="▶️"):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
+                        # 缺失汇总与挂起的素材扫描都指向旧存档的文件路径，切档后一并作废
+                        st.session_state.pop('vc_missing_report', None)
+                        st.session_state.pop('vc_pending_scan', None)
                         st.rerun()
                     else:
                         st.error("存档路径无效！", icon="❌")
@@ -82,7 +85,7 @@ video_config_output_file = current_paths['video_config']
 old_video_config_file = current_paths['old_video_config']
 video_download_path = f"./videos/downloads"
 
-def refresh_main_image_paths(config_path, username, save_id, max_order_id):
+def refresh_main_image_paths(config_path, username, save_id, max_order_id=None):
     """
     更新 video_config.json 中 main_image 字段的路径，使用当前的 username 和 save_id。
 
@@ -90,12 +93,14 @@ def refresh_main_image_paths(config_path, username, save_id, max_order_id):
         config_path: video_config.json 的完整路径
         username: 当前存档用户名
         save_id: 当前存档时间 ID（如 '20250410_123456'）
-        max_order_id: 最大处理数
+        max_order_id: 序号上限，缺省取本存档的片段数（超过它的名次就是错的名次）
     """
     if not os.path.exists(config_path):
         raise FileNotFoundError("找不到配置文件：" + config_path)
 
     config_data = load_config(config_path)
+    if max_order_id is None:
+        max_order_id = len(config_data.get("main", []))
 
     new_base_path = os.path.normpath(f"b30_datas/{username}/{save_id}/images/background")
 
@@ -256,7 +261,13 @@ def update_preview(preview_placeholder, config, current_index):
 
         # 检查是否存在图片和视频：
         if not os.path.exists(item['main_image']):
-            st.error(f"图片 {item['main_image']} 不存在，请检查前置步骤是否完成！")
+            if item['main_image'] == "":
+                # 空路径 = 生成配置那一刻图片就不存在（当时渲染失败或未生成），不是文件后来被删
+                st.error(f"图片 {item['clip_id']}.png 缺失：生成配置时这张图就不存在（通常为当时渲染失败或未生成）。"
+                         f"请到【生成 Best50 图 / 查看数据】页重新生成图片，补齐后再重新生成视频内容配置！")
+            else:
+                st.error(f"图片 {item['main_image']} 不存在：文件可能被移动或删除，"
+                         f"可到【生成 Best50 图 / 查看数据】页重新生成！")
             return
 
         # 显示当前视频片段的内容
@@ -291,14 +302,14 @@ def update_preview(preview_placeholder, config, current_index):
         main_col1, main_col2 = st.columns(2)
         with main_col1:
             st.image(item['main_image'], caption="成绩图（中间的视频预览窗是透明的）")
-            if st.button("打开视频存储文件夹", key=f"open_folder_{item['id']}", help=absolute_path, width='stretch', icon="📂"):
+            if st.button("打开视频存储文件夹", key=f"open_folder_{item['id']}_{REVERSE_LEVEL_LABELS.get(item['level_index'])}", help=absolute_path, width='stretch', icon="📂"):
                 open_file_explorer(absolute_path)
         with main_col2:
             if os.path.exists(item['video']):
                 st.video(item['video'])
                 # st.write("")
                 # st.write("")
-                if st.button("直接删除！", key=f"delete_btn_{item['id']}", 
+                if st.button("直接删除！", key=f"delete_btn_{item['id']}_{REVERSE_LEVEL_LABELS.get(item['level_index'])}", 
                              help=f"不是你喜欢的谱面确认？",
                              width='stretch',
                              icon="🗑️"
@@ -493,10 +504,106 @@ if downloader_type == "youtube":
 elif downloader_type == "bilibili":
     b30_config_file = current_paths['config_bi']
 if not os.path.exists(b30_config_file):
-    st.error(f"未找到配置文件【{b30_config_file}】，请检查 Best50 存档数据完整性！", icon="⚠️")
-    st.stop()
+    # 索引副本只在进入搜索/下载页时才从数据主文件复制出来；直接来本页生成配置时补上这一步，
+    # 免得让人折返（数据主文件也缺失时才真的是存档损坏）。
+    data_file = current_paths['data_file']
+    if os.path.exists(data_file):
+        shutil.copy(data_file, b30_config_file)
+        st.toast(f"已从数据主文件创建 {os.path.basename(b30_config_file)}", icon="ℹ️")
+    else:
+        st.error(f"未找到配置文件【{b30_config_file}】与数据主文件，请检查 Best50 存档数据完整性！", icon="⚠️")
+        st.stop()
 b30_config = load_config(b30_config_file)
 video_config = load_config(video_config_output_file, use_cache=False) if os.path.exists(video_config_output_file) else None
+
+def sync_downloader_index():
+    """
+    把数据主文件（b30_config.json）合并进当前平台的索引副本，行为与搜索/下载页加载时一致。
+    「编辑 Best50 数据」只写主文件，索引副本要等搜索/下载页加载才会同步；生成配置前先对齐，
+    避免「改完数据直接来生成」时按旧 clip_id 建档。返回需要提示用户的同步动作，无需同步为 None。
+    """
+    data_file = current_paths['data_file']
+    if not os.path.exists(data_file):
+        return None
+    merged_config, update_count = merge_b50_data(load_config(data_file), load_config(b30_config_file))
+    save_config(b30_config_file, merged_config)
+    return f"索引副本落后于数据主文件，已同步 {update_count} 条" if update_count > 0 else None
+
+def build_missing_report(b50_data, images_path, videos_path):
+    """
+    与 gen_video_config 同口径的素材扫描：逐条检查 {clip_id}.png 与 {曲ID}-{难度}.mp4。
+    返回 {'images': [clip_id...], 'videos': ['曲ID-难度.mp4'...]}，素材齐全时为空 dict。
+    """
+    images, videos = [], []
+    for song in b50_data:
+        if not song.get('clip_id'):
+            continue
+        image_path = os.path.normpath(os.path.join(images_path, song['clip_id'] + '.png'))
+        if not os.path.exists(image_path):
+            images.append(song['clip_id'])
+        video_tag = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}.mp4"
+        if not os.path.exists(os.path.normpath(os.path.join(videos_path, video_tag))):
+            videos.append(video_tag)
+    report = {}
+    if images:
+        report['images'] = images
+    if videos:
+        report['videos'] = videos
+    return report
+
+def render_missing_summary(report):
+    """缺失清单摘要（超过 10 条折叠显示），供生成前确认框与生成后持久提示复用。"""
+    for key, label, unit in (('images', '缺图片', '张'), ('videos', '缺视频', '个')):
+        items = report.get(key)
+        if not items:
+            continue
+        shown = "、".join(items[:10])
+        more = f" ……等共 {len(items)} {unit}" if len(items) > 10 else ""
+        st.markdown(f"- **{label} {len(items)} {unit}**：`{shown}`{more}")
+
+def render_missing_guidance(config_exists):
+    """缺失素材的处理指引；两处缺失提示共用，补齐素材后的动作取决于配置是否已生成。"""
+    st.markdown(
+        "- 缺图片 → 到【生成 Best50 图 / 查看数据】页重新生成图片（建档较早的存档建议先在该页点「回填曲库字段」）\n"
+        "- 缺视频 → 到【搜索、检查和下载视频】页补齐，或将视频以 `曲ID-难度.mp4` 命名放入 `videos/downloads`"
+    )
+    if config_exists:
+        st.markdown(
+            "- 补齐后 → 在本页下方危险区「删除视频配置文件」，再重新生成配置"
+            "（配置里的空路径不会自行恢复；已填写评论请先备份或迁移）"
+        )
+    else:
+        st.markdown("- 补齐后 → 点下方「重新扫描」，素材齐全时会直接生成配置")
+
+def attempt_generate():
+    """
+    生成配置的统一入口：对齐索引副本 → 扫描素材 → 全齐直接生成；
+    有缺口则挂起（vc_pending_scan）并 rerun，由确认框决定补素材还是带缺口强制生成。
+    """
+    sync_note = sync_downloader_index()
+    if sync_note:
+        st.toast(sync_note, icon="ℹ️")
+    missing = build_missing_report(load_config(b30_config_file), image_output_path, video_download_path)
+    if missing:
+        st.session_state['vc_pending_scan'] = missing
+        st.rerun()
+    st.session_state.pop('vc_pending_scan', None)
+    gen_video_config(load_config(b30_config_file), image_output_path, video_download_path, video_config_output_file,
+                     G_config['CLIP_START_INTERVAL'], G_config['CLIP_PLAY_TIME'], G_config['DEFAULT_COMMENT_PLACEHOLDERS'])
+    st.session_state.pop('vc_missing_report', None)
+    st.success("视频配置已生成！", icon="✅")
+    st.rerun()
+
+# 生成配置时的素材缺失汇总：生成过程的逐条 warning 会被 rerun 刷掉，这里持久展示直到用户处理完
+missing_report = st.session_state.get('vc_missing_report')
+if missing_report:
+    with st.container(border=True):
+        st.warning("当前配置生成时存在缺失素材，缺失项在配置里是空路径，补齐素材并重新生成配置后才会填上。", icon="⚠️")
+        render_missing_summary(missing_report)
+        render_missing_guidance(config_exists=True)
+        if st.button("不再提示", key="dismiss_vc_missing_report", icon="🔇"):
+            st.session_state.pop('vc_missing_report', None)
+            st.rerun()
 
 if not video_config or 'main' not in video_config:
     col1, col2 = st.columns(2, vertical_alignment="center")
@@ -504,20 +611,47 @@ if not video_config or 'main' not in video_config:
         st.warning("该存档还没有配置，请生成后再编辑。", icon="⚠️")
     with col2:
         if st.button("生成视频内容配置", icon="⏬", width='stretch'):
-            st.toast("正在生成……", icon="ℹ️")
+            st.toast("正在扫描素材并生成配置……", icon="ℹ️")
             try:
-                video_config = gen_video_config(b30_config, image_output_path, video_download_path, video_config_output_file,
-                                                G_config['CLIP_START_INTERVAL'], G_config['CLIP_PLAY_TIME'], G_config['DEFAULT_COMMENT_PLACEHOLDERS']
-                                                # username=username, save_id=save_id
-                                                )
-                st.success("视频配置已生成！", icon="✅")
-                st.rerun()
-            except Exception as e:
-                st.toast(f"视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
+                attempt_generate()
+            except Exception:
+                st.toast("视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
                 st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
-                video_config = None
+
+    # 上次点击「生成」时发现素材缺口：暂停生成，先让人补齐或明确选择带缺口生成
+    pending_scan = st.session_state.get('vc_pending_scan')
+    if pending_scan:
+        with st.container(border=True):
+            st.warning("素材扫描发现以下缺口，已暂停生成（避免把空路径写进配置）。", icon="⚠️")
+            render_missing_summary(pending_scan)
+            render_missing_guidance(config_exists=False)
+            gen_col1, gen_col2 = st.columns(2)
+            with gen_col1:
+                if st.button("仍要生成（缺失项留空）", key="vc_gen_anyway", icon="⏬", width='stretch'):
+                    st.session_state.pop('vc_pending_scan', None)
+                    try:
+                        gen_video_config(b30_config, image_output_path, video_download_path, video_config_output_file,
+                                         G_config['CLIP_START_INTERVAL'], G_config['CLIP_PLAY_TIME'],
+                                         G_config['DEFAULT_COMMENT_PLACEHOLDERS'])
+                        st.session_state['vc_missing_report'] = pending_scan
+                        st.success("视频配置已生成（缺失项留空）！", icon="✅")
+                        st.rerun()
+                    except Exception:
+                        st.toast("视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
+                        st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
+            with gen_col2:
+                if st.button("重新扫描（补齐素材后）", key="vc_rescan", icon="🔄", width='stretch',
+                             help="素材齐全时会直接生成配置"):
+                    st.toast("正在重新扫描……", icon="ℹ️")
+                    try:
+                        attempt_generate()
+                    except Exception:
+                        st.toast("视频配置生成失败，请检查步骤 1-3 是否正常完成！", icon="❌")
+                        st.error(f"详细错误信息（请将这部分内容拷贝或截图发给开发者）：{traceback.format_exc()}", icon="❗")
 
 if video_config:
+    # 配置已存在时，生成前挂起的缺口确认框已无意义（说明配置经由其他路径生成好了）
+    st.session_state.pop('vc_pending_scan', None)
     # 获取所有视频片段的ID
     video_ids = [f"[{item['clip_id'].split('_', 1)[0]}#{item['clip_id'].split('_', 1)[1]},{REVERSE_LEVEL_LABELS.get(item['level_index'])}] - {item['song_name']}" for item in video_config['main']]
     # 使用session_state来存储当前选择的视频片段索引
@@ -635,7 +769,7 @@ with st.container(border=False):
                                 - 请确定图片和视频文件均已存在后再执行。
                             """, width='stretch'):
                     try:
-                        refresh_main_image_paths(video_config_output_file, username, save_id, len(video_config_output_file))
+                        refresh_main_image_paths(video_config_output_file, username, save_id)
                         st.toast("配置路径已更新，3 秒后刷新", icon="✅")
                         time.sleep(3)
                         st.rerun()
@@ -670,15 +804,18 @@ with st.container(border=False):
                 if st.button("是的！请删掉吧", key=f"confirm_delete_video_config", icon="🗑️", width='stretch'):
                     try:
                         os.remove(file)
+                        # 配置已删除，此前的缺失汇总与挂起扫描一并作废
+                        st.session_state.pop('vc_missing_report', None)
+                        st.session_state.pop('vc_pending_scan', None)
                         st.rerun()
                     except Exception as e:
                         st.error(f"删除当前配置文件失败：{traceback.format_exc()}", icon="❌")
 
             if os.path.exists(video_config_file):
-                if st.button("强制刷新视频配置文件", key=f"delete_btn_video_config", icon="↩️", width='stretch', help="仅限于无法正常读取图片、视频或评论时使用"):
+                if st.button("删除视频配置文件", key=f"delete_btn_video_config", icon="↩️", width='stretch', help="仅限于无法正常读取图片、视频或评论时使用"):
                     delete_video_config_dialog(video_config_file)
             else:
-                st.info("当前还没有视频生成配置文件", icon="ℹ️")
+                st.info("当前还没有生成视频配置文件", icon="ℹ️")
 
         with col2: 
             @st.dialog("删除视频确认")

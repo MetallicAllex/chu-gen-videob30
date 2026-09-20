@@ -1,6 +1,5 @@
-import os, time
 import streamlit as st
-from utils.DataUtils import fetch_music_data, music_info_path, jp_music_info_path
+from utils import DataUtils as DU
 
 col1, col2 = st.columns([.7, 1.3])
 with col1:
@@ -96,11 +95,10 @@ with col2:
 
     <div style="text-align: center;">
         <div class="rt-text">chu-gen-videob30</div>
-        <h2 class="ruby-container">中二节奏 Best30 生成器</h2>
+        <h2 class="ruby-container">中二节奏 Best30 生成器 v1.2.6</h2>
     </div>
     
     <div style="text-align: left; margin-top: 15px;">
-        <div class="version-info">当前版本为：<span style="font-weight: bold;">[基于 mai-gen-videob30 修改] v1.1.2.1</span></div>
         <div class="guide-info">请按照引导步骤进行操作，以生成您的 Best30 视频。</div>
     </div>
     """, unsafe_allow_html=True)
@@ -121,35 +119,50 @@ with col2:
 #          - 不要分享该密钥给不信任的第三方（本查分器仅用于获取游戏数据）
 #          - 如果该密钥被泄露，请及时重新生成密钥
 #          """, icon="❗")
-metadata_status = os.path.exists(music_info_path) and os.path.exists(jp_music_info_path)
-if not metadata_status:
-    st.warning("""
-               注意！您的包体（目前）未拥有谱面数据。
-               - 刚下载的新包体**默认未携带谱面数据**，请先下载
-               - **已经使用过但未存在谱面数据**，可能是被误删除，请重新下载
-                 - 请于下方的 **（附加设置）下载或更新谱面数据** 中操作
-               """, icon="⚠️")
-    
+# ===== 谱面数据：程序启动时就已经交给后台补齐了，这里只报状态 =====
+music_state = DU.music_data_state()
+
+
+@st.fragment(run_every=1.5)
+def watch_music_data():
+    if DU.music_data_state()["running"]:
+        st.info("正在下载谱面数据（首次约 30s ~ 1min）",
+                icon="⏳")
+        return
+    st.rerun()  # 门槛与侧栏导航都在本片段之外，整页重跑一次才会重算
+
+
+if music_state["running"]:
+    watch_music_data()
+elif not music_state["core_ready"]:
+    st.error(f"谱面数据未就绪：{music_state['note'] or '本地无曲目数据且后台拉取失败'}。"
+             "请确认网络可用后重启程序。", icon="⚠️")
+
+library = DU.music_library_status(music_state["note"])
+# 曲库状态压成一行，完整表格收进下方"附加设置"折叠栏 —— 首页正文只回答"能不能开始"
+if library["problems"]:
+    st.warning("\n".join(f"- {p}" for p in library["problems"]), icon="⚠️")
+else:
+    st.success(library["brief"], icon="✅")
+
 col1, col2 = st.columns([.45, 1], vertical_alignment="center")
 with col1:
     st.write("准备好时，单击右边按钮开始")
 
 with col2:
-    if st.button("开始使用", icon="▶️", disabled=not metadata_status, help="请确保您已拥有谱面数据", width='stretch'):
+    if st.button("开始使用", icon="▶️", disabled=not music_state["core_ready"],
+                 help="曲库就绪后即可进入" if not music_state["core_ready"] else None,
+                 width='stretch'):
         st.switch_page("st_pages/1_Setup_Achivments.py")
 
 st.divider()
-with st.expander("（附加设置）下载或更新谱面数据", icon="🔄️"):
-    # update_status = should_update_metadata(24)
-    # update_hint = "是在 24 小时内" if update_status == False else "已超 24 小时"
-    # update_text = f"您上次完成更新的时间{update_hint}"
+with st.expander("（附加设置）更新谱面数据", icon="🔄️"):
+    st.markdown(library["table"])
+    st.caption("「本地/云端数据版本」：日服/国际服是版本时刻；国服两行是内容哈希短码（与更新日志 [md5] 同源）。")
     col1, col2 = st.columns(2, vertical_alignment="center")
     with col1:
-        # forced = st.checkbox("对谱面数据进行强制更新", help="无视缓存时间强制更新")
-        st.warning("若未拥有、不正确或已更新新版本谱面数据，请及时更新", icon="⚠️")
+        st.caption(f"程序每次启动都会自动比对，超过 {DU.MUSIC_DATA_STALENESS_HOURS // 24} 天尝试重新拉取；")
     with col2:
-        if st.button(f"更新谱面数据", icon="🔄️", width='stretch'):
-            fetch_music_data()
-            st.toast("谱面数据更新完成！3 秒后刷新", icon="✅")
-            time.sleep(3)
+        if st.button("强制更新谱面数据", icon="🔄️", width='stretch', help="（若谱面数据未自动更新或出现错误时）"):
+            DU.start_music_data_update(force=True)
             st.rerun()

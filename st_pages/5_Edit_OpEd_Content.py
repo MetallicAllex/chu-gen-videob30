@@ -3,6 +3,7 @@ import os, traceback
 import streamlit as st
 from datetime import datetime
 from utils.ImageUtils import render_all_images
+from utils.PageUtils import parse_oped_text_markers
 from utils.Variables import font_path, image_root_path
 from utils.PathUtils import read_global_config, save_config, load_config, get_data_paths, get_user_versions
 
@@ -37,33 +38,18 @@ def edit_context_widget(name, config, config_file_path):
         # 为每个元素创建编辑组件
         for idx, item in enumerate(items):
             with st.expander(f"{name} 展示：第 {idx + 1} 页", expanded=True, icon="⏮️" if name == "intro" else "⏭️"):
-                # 添加版本选择器
-                # list_versions = G_config.get("AVAILABLE_VERSION", [])
-                # sel_version = st.radio(
-                #     "选择背景播放的游戏版本",
-                #     options=list_versions,
-                #     index=list_versions.index(item["version"]) if item["version"] in list_versions else 0,
-                #     key=f"{item['id']}_version",
-                #     horizontal=True
-                # )
-                # 文本编辑框
-                bg_col1, bg_col2, bg_col3 = st.columns(3)
-                with bg_col1:
-                    bg_page = st.checkbox("此页为背景板", help="可在此页展示您需要额外编辑的内容", key=f"{item['id']}_bg_page", value=item["bg_page"])
-                with bg_col2:
-                    no_overlay = st.checkbox("不需要底图", key=f"{item['id']}_overlay", help="此页非背景板时选项不可用" if not bg_page else "用于框定文本区域，若手动添加文字可自行决定是否保留", disabled=not bg_page, value=item["no_overlay"])
-                with bg_col3:
-                    no_sound = st.checkbox("不需要 BGM", key=f"{item['id']}_sound", help="在生成片段时不对此片段放入 bgm（如果您想使用自己的音乐作为 bgm，请勾选此项）", value=item["no_sound"])
+                # 文本编辑框（内联标记就写在文本里，保留可见、可随时增删，
+                # 点保存时解析生效）
                 new_text = st.text_area(
                     "文本内容", item["text"],
                     key=f"{item['id']}_text",
-                    help="若要添加其他内容请多留空白区域",
-                    placeholder="输入要展示的文本（若作为背景板展示则不可输入）",
-                    disabled=bg_page
+                    help="""
+                        内联标记（填写在文本中，保存时解析并生效，可随时增删）：
+                        - [静音] 本页不放 BGM；
+                        - [无底图] 本页不叠加任何底图（纯背景视频页，留空文本即可）。
+                        - 可组合，如 [静音,无底图]，含未知内容的方括号（如 [Chorus]）不会被当作标记，照常渲染。""",
+                    placeholder="输入要展示的文本；使用 [静音] [无底图] 标记以控制本页行为",
                 )
-                # items[idx]["text"] = new_text
-                # items[idx]["bg_page"] = info_page
-                # items[idx]['version'] = sel_version
 
                 scol1, scol2 = st.columns(2, vertical_alignment="bottom")
                 with scol1:
@@ -79,9 +65,6 @@ def edit_context_widget(name, config, config_file_path):
                 #     key=f"{item['id']}_duration"
                 # )
                 items[idx]["text"] = new_text
-                items[idx]["bg_page"] = bg_page
-                items[idx]['no_overlay'] = no_overlay
-                items[idx]['no_sound'] = no_sound
                 items[idx]["duration"] = new_duration
                 
         # 删除按钮（只有当列表长度大于 1 时才显示）
@@ -114,6 +97,14 @@ def edit_context_widget(name, config, config_file_path):
             # 保存按钮
             if st.button("保存", key=f"save_{name}", icon="💾", width='stretch'):
                 try:
+                    # 内联标记 → 配置键：[静音]→no_sound，[无底图]→no_overlay。
+                    # 标记保留在文本中（可见、可随时改），每次保存按当前文本重新解析
+                    for it in items:
+                        _, flags = parse_oped_text_markers(it.get('text', ''))
+                        if flags is not None:
+                            it['no_overlay'] = flags['no_overlay']
+                            it['no_sound'] = flags['no_sound']
+
                     # 更新配置
                     config[name] = items
                     ## 保存当前配置

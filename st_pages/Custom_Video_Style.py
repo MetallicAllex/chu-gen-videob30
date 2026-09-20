@@ -146,32 +146,122 @@ custom_dir = current_paths['custom_style']
 # sel_preset_style = st.radio("选择预设模版", options=["default", "init"], key="preset_style",
 #             horizontal=True, help="仅更改画面图像，不会修改字体等参数", captions=["由 mai-gen 官方制作的默认模版", "由哔哩哔哩 @init_ 制作的 PPT 模版"])
 
-# 预设样式选择
-preset_col1, preset_col2 = st.columns([3, 1])
+# ========== 预设模板 / 自定义模式 ==========
+# preset_style 标记当前模式：模板名（只读预览）或 "自定义"（开放编辑）
+if 'preset_style' not in st.session_state:
+    st.session_state.preset_style = "default"
+sel_preset_style = st.session_state.preset_style
+
+def _list_available_themes():
+    """检测可用样式模板：内置 default/init + 用户放入 assets/themes/ 的分享样式文件"""
+    theme_dir = f"{root_path}/themes"
+    if not os.path.isdir(theme_dir):
+        return ["default", "init"]
+    return sorted(os.path.splitext(f)[0] for f in os.listdir(theme_dir) if f.endswith(".json"))
+
+def _apply_preset_theme(template_name: str, customize: bool):
+    """复制所选模板到存档；customize=True 时改 themes 为 custom_* 并进入自定义模式"""
+    if not os.path.exists(custom_dir):
+        shutil.copy2(f"{root_path}/themes/{template_name}.json", custom_dir)
+    if customize:
+        data = load_config(custom_dir)
+        # 基于存档内实际模板添加 custom_ 前缀（模板已存在时 selectbox 不可选，不能依赖 template_name）
+        current = str(data.get('themes', '') or template_name)
+        if not current.startswith('custom_'):
+            data['themes'] = f"custom_{current}"
+            save_config(custom_dir, data)
+    st.session_state.preset_style = "自定义" if customize else template_name
+    st.rerun()
+
+def _delete_style_file():
+    """删除存档样式文件，回到未应用模板状态"""
+    if os.path.exists(custom_dir):
+        os.remove(custom_dir)
+    st.session_state.preset_style = "default"
+    st.rerun()
+
+available_themes = _list_available_themes()
+has_style = os.path.exists(custom_dir)
+
+# 模式以文件为准：themes 字段是唯一持久化的模式记录（custom_ 前缀 = 编辑解锁），
+# session_state.preset_style 只是易失镜像，有两类失真场景：
+# ① 重启/新会话后镜像丢失 → 自定义存档被误显示成「default 模板（只读预览）」，
+#    且没有回到编辑模式的入口（只能删除模板，丢掉全部自定义参数）；
+# ② 会话内更换存档 → 镜像还是上一个存档的模式。
+# 这里每趟都从文件把模式恢复回来；读取失败维持原值，不做反向降级。
+if has_style:
+    try:
+        _file_themes = str(load_config(custom_dir).get('themes', '') or '')
+        if _file_themes.startswith('custom_'):
+            _file_mode = "自定义"
+        elif _file_themes in available_themes:
+            _file_mode = _file_themes
+        else:
+            _file_mode = None
+        if _file_mode and sel_preset_style != _file_mode:
+            st.session_state.preset_style = _file_mode
+            sel_preset_style = _file_mode
+    except Exception:
+        pass
+
+if not has_style and sel_preset_style != "default":
+    # 无样式文件时模式无意义，归位 default（与删除模板/清除配置的收尾一致，
+    # 也修掉「上一个存档的自定义模式」残留到新存档的串档显示）
+    st.session_state.preset_style = "default"
+    sel_preset_style = "default"
+
+is_custom = sel_preset_style == "自定义"
+
+preset_col1, preset_col2, preset_col3 = st.columns([3, 2, 2])
 with preset_col1:
-    sel_preset_style = st.selectbox(
-        "选择要复制的预设模板", options=["default", "init"],
+    template_choice = st.selectbox(
+        "选择要复制的预设模板", options=available_themes,
         key="preset_style_selector",
         help="""
 default: 由 mai-gen 官方制作的默认模版\n
-init: 由哔哩哔哩 @init_ 制作的 PPT 模版
-        """ if not os.path.exists(custom_dir) else "❌ 当前已存在样式文件，无法再次应用预设模板！（如需要，请删除此文件重新复制）",
-        disabled=os.path.exists(custom_dir)
+init: 由哔哩哔哩 @init_ 制作的 PPT 模版\n
+其他选项: 检测到 assets/themes/ 下的分享样式文件
+        """ if not has_style else "❌ 当前已应用模板，无法更改（如需要，请点击「删除模板」后重新选择）",
+        disabled=has_style
     )
+    # 显示当前模式
+    if is_custom:
+        st.caption("当前：自定义模式（可编辑）")
+    else:
+        st.caption(f"当前：{sel_preset_style} 模板（只读预览）")
+
 with preset_col2:
-    apply_preset = st.button("应用模板", icon="✅️", help="❌ 当前已存在样式文件，无法再次应用预设模板！（如需要，请删除此文件重新复制）" if os.path.exists(current_paths['custom_style']) else "点击后将复制此样式到您的存档文件夹", use_container_width=True, type="primary", disabled=os.path.exists(custom_dir))
-    if apply_preset:
-        if sel_preset_style == "default":
-            st.session_state.preset_style = "default"
-            shutil.copy2(f"{root_path}/themes/default.json", custom_dir)
-        elif sel_preset_style == "init":
-            st.session_state.preset_style = "init"
-            shutil.copy2(f"{root_path}/themes/init.json", custom_dir)
-        else:
-            st.toast("请选择预设模板！", icon="⚠️")
-        
-        st.rerun()
-# 原有的 radio 可以移除或改为只读显示
+    if has_style and not is_custom:
+        # 只读模式：col2 显示当前模式（应用模板，禁用），col3 变为删除模板
+        st.button("应用模板", icon="✅️", use_container_width=True, type="primary", disabled=True,
+                  help=f"当前已应用「{sel_preset_style}」模板（只读预览）")
+    elif has_style and is_custom:
+        # 自定义模式：col2 变为删除模板，col3 显示当前模式（自定义模板，禁用）
+        delete_preset = st.button("删除模板", icon="🗑️", use_container_width=True,
+                                  help="删除存档内的样式文件，回到未应用模板状态")
+        if delete_preset:
+            _delete_style_file()
+    else:
+        apply_preset = st.button("应用模板", icon="✅️", use_container_width=True, type="primary",
+                                 help="将所选模板复制到存档（只读预览）")
+        if apply_preset:
+            _apply_preset_theme(template_choice, customize=False)
+
+with preset_col3:
+    if has_style and is_custom:
+        st.button("自定义模板", icon="🎨", use_container_width=True, disabled=True,
+                  help="当前已处于自定义模式（可编辑）")
+    elif has_style and not is_custom:
+        delete_preset = st.button("删除模板", icon="🗑️", use_container_width=True,
+                                  help="删除存档内的样式文件，回到未应用模板状态")
+        if delete_preset:
+            _delete_style_file()
+    else:
+        apply_custom = st.button("自定义模板", icon="🎨", use_container_width=True,
+                                 help="将所选模板复制到存档并开放编辑功能")
+        if apply_custom:
+            _apply_preset_theme(template_choice, customize=True)
+
 if os.path.exists(custom_dir):
     custom_data = load_config(custom_dir)
     themes = custom_data['themes']
@@ -181,7 +271,7 @@ if os.path.exists(custom_dir):
         with st.expander("前景素材", icon="🖼️"):
                 tab_bg, tab_frames = st.tabs(["🎨 谱面确认框架", "🖼️ 难度框"])
                 with tab_bg:
-                    if sel_preset_style == "default" and themes == "default":
+                    if themes in ("default", "custom_default"):
                         st.info("上传谱面确认框架（.png，分辨率 1920 × 1080）")
                         
                         # 初始化状态
@@ -189,11 +279,11 @@ if os.path.exists(custom_dir):
                             st.session_state.bg_image_upload_info = None
                         
                         # 检查备份文件是否存在
-                        bg_image_bak_path = os.path.join(f"{image_root_path}/Base/content", "content_base-bak.png")
+                        bg_image_bak_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base-bak.png")
                         has_bg_image_backup = os.path.exists(bg_image_bak_path)
                         
                         # 显示当前图片信息
-                        current_bg_image_path = os.path.join(f"{image_root_path}/Base/content", "content_base.png")
+                        current_bg_image_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base.png")
                         if current_bg_image_path and os.path.exists(current_bg_image_path):
                             st.image(current_bg_image_path, caption="素材预览窗") # 添加窗口预览
                             bginfo_col1, bginfo_col2 = st.columns([.45, .55])
@@ -214,6 +304,8 @@ if os.path.exists(custom_dir):
                             with bg_col2:
                                 if st.button("上传新图片", key="upload_new_bg_image", icon="📤", width='stretch'):
                                     st.session_state.bg_image_upload_info = None
+                                    # 清掉上传控件残留的旧文件，避免弹回旧确认卡
+                                    st.session_state.pop("bg_image_uploader", None)
                                     st.rerun()
                             with bg_col3:
                                 # 只有存在备份文件时才显示还原按钮
@@ -229,6 +321,7 @@ if os.path.exists(custom_dir):
                                                 shutil.copy2(bg_image_bak_path, current_bg_image_path)
                                                 st.toast("✅ 图片已还原为原始素材！", icon="✅")
                                                 st.session_state.bg_image_upload_info = None
+                                                st.session_state.pop("bg_image_uploader", None)
                                                 st.rerun()
                                         except Exception as e:
                                             st.error(f"还原失败：{str(e)}", icon="❌")
@@ -309,16 +402,16 @@ if os.path.exists(custom_dir):
                         st.session_state[frame_state_key] = None
                     
                     # 检查备份文件是否存在
-                    if themes == "default":
+                    if themes in ("default", "custom_default"):
                         frame_bak_path = os.path.join(image_root_path, f"Frames/{selected_level}-bak.png")
-                    elif themes == "init":
+                    elif themes in ("init", "custom_init"):
                         frame_bak_path = os.path.join(image_root_path, f"Base/content/init/{selected_level}-bak.png")
                     has_frame_backup = os.path.exists(frame_bak_path)
                     
                     # 显示当前图片信息
-                    if themes == "default":
+                    if themes in ("default", "custom_default"):
                         current_frame_path = os.path.join(image_root_path, f"Frames/{selected_level}.png")
-                    elif themes == "init":
+                    elif themes in ("init", "custom_init"):
                         current_frame_path = os.path.join(image_root_path, f"Base/content/init/{selected_level}.png")
                     if current_frame_path and os.path.exists(current_frame_path):
                         st.image(current_frame_path, caption="素材预览窗")
@@ -341,6 +434,8 @@ if os.path.exists(custom_dir):
                         with frame_col2:
                             if st.button("上传新边框", key=f"upload_new_frame_{selected_level}", icon="📤", width='stretch'):
                                 st.session_state[frame_state_key] = None
+                                # 清掉上传控件残留的旧文件，避免弹回旧确认卡
+                                st.session_state.pop(f"frame_uploader_{selected_level}", None)
                                 st.rerun()
                         with frame_col3:
                             # 只有存在备份文件时才显示还原按钮
@@ -356,6 +451,7 @@ if os.path.exists(custom_dir):
                                             shutil.copy2(frame_bak_path, current_frame_path)
                                             st.toast(f"✅ {frame_levels[selected_level]} 边框已还原为原始素材！", icon="✅")
                                             st.session_state[frame_state_key] = None
+                                            st.session_state.pop(f"frame_uploader_{selected_level}", None)
                                             st.rerun()
                                     except Exception as e:
                                         st.error(f"还原失败：{str(e)}", icon="❌")
@@ -428,12 +524,21 @@ if os.path.exists(custom_dir):
                 video_bak_path = os.path.join(bgclips_path, "bg_bak.mp4") if bgclips_path else None
                 has_video_backup = os.path.exists(video_bak_path) if video_bak_path else False
                 
-                # 显示背景视频的预览窗口
-                st.video(video_bak_path, format="video/mp4", start_time=0, width=520)
-                st.caption("背景视频预览窗", text_alignment="center")
+
                 
                 # 显示当前视频信息（始终显示）
                 current_video_path = os.path.join(bgclips_path, "bg.mp4") if bgclips_path else None
+
+                # 显示背景视频的预览窗口：优先播当前使用的 bg.mp4（含替换后的版本），
+                # 文件缺失时回退原始备份，两者都没有则提示而不是渲染空播放器
+                if current_video_path and os.path.exists(current_video_path):
+                    st.video(current_video_path, format="video/mp4", start_time=0, width=520)
+                    st.caption("背景视频预览窗", text_alignment="center")
+                elif has_video_backup:
+                    st.video(video_bak_path, format="video/mp4", start_time=0, width=520)
+                    st.caption("背景视频预览窗（当前 bg.mp4 缺失，预览的是原始备份）", text_alignment="center")
+                else:
+                    st.warning("未找到背景视频素材（bg.mp4 与备份均不存在），已跳过预览。", icon="⚠️")
                 if current_video_path and os.path.exists(current_video_path):
                     bginfo_col1, bginfo_col2 = st.columns(2)
                     with bginfo_col1:
@@ -454,6 +559,8 @@ if os.path.exists(custom_dir):
                     with bg_col2:
                         if st.button("上传新视频", key="upload_new_video", icon="📤", width='stretch'):
                             st.session_state.video_upload_info = None
+                            # 清掉上传控件残留的旧文件，避免弹回旧确认卡
+                            st.session_state.pop("bg_video_uploader", None)
                             st.rerun()
                     with bg_col3:
                         # 只有存在备份文件时才显示还原按钮
@@ -469,6 +576,7 @@ if os.path.exists(custom_dir):
                                         shutil.copy2(video_bak_path, current_video_path)
                                         st.toast("✅ 视频已还原为原始素材！", icon="✅")
                                         st.session_state.video_upload_info = None
+                                        st.session_state.pop("bg_video_uploader", None)
                                         st.rerun()
                                 except Exception as e:
                                     st.error(f"还原失败：{str(e)}", icon="❌")
@@ -536,12 +644,21 @@ if os.path.exists(custom_dir):
                 audio_bak_path = os.path.join(audios_path, "bgm_bak.mp3") if audios_path else None
                 has_audio_backup = os.path.exists(audio_bak_path) if audio_bak_path else False
                 
-                # 显示音频预览条
-                st.audio(audio_bak_path, format="audio/mp3", start_time=0)
-                st.caption("背景音乐试听", text_alignment="center")
+
                 
                 # 显示当前音频信息（始终显示）
                 current_audio_path = os.path.join(audios_path, "bgm.mp3") if audios_path else None
+
+                # 显示音频试听条：优先播当前使用的 bgm.mp3（含替换后的版本），
+                # 文件缺失时回退原始备份，两者都没有则提示而不是渲染空播放器
+                if current_audio_path and os.path.exists(current_audio_path):
+                    st.audio(current_audio_path, format="audio/mp3", start_time=0)
+                    st.caption("背景音乐试听", text_alignment="center")
+                elif has_audio_backup:
+                    st.audio(audio_bak_path, format="audio/mp3", start_time=0)
+                    st.caption("背景音乐试听（当前 bgm.mp3 缺失，试听的是原始备份）", text_alignment="center")
+                else:
+                    st.warning("未找到背景音乐素材（bgm.mp3 与备份均不存在），已跳过试听。", icon="⚠️")
                 if current_audio_path and os.path.exists(current_audio_path):
                     bgminfo_col1, bgminfo_col2 = st.columns(2)
                     with bgminfo_col1:
@@ -562,6 +679,8 @@ if os.path.exists(custom_dir):
                     with bgm_col2:
                         if st.button("上传新音频", key="upload_new_audio", icon="📤", width='stretch'):
                             st.session_state.audio_upload_info = None
+                            # 清掉上传控件残留的旧文件，避免弹回旧确认卡
+                            st.session_state.pop("bgm_audio_uploader", None)
                             st.rerun()
                     with bgm_col3:
                         # 只有存在备份文件时才显示还原按钮
@@ -577,6 +696,7 @@ if os.path.exists(custom_dir):
                                         shutil.copy2(audio_bak_path, current_audio_path)
                                         st.toast("✅ 音频已还原为原始素材！", icon="✅")
                                         st.session_state.audio_upload_info = None
+                                        st.session_state.pop("bgm_audio_uploader", None)
                                         st.rerun()
                                 except Exception as e:
                                     st.error(f"还原失败：{str(e)}", icon="❌")
@@ -911,20 +1031,21 @@ if os.path.exists(current_paths['custom_style']):
         }
         
         size_data = custom_data['size']
-        render_simple_config(size_data, 'size', display_names, columns_per_row=len(size_data))
+        render_simple_config(size_data, 'size', display_names, columns_per_row=len(size_data), sel_preset_style=sel_preset_style)
 
-        if themes == "default":
+        # 颜色配置：两种模板均支持（早期版本 default 模板同样显示颜色编辑）
+        color_data = custom_data['color']
+        render_simple_config(color_data, 'color', display_names, columns_per_row=len(color_data), sel_preset_style=sel_preset_style)
+
+        # maxWidth 仅 default 系列模板包含（init 模板无此配置项）
+        if themes in ("default", "custom_default"):
             width_data = custom_data['maxWidth']
-            render_simple_config(width_data, 'maxWidth', display_names, columns_per_row=len(width_data))
+            render_simple_config(width_data, 'maxWidth', display_names, columns_per_row=len(width_data), sel_preset_style=sel_preset_style)
         else:
             st.error("init 模版中未使用 maxWidth 配置项，已跳过", icon="❌️")
 
-            # 获取 color 字典
-            image_data = custom_data['color']
-            render_simple_config(image_data, 'color', display_names, columns_per_row=len(image_data))
-
         align_data = custom_data["align"]
-        render_simple_config(align_data, 'align', display_names, columns_per_row=len(align_data))
+        render_simple_config(align_data, 'align', display_names, columns_per_row=len(align_data), sel_preset_style=sel_preset_style)
         
     col1, col2, col3, col4 = st.columns(4, vertical_alignment="center")
     with col1:
@@ -942,6 +1063,8 @@ if os.path.exists(current_paths['custom_style']):
     with col2:
         if st.button("清除配置数据", icon="🔄", width='stretch', help="将删除您的 customization.json 文件"):
             os.remove(current_paths['custom_style'])
+            # 重置模式标记，避免下次进入仍停留在"自定义"状态
+            st.session_state.preset_style = "default"
             st.toast("样式配置文件已删除，正在重载页面", icon="❗")
             time.sleep(3)
             st.rerun()
@@ -987,12 +1110,18 @@ if os.path.exists(current_paths['custom_style']):
     def update_preview_image(placeholder):
         b50_datas = load_config(current_paths['data_file'])
         # generate_single_image(b50_datas[0], custom_data, thumbnails_dir, "BEST", 1)
-        generate_single_image(b50_datas[0], custom_data, thumbnails_dir)
+        try:
+            generate_single_image(b50_datas[0], custom_data, thumbnails_dir)
+        except Exception as e:
+            # 失败时不落盘，此时不能再 st.image —— 目录里可能还留着上一次的预览图
+            with placeholder:
+                st.error(f"预览图生成失败：{e}", icon="❌")
+            return
         with placeholder:
             st.image(f"{thumbnails_dir}/BEST_1.png")
 
     if preview_btn:
-        preview_image_placeholder = st.expander("预览图", expanded=False)
+        preview_image_placeholder = st.expander("预览图", expanded=True)
         update_preview_image(preview_image_placeholder)
 
 else:

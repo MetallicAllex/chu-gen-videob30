@@ -4,15 +4,10 @@
 
 Auto search and generate your best 30 videoes of CHUNITHM
 
-此项目是基于 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 的修改分支
+此分支 v1 代码已与主项目 [mai-gen-videob50](https://github.com/Nick-bit233/mai-gen-videob50) 合并，**但此项目仍会保持更新**
 
 ## 快速开始
 
-<!-- 
-
-- 如果你具有基本的计算机和python知识，可以独立（或者GPT辅助）完成环境配置和脚本操作，请直接clone仓库代码，参考[使用说明](#使用说明（从源代码启动）)部分开始使用! -->
-
-<!-- - 如果你没有上述经验，请**从右侧Release页面下载最新的**打包版本，参考[【教程视频】](https://www.bilibili.com/video/BV1G2kBY5Edq)开始使用。 -->
 - **从右侧 Release 页下载最新** Release 包。
     - （目前）**仅支持 Windows10 及以上操作系统**
     - 请 **完整解压** 后双击 `start.bat` 启动应用（Release 包 **不用管下面的使用说明**）
@@ -20,6 +15,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
 - 不要问为什么我会把有人不喜欢的平台链接放进来，~~因为真有不懂怎么弄的人~~
 
 ## 效果预览
+演示 ~~（算是）~~ 视频：[[chu-gen-videob30 | 中二分表生成器 | 开发演示废案] 构想中可以生成出来的 Best#1 片段](https://www.bilibili.com/video/BV13gt96VEvJ)
 <figure>
   <img src="md_res/image.jpg" alt="默认">
   <figcaption style="text-align: center; font-size: large;">生成视频帧效果</figcaption>
@@ -39,13 +35,13 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 数据源支持情况：
 
-- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：请注意在个人选项中关闭掩码，并允许公开获取 Best50 数据
+- [x] [水鱼查分器](https://www.diving-fish.com/maimaidx/prober/)：点「进入授权页」用官方 OAuth 授权（scope `chunithm.records.read`），成绩身份取自令牌，因此只能取到您自己的记录
 
-- [x] [落雪查分器](https://maimai.lxns.net/)：您需要提供好友码，将用于开发者接口中获取 Best50 数据
+- [x] [落雪查分器](https://maimai.lxns.net/)：同样走 OAuth 授权（scope `read_player`），不再需要提供好友码
 
-<!-- - [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：~~因缺少测试样本，我们目前无法支持此数据源~~ -->
+- [x] [CHUNITHM-NET](https://lng-tgk-aime-gw.am-all.net)：国际服没有可用的查分器，需要在 CHUNITHM-NET 网页端用 JavaScript 控制台导出成绩存档（.json），再到【获取 / 管理存档】页「我玩外服」折叠栏上传建档
 
-- [ ] [CHUNITHM-NET（国际服）](https://lng-tgk-aime-gw.am-all.net)：对应的清洗接口已编写完成，剩余上传区域设计
+- [ ] [神秘私人服务器？](#)：私人服务器建议使用存档进行存档建立，但没有可以使用的样本，因此目前无法做适配支持
 
 流媒体源支持情况：
 
@@ -206,6 +202,16 @@ This request was detected as a bot. Use use_po_token=True to view.
 
 - 进入页面4-1并对比两个页面的信息以复制粘贴评论内容，手动还原评论和时长配置
 
+#### 生成视频内容配置时提示「图片不存在」
+
+生成配置时会逐条检查 `images/background/{clip_id}.png` 与 `videos/downloads/{曲ID}-{难度}.mp4` 是否存在；检测到缺口时页面会暂停生成、给出汇总清单与处理指引。常见原因：
+
+- 建档时曲库尚未就绪，部分成绩的曲师/定数为空，导致那几张底图**渲染失败、没有落盘**：到【生成 Best50 图 / 查看数据】页先点「回填曲库字段」，再重新生成图片（已生成的会自动跳过）。
+- 在「编辑 Best50 数据」改过 clip_id / 增删曲目后，图片或索引副本没有跟着更新：按顺序补跑图片生成与搜索/下载页即可（生成配置前会自动把数据主文件同步进索引副本）。
+- 视频未下载或被删除：到【搜索、检查和下载视频】页补齐。
+
+注意：`video_configs.json` 是生成那一刻的快照，缺失项会以空路径写入，**补齐素材后必须重新生成配置**才会填上（危险区 → 删除视频配置文件 → 重新生成；已填评论请先备份或迁移）。素材齐全时生成会照常一步完成；确认带缺口生成的话，页面会持续提示缺失项直到处理完。
+
 
 ### 视频生成相关
 
@@ -329,6 +335,8 @@ ffmpeg 没有正常关闭视频文件导致的，不影响最终视频生成，�
         - `videos`文件夹，存储输出的视频
     
 - `./videos/downloads` 可以找到所有已下载的谱面确认视频，命名格式为`{song_id}-{level_index}.mp4`。其中 `song_id` 为曲目ID，`level_index` 为难度，例如 `834-3.mp4`。
+    - 下载前会核对 `./cache/video_cache_index.json` 中记录的来源（视频 ID 与分P）：更换候选视频或修改分P后重新下载，会自动清除旧文件并重下对应素材，避免拿到内容对不上的缓存。
+    - 手动替换视频文件时保持文件名不变即可；只要存档中选定的视频/分P没变，手动替换的文件会被正常使用。
 
 `video_config.json` 的详细格式：
 
