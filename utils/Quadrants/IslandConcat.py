@@ -239,9 +239,17 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
     print("[Info] --------------------开始 transition island 低内存拼接-------------------")
     t_concat_start = time.perf_counter()
 
-    video_files = [f for f in os.listdir(video_clip_path)
-                   if f.endswith(".mp4") and re.match(r'^\d+_', f)]
-    sorted_files = sort_video_files(video_files)
+    # 与 CPU 路共用同一份"拼哪些段"判据：渲染侧留下的清单说了算，
+    # 不再从目录里捞——换名单后遗留的下一号、撞号的旧文件都会被那边拦住。
+    from utils.SegmentUtils import concat_clip_list
+    listed = concat_clip_list(video_clip_path)
+    if listed:
+        sorted_files = listed
+        print(f"[Island] 按渲染清单取 {len(sorted_files)} 段（目录里的其他 mp4 不参与）")
+    else:
+        video_files = [f for f in os.listdir(video_clip_path)
+                       if f.endswith(".mp4") and re.match(r'^\d+_', f)]
+        sorted_files = sort_video_files(video_files)
     if not sorted_files:
         raise ValueError("Error: 没有有效的视频片段文件！")
     if len(sorted_files) == 1 or trans_time <= 0:
@@ -317,8 +325,23 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
 
         list_file = os.path.join(temp_dir, "concat_list.txt")
         _concat_island_segments(generated_segments, list_file, output_path, video_fps)
+        # -f concat 对打不开的输入是"跳过它继续拼并返回 0"（实测 4 段只剩 0.42s），
+        # 返回码不足以说明成片完整。期望值直接取"进清单的每一段实测时长之和"，
+        # 不用 sum(durations) - sum(transition_times) 那个公式——过短的 body/transition
+        # 会被跳过（上面有 continue 分支），公式会把没生成的那段也算进期望值。
+        expect_total = sum(_get_video_duration(p) for p in generated_segments)
+        got = _get_video_duration(output_path)
+        # 容差按实测定标：TS remux 这条每段漂 24~28ms（0.4s/2s/10s 段长都一样，只随段数线性增），
+        # 取 60ms/段留一倍多余量。少一整段是秒级量级，不会被这个容差放过。
+        tolerance = max(0.5, 0.06 * len(generated_segments))
+        if got <= 0 or abs(got - expect_total) > tolerance:
+            raise RuntimeError(
+                f"island 拼接产物时长对不上：期望 {expect_total:.2f}s"
+                f"（清单里 {len(generated_segments)} 段之和），实际 {got:.2f}s，"
+                f"容差 {tolerance:.2f}s —— 有段落没进成片")
         success = True
-        print(f"[Timer] transition island 拼接总耗时: {time.perf_counter() - t_concat_start:.2f}s")
+        print(f"[Timer] transition island 拼接总耗时: {time.perf_counter() - t_concat_start:.2f}s"
+              f"（{len(file_paths)} 段 / {got:.2f}s）")
         return output_path
     except Exception as e:
         print(f"[Error] transition island 拼接失败，临时文件保留在: {temp_dir}")
@@ -347,12 +370,19 @@ def combine_full_video_direct(video_clip_path, auto_add_transition=False, trans_
     print("[Info] --------------------开始拼接视频-------------------")
     t_concat_start = time.perf_counter()
 
-    video_files = [f for f in os.listdir(video_clip_path)
-                   if f.endswith(".mp4") and re.match(r'^\d+_', f)]
-    sorted_files = sort_video_files(video_files)
+    # 同上：清单优先，没有清单才退回按目录捞
+    from utils.SegmentUtils import concat_clip_list
+    listed = concat_clip_list(video_clip_path)
+    if listed:
+        sorted_files = listed
+        print(f"[Timer] 拼接: 按渲染清单取 {len(sorted_files)} 个片段")
+    else:
+        video_files = [f for f in os.listdir(video_clip_path)
+                       if f.endswith(".mp4") and re.match(r'^\d+_', f)]
+        sorted_files = sort_video_files(video_files)
+        print(f"[Timer] 拼接: 找到 {len(sorted_files)} 个片段")
     if not sorted_files:
         raise ValueError("Error: 没有有效的视频片段文件！")
-    print(f"[Timer] 拼接: 找到 {len(sorted_files)} 个片段")
 
     output_path = os.path.join(TEMP_ROOT, "final_output.mp4")
     temp_dir = os.path.join(TEMP_ROOT, "temp_ts")
@@ -361,34 +391,60 @@ def combine_full_video_direct(video_clip_path, auto_add_transition=False, trans_
     try:
         t_remux = time.perf_counter()
         ts_list_file = os.path.join(TEMP_ROOT, "ts_files.txt")
+        expect_total = 0.0
         with open(ts_list_file, 'w', encoding='utf-8') as f:
             for i, file in enumerate(sorted_files):
                 ts_name = f"{i:04d}.ts"
                 ts_path = os.path.join(temp_dir, ts_name)
+                src_path = os.path.join(video_clip_path, file)
+                one_dur = _get_video_duration(src_path)
+                if one_dur <= 0:
+                    raise ValueError(f"片段 {file} 读不出时长（多半已损坏或不是有效 mp4），"
+                                     "拼接中止以免悄悄少段落")
+                expect_total += one_dur
                 cmd = [
-                    get_ffmpeg_binary('ffmpeg'), '-y',
-                    '-i', os.path.join(video_clip_path, file),
+                    get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'error',
+                    '-i', src_path,
                     '-c', 'copy',
                     '-bsf:v', 'h264_mp4toannexb',
                     '-f', 'mpegts',
                     ts_path
                 ]
-                subprocess.run(cmd, check=True)
+                # 不捕获就拿不到"是哪个片段坏了"，check=True 只会报返回码
+                run = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
+                if run.returncode != 0 or not os.path.isfile(ts_path):
+                    raise RuntimeError(
+                        f"片段 {file} 转 MPEG-TS 失败（返回码 {run.returncode}）："
+                        f"{(run.stderr or '').strip()[-200:]}")
                 # concat 列表用绝对路径，不再依赖子进程 cwd 的相对解析
                 f.write(f"file '{ts_path.replace(os.sep, '/')}'\n")
         print(f"[Timer] 拼接: TS remux 耗时: {time.perf_counter() - t_remux:.2f}s")
 
         t_merge = time.perf_counter()
         cmd = [
-            get_ffmpeg_binary('ffmpeg'), '-y',
+            get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'error',
             '-f', 'concat', '-safe', '0',
             '-i', ts_list_file,
             '-c', 'copy',
             output_path
         ]
-        subprocess.run(cmd, check=True)
+        run = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
+        if run.returncode != 0 or os.path.getsize(output_path) <= 0:
+            raise RuntimeError(
+                f"concat 失败（返回码 {run.returncode}）："
+                f"{(run.stderr or '').strip()[-300:] or '没有产出文件'}")
+        # -f concat 对打不开的输入是"跳过它继续拼并返回 0"（实测 4 段只剩 0.42s），
+        # 所以返回码不够，必须再比一次时长
+        got = _get_video_duration(output_path)
+        # 容差按实测定标：TS remux 每条每段漂 24~28ms（段长 0.4s/2s/10s 都一样，只随段数线性涨），
+        # 取 60ms/段留一倍余量；真少一段是秒级量级，不会被这个容差放过。
+        tolerance = max(0.5, 0.06 * len(sorted_files))
+        if got <= 0 or abs(got - expect_total) > tolerance:
+            raise RuntimeError(
+                f"拼接产物时长对不上：期望 {expect_total:.2f}s（{len(sorted_files)} 段之和），"
+                f"实际 {got:.2f}s，容差 {tolerance:.2f}s —— 有段落没进成片")
         print(f"[Timer] 拼接: concat merge 耗时: {time.perf_counter() - t_merge:.2f}s")
-        print("视频拼接完成")
+        print(f"视频拼接完成（{len(sorted_files)} 段 / {got:.2f}s）")
     finally:
         if os.path.exists(temp_dir):
             for file in os.listdir(temp_dir):

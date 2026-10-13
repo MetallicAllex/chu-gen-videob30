@@ -1,11 +1,11 @@
 import streamlit as st
 from datetime import datetime
 from utils.PathUtils import *
-import shutil, time, traceback, threading
+import time, traceback
 from utils.ImageUtils import render_all_images
 from utils.Variables import ACCEL_BRAND, HARD_RENDER_METHOD
-from utils.PageUtils import format_time_difference, get_ffmpeg_version
-from utils.SegmentUtils import render_all_video_clips, combine_full_video_direct
+from utils.PageUtils import get_ffmpeg_version
+
 from utils.Quadrants.SafeRender import RENDER_STATUS, submit_render, cancel_render
 
 st.header("Step 5: 视频渲染")
@@ -39,9 +39,14 @@ def quad_status_header():
 
     app_title = "chu-gen-videob30"
     if s['running']:
-        if s['total_clips'] and s['total_frames']:
-            pct = (s['clip_idx'] + s['frame'] / s['total_frames']) / s['total_clips']
-            tail = f"（总体 {pct:.0%}）"
+        # 经典路（CPU 逐段编码）没有逐帧回调，total_frames 恒为 0。以前这里把
+        # total_frames 当成必要条件，结果经典路整场只显示"渲染中"——段号明明在走
+        # （[2/6]）却不上标题，看起来像没反应。没有帧粒度时按段算就好。
+        if s['total_clips']:
+            frac = s['clip_idx'] / s['total_clips']
+            if s['total_frames']:
+                frac = (s['clip_idx'] + s['frame'] / s['total_frames']) / s['total_clips']
+            tail = f"（总体 {frac:.0%}）"
             tab_title = f"[{s['clip_idx'] + 1}/{s['total_clips']}] {s['clip_name']}{tail} — {app_title}"
         else:
             tab_title = f"渲染中 — {app_title}"
@@ -70,13 +75,12 @@ st.info("渲染视频前，请确保已完成 4-1 和 4-2，并且所有配置�
 st.error("请勿在渲染过程中修改任何参数，这可能会导致渲染过程意外中断或素材损坏！", icon="❗")
 G_config = read_global_config()
 
-if 'global_rendering' not in st.session_state:
-    st.session_state.global_rendering = False
-
-# quad 渲染已迁移到常驻工作线程 + 模态进度浮窗（见页尾）：渲染期间整页被
-# 浮窗遮罩锁定，无需再按会话标记逐个禁用按钮；并发防护由 RENDER_STATUS.running
+# 渲染跑在常驻工作线程 + 模态进度浮窗（见页尾）：并发防护由 RENDER_STATUS.running
 # 与 SafeRender 的进程级互斥锁承担（刷新/换页签均安全）。
-button_disable_stat = st.session_state.global_rendering
+# 这里以前读 st.session_state.global_rendering——那个标记是同步渲染时代的产物：
+# 脚本线程被渲染占满时根本不会有下一趟重跑来把它复位，页面看着就是"卡死"。
+# 现在提交即返回，按钮禁用与否直接看任务状态。
+button_disable_stat = RENDER_STATUS.running
 
 ### Savefile Management - Start ###
 if "username" in st.session_state:
@@ -268,7 +272,7 @@ with st.container(border=True):
                 help="不会影响视频长度，且越大越不容易糊，但文件大小和生成时间也会随之增加"
             )
             v_bitrate = bitrate_presets[selected_bitrate]
-            encoder_param["bitrate"] = bitrate_presets[selected_bitrate]
+            encoder_param["bitrate"] = v_bitrate
             bitrate_display = selected_bitrate  # 直接使用预设的完整字符串
         else:
             st.toast("高码率可使您的视频更清晰，但视频生成时间会变得更长，且输出文件大小也会变的更大", icon="⚠️")
@@ -276,7 +280,16 @@ with st.container(border=True):
                 help="将添加上限【两倍码率】和缓冲区【四倍码率】，防止因超限导致生成时间变长",
                 placeholder="1000 ≤ 码率 ≤ 20000"
             )
-            bitrate_display = f"自定义（{v_bitrate}kbps）"  # 自定义码率的显示格式
+            # 两条路线都必须把码率落到 encoder_param：旧写法只在预设分支赋值，
+            # 自定义那一路填多少都没进 ffmpeg 命令（-b:v 一直用着默认的 5000k）。
+            if v_bitrate:
+                encoder_param["bitrate"] = v_bitrate
+                bitrate_display = f"自定义（{v_bitrate}kbps）"
+            else:
+                # 没填就用默认值，但要把"你的输入没生效"说破，别让人以为已经按自定义编码了
+                bitrate_display = f"自定义（未填，按默认 {encoder_param['bitrate']}kbps）"
+                st.warning(f"自定义码率还没有值，本次按默认 {encoder_param['bitrate']}kbps 编码。",
+                           icon="⚠️")
             
 
 # trans_config_placeholder = st.empty()
@@ -329,7 +342,7 @@ def save_video_render_config():
     # 保存配置
     G_config['ONLY_GENERATE_CLIPS'] = clips_only
     G_config['VIDEO_RES'] = (v_res_width, v_res_height)
-    G_config['VIDEO_BITRATE'] = v_bitrate or selected_bitrate
+    G_config['VIDEO_BITRATE'] = encoder_param['bitrate']
     G_config['VIDEO_TRANS_ENABLE'] = trans_enable
     G_config['VIDEO_TRANS_TIME'] = trans_time
     write_global_config(G_config)
@@ -370,29 +383,11 @@ with btn_col1:
                     - 文件名和编码器：`{username}_Best50.mp4（{opt_encoder}）`
                     - 分辨率、码率: `{res_display} / {bitrate_display}`
                     """):
-            st.session_state.global_rendering = True
+            # 提交给常驻工作线程，本脚本立即返回：以前这里是在脚本线程里直接跑完整场渲染，
+            # 页面冻结到渲染结束——浏览器里既没有进度也点不动任何控件，「取消」无从下手。
             st.session_state.pop('render_error', None)
-            # st.session_state.current_render_mode = "fast"
+            st.session_state.render_start_requested = True
             st.rerun()
-
-    def cleanup_after_render():
-        """清理渲染后的临时文件和状态"""
-        try:
-            shutil.rmtree(TEMP_GENERATED_DIR)
-            os.makedirs(TEMP_GENERATED_DIR, exist_ok=True)
-        except Exception as e:
-            # 裸 except: pass 会把"没清理掉"变成静默事实，下次渲染撞上残留才炸，
-            # 而且看不出根因。清理失败不阻断收尾，但要留在控制台。
-            print(f"清理临时渲染目录失败（不阻断收尾）：{type(e).__name__}: {e}｜目录：{TEMP_GENERATED_DIR}")
-            
-        # 恢复状态
-        st.session_state.global_rendering = False
-        # if 'current_render_mode' in st.session_state:
-        #     del st.session_state.current_render_mode
-        
-        # 延迟后刷新
-        time.sleep(2)
-        st.rerun()
 
 # ===== 独立的 Quadrants GPU 渲染按钮（实验，不与上面「开始渲染」合并）=====
 if st.button("Quadrants GPU 渲染（实验）", "quad_render", width='stretch',
@@ -408,103 +403,64 @@ if st.button("Quadrants GPU 渲染（实验）", "quad_render", width='stretch',
     st.session_state.quad_start_requested = True
     st.rerun()
 
-# 统一的渲染控制器
-if st.session_state.global_rendering:
-    # render_mode = st.session_state.get('current_render_mode', 'standard')
-    # clips_only = st.session_state.get('clips_only', False)
-    start_time = time.time()  # 记录开始时间
-    print("开始记录生成时间。")
-    st.info("""
-            渲染进行中，请在控制台窗口查看详细进度。
-            - 不要刷新页面或进行任何操作，这可能会导致进度提前终止。
-            """, icon="ℹ️")
-    
-    try:
-        start_time = time.time()
-        save_video_render_config()
-        video_res = (v_res_width, v_res_height)
-
-        image_root = current_paths['image_dir']
-        fullbg_dir = os.path.join(image_root, 'fullbg')
-        if not os.path.exists(fullbg_dir):
-            print("正在预先渲染背景板图像。")
-            render_all_images(video_config_file, current_paths['custom_style'], current_paths)
-        
-        # 合并渲染逻辑：只有 classic_fast_render 参数不同
-        # classic_fast_render = (render_mode == 'standard')
-
-        # render_all_video_clips(video_configs, 
-        #                        video_output_path, 
-        #                        video_res, 
-        #                        v_bitrate_kbps,
-        #                       trans_params,
-        #                       encoder_param, 
-        #                       force_render_clip, 
-        #                       classic_fast_render)
-        
-        # render_all_video_clips(video_configs,
-        #                        video_output_path,
-        #                        trans_params,
-        #                        encoder_param,
-        #                        style_config,
-        #                        force_render_clip)
-        
-        # if not clips_only:
-        #     # 合并视频拼接逻辑：只有 classic_fast_render 参数不同
-        #     combine_full_video_direct(video_output_path, username)
-        
-        
-        _render_result = render_all_video_clips(
-            video_configs,           # 视频配置数据
-            video_output_path,     # 最终片段存储目录（如 './videos/clips'）
-            trans_params,         # 过渡参数 {'enabled': True, 'duration': 1}
-            encoder_param,       # 编码参数 {'resolution': (1920,1080), 'bitrate': 5000, ...}
-            style_config,        # 样式配置 {'darkness': 0.3, 'position': {...}}
-            force_render_clip   # 是否强制重新渲染
-        )
-
-        # 片段级失败不会抛异常（生成器返回 None 后继续下一段），不主动查就会
-        # 拼出一个"看起来成功"、实则缺了大半段落的完整视频。
-        _failed = _render_result or []
-        if _failed:
-            st.session_state.render_error = (
-                f"{len(_failed)} 个片段编码失败、没有产出文件，完整视频缺这些段落：\n"
-                f"{', '.join(_failed)}\n\n"
-                "每个片段的 ffmpeg 错误详情见 videos/error_logs/ 下本次生成的日志。"
-            )
-            st.error(f"{len(_failed)} 个片段渲染失败（详情见下方提示，已保留）", icon="❌")
-        else:
-            if not clips_only:
-                combine_full_video_direct(video_output_path, username)
-        
-        # 耗时对成功和失败都成立；但"渲染完成"这句旧写法放在 if _failed / else 之外，
-        # 缺了大半段落的成片也会弹 ✅ —— 结论必须跟着 _failed 走。
-        duration = time.time() - start_time  # 用完成的当前时间减去开始时间获取生成时长
-        formatted_total_time = format_time_difference(duration)
-        print(f"生成操作完成，总耗时{formatted_total_time}")
-        if _failed:
-            st.toast(f"渲染结束，但有 {len(_failed)} 个片段失败（详情见下方）", icon="⚠️")
-        else:
-            st.toast("渲染完成！", icon="✅")
-        
-    except Exception as e:
-        # 存进 session_state 供整页重跑后继续展示（见页面上方的 render_error 区块）
-        st.session_state.render_error = f"{e}\n\n{traceback.format_exc()}"
-        st.error(f"渲染失败: {str(e)}", icon="❌")
-        
-    finally:
-        # 清理和恢复状态
-        cleanup_after_render()
 
 
-# ===== Quadrants GPU 渲染控制器（常驻工作线程 + 模态进度浮窗，刷新安全）=====
-# RENDER_STATUS / submit_render / cancel_render 已在页首导入（状态条需要）。
+# ===== 渲染请求统一交给常驻工作线程 =====
+# 旧写法是在这里同步跑 render_all_video_clips + combine：Streamlit 脚本线程被占满，
+# 整场渲染期间页面不重跑、不响应任何控件，浏览器里看不到进度，也没有"取消"可言
+# （进度只在控制台里，而 start.bat 以外启动的用户常常根本没有控制台）。
+# 现在两条路（经典 / Quadrants）都提交到 quad-render-worker，页面只轮询 RENDER_STATUS。
+def _prepare_and_submit(prefer: str) -> bool:
+    """定格当前页面参数并提交渲染任务；返回是否真的提交成功。"""
+    if RENDER_STATUS.running:
+        st.warning("已有渲染在进行中，本次请求已忽略（同一应用同时只允许一个渲染任务）。")
+        return False
+    save_video_render_config()
+
+    # 成绩板 / 底板图像预渲染：放在页面线程里做，带 UI 反馈
+    image_root = current_paths['image_dir']
+    fullbg_dir = os.path.join(image_root, 'fullbg')
+    if not os.path.exists(fullbg_dir):
+        print("正在预先渲染背景板图像。")
+        render_all_images(video_config_file, current_paths['custom_style'], current_paths)
+
+    return submit_render(
+        video_configs=video_configs,
+        video_output_path=video_output_path,
+        trans_param=trans_params,
+        encoder_param=encoder_param,
+        style_config=style_config,
+        username=username,
+        force_render=force_render_clip,
+        clips_only=clips_only,
+        prefer=prefer,
+    )
 
 
-@st.dialog("Quadrants 渲染进度", width="small", dismissible=False)
+if st.session_state.pop('render_start_requested', False):
+    if _prepare_and_submit('classic'):
+        st.toast("渲染已在后台启动，刷新页面不影响任务", icon="🚀")
+        st.session_state.quad_show_task = True
+    st.rerun()
+
+# 点击渲染按钮：校验并发后提交到常驻工作线程（本脚本线程立即解放）
+_start_requested = st.session_state.pop('quad_start_requested', False)
+if _start_requested:
+    if _prepare_and_submit('quadrants'):
+        st.toast("渲染已在后台启动，刷新页面不影响任务", icon="🚀")
+        # 提交成功：本轮结束时自动弹出一次任务浮窗（之后可用页首按钮调出）
+        st.session_state.quad_show_task = True
+    else:
+        st.warning("已有渲染在进行中，本次请求已忽略。")
+
+
+@st.dialog("渲染进度", width="small", dismissible=False)
 def quad_progress_dialog():
     """模态进度浮窗：dismissible=False 彻底移除右上角关闭按钮（Esc/点击
     外部也无效），渲染期间整页不可交互，唯一出口是底部的「取消当前任务」。
+
+    两条渲染路径（页 6 的经典路 / Quadrants 实验路）共用这一个浮窗——它们现在
+    都跑在同一个常驻工作线程里，状态统一走 RENDER_STATUS。
 
     进度更新采用 **整页每秒重跑** 模型：每趟渲染一次状态快照，running 时
     sleep(1) 后 st.rerun()（app scope）。之所以不用 fragment 自重跑——
@@ -515,18 +471,29 @@ def quad_progress_dialog():
     （配置有缓存），每秒重跑无感。
     """
     s = RENDER_STATUS.snapshot()
-    st.caption(f"任务 {s['job_id'][:12] or '…'} · 渲染在常驻工作线程执行；本浮窗期间页面已锁定，"
+    _backend_label = {'segmentutils': '经典路径（CPU）', 'quadrants': 'Quadrants GPU',
+                      '': '尚未开始'}.get(s['backend'], s['backend'])
+    st.caption(f"任务 {s['job_id'][:12] or '…'} · 后端 {_backend_label} · "
+               "渲染在常驻工作线程执行；本浮窗期间页面已锁定，"
                "刷新不会中断渲染，重新进入会自动接续进度。")
 
     running = RENDER_STATUS.running
     if running:
-        overall_pct = ((s['clip_idx'] + s['frame'] / s['total_frames']) / s['total_clips']
-                       if s['total_clips'] and s['total_frames'] else 0.0)
+        # 同上：经典路只有段级进度，total_frames 恒为 0，不能让百分比算式把它当必要条件
+        # （实测浮窗整场停在「总体 0.0%」「当前片段 0/0 帧」，像卡住一样）
+        overall_pct = s['clip_idx'] / s['total_clips'] if s['total_clips'] else 0.0
+        if s['total_clips'] and s['total_frames']:
+            overall_pct = (s['clip_idx'] + s['frame'] / s['total_frames']) / s['total_clips']
         clip_pct = (s['frame'] / s['total_frames'] if s['total_frames'] else 0.0)
         st.progress(min(max(overall_pct, 0.0), 1.0),
                     text=f"总体 {overall_pct:.1%} · [{s['clip_idx'] + 1}/{s['total_clips']}] {s['phase']}")
-        st.progress(min(max(clip_pct, 0.0), 1.0),
-                    text=f"当前片段 {clip_pct:.1%} · {s['clip_name']} · {s['frame']}/{s['total_frames']} 帧")
+        if s['total_frames']:
+            st.progress(min(max(clip_pct, 0.0), 1.0),
+                        text=f"当前片段 {clip_pct:.1%} · {s['clip_name']} · "
+                             f"{s['frame']}/{s['total_frames']} 帧")
+        else:
+            # CPU 逐段编码没有逐帧回调：这条不画假进度条，只报在渲哪一段
+            st.text(f"当前片段：{s['clip_name']}（CPU 逐段编码，完成一段才推进）")
 
     # 取消按钮：按用户要求固定在浮窗最下面；on_click 回调在下一趟整页重跑
     # 开头被处理（≤1s），cancel_render 只终止本 job 登记的子进程，不按名称查杀。
@@ -569,6 +536,10 @@ def quad_progress_dialog():
         time.sleep(2)
     elif _final['phase'] == '失败':
         st.error(f"渲染失败：{_final['error'] or '详见控制台'}", icon="❌")
+        # 浮窗一关就没了，而失败原因必须留到用户回来看：worker 线程不能直接写
+        # st.session_state，所以在这里（页面线程）把快照里的错误转存一份
+        if _final['error']:
+            st.session_state.render_error = _final['error']
         time.sleep(10)
     # 浮窗对 RENDER_STATUS 只读——running 的生命周期归工作线程，这里绝不复位。
     # 收尾：清掉打开标记再整页重跑，下一趟入口不再调用本浮窗 → 模态关闭。
@@ -577,38 +548,6 @@ def quad_progress_dialog():
     st.session_state.quad_show_task = False
     st.rerun()  # 整页重跑：标记已清，浮窗不再被调用（app scope 在此合法）
 
-# 点击渲染按钮：校验并发后提交到常驻工作线程（本脚本线程立即解放）
-_start_requested = st.session_state.pop('quad_start_requested', False)
-if _start_requested:
-    if RENDER_STATUS.running:
-        st.warning("已有渲染在进行中，本次请求已忽略（同一应用同时只允许一个渲染任务）。")
-    else:
-        save_video_render_config()
-
-        # 成绩板 / 底板图像预渲染（与原路径一致；放在页面线程里做，带 UI 反馈）
-        image_root = current_paths['image_dir']
-        fullbg_dir = os.path.join(image_root, 'fullbg')
-        if not os.path.exists(fullbg_dir):
-            print("正在预先渲染背景板图像。")
-            render_all_images(video_config_file, current_paths['custom_style'], current_paths)
-
-        # 任务参数在点击时刻定格（快照当前页面配置）
-        ok = submit_render(
-            video_configs=video_configs,
-            video_output_path=video_output_path,
-            trans_param=trans_params,
-            encoder_param=encoder_param,
-            style_config=style_config,
-            username=username,
-            force_render=force_render_clip,
-            clips_only=clips_only,
-        )
-        if ok:
-            st.toast("渲染已在后台启动，刷新页面不影响任务", icon="🚀")
-            # 提交成功：本轮结束时自动弹出一次任务浮窗（之后可用页首按钮调出）
-            st.session_state.quad_show_task = True
-        else:
-            st.warning("已有渲染在进行中，本次请求已忽略。")
 
 # 打开任务浮窗的两个入口：① 页首「打开渲染任务浮窗」按钮；② 提交成功后的
 # 首次自动弹出。浮窗以模态阻塞到渲染结束/取消；期间状态由页首状态条兜底展示。

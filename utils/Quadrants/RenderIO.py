@@ -258,6 +258,26 @@ def run_owned_command(cmd: list, **kwargs):
             job.unregister_child(process)
 
 
+def run_owned_complete(cmd: list, encoding: str = 'utf-8'):
+    """run_owned_command 的"要返回码 + 两条流"版本，供 SegmentUtils 编码用。
+
+    那边原来写的是 `subprocess.run(check=True, capture_output=True)`：Popen 是 run() 内部
+    私有的，`cancel_render` 手里没有进程对象，只能等这条 ffmpeg 自己编完——**取消点了没反应**
+    就是这么来的。登记给当前 job 之后，取消会真的终止这次编码。
+    """
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, encoding=encoding, errors='replace')
+    job = _ACTIVE_RENDER_JOB
+    if job is not None:
+        job.register_child(process)
+    try:
+        out, err = process.communicate()
+        return process.returncode, out, err
+    finally:
+        if job is not None:
+            job.unregister_child(process)
+
+
 def _start_ffmpeg(cmd: list, capture_stdout: bool = False, bufsize: int = 0, render_job=None):
     """启动 ffmpeg，并登记到当前 RenderJob；取消只会终止该 Popen 实例。"""
     process = subprocess.Popen(

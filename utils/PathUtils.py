@@ -23,6 +23,10 @@ TEMP_GENERATED_DIR = os.path.join(APP_ROOT, "videos", "temp_generated")
 # 改成绝对路径会连带改动存档里的路径格式。可写性由 st_app.py 启动时的 chdir 保证。
 DOWNLOADS_DIR = os.path.join("videos", "downloads")
 
+# 渲染失败日志的目录。收成一条常量除了"别处不再各写一遍"，还要让离线测试能把它指到沙盒里——
+# 否则跑一次取消实验就往仓库的 videos/error_logs 丢三条日志。可写性同样由启动时的 chdir 保证。
+ERROR_LOG_DIR = os.path.join("videos", "error_logs")
+
 def get_user_base_dir(username):
     """Get base directory for user data"""
     return os.path.join("b30_datas", username)

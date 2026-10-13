@@ -6,7 +6,7 @@
 import numpy as np
 from datetime import datetime
 from queue import Queue, Empty
-import os, threading, subprocess, time, collections
+import hashlib, json, os, threading, subprocess, time, collections
 from typing import Any, Dict, List, Tuple, Optional
 
 from moviepy import ImageClip
@@ -14,7 +14,7 @@ from moviepy import ImageClip
 from utils.DataUtils import sort_video_files
 from utils.ImageUtils import create_blank_image
 from utils.PageUtils import format_time_difference
-from utils.PathUtils import is_artifact_valid, TEMP_GENERATED_DIR
+from utils.PathUtils import is_artifact_valid, load_config, save_config, ERROR_LOG_DIR, TEMP_GENERATED_DIR
 from utils.Variables import HARD_RENDER_METHOD, REVERSE_LEVEL_LABELS, image_root_path
 
 
@@ -37,6 +37,113 @@ GAIN_CLIP_MAX = 3.0
 # - output_path: 片段最终输出路径，ffmpeg 单次编码直写（先 .part 再原子改名）
 # - final_clips_dir: 最终片段存储目录，用于存储渲染完成的视频片段（后续拼接用）
 # - output_dir: 通用输出目录
+
+# ── 渲染指纹：让"这个片段还要不要渲"有依据可查 ────────────────────────
+# 旧判据只有一条"文件在不在"，于是三类改动都不生效（实测见 tests/test_render_freshness.py）：
+#   改分辨率/码率/背景亮度 → 旧片段原样进 concat -c copy，成片一段 720p 一段 1080p；
+#   名单变短 → 目录里遗留的下一号被 sort_video_files 收进清单尾巴（多播两段旧内容）；
+#   同编号新旧文件同时存在 → 收哪份取决于 os.listdir 的顺序（实测旧文件赢了，
+#   0 号位置播的是上一轮那首歌）。
+RENDER_MANIFEST_NAME = 'render_manifest.json'
+LEGACY_SIGNATURE = 'legacy'   # 升级前渲的片段：没有指纹可对照，参数不变时按原样沿用
+
+
+class MissingClipInputError(ValueError):
+    """片段的必需输入素材缺失/不可用。
+
+    与"ffmpeg 跑失败"区别对待：那种是环境或编码器问题，而这是配置本身带缺口
+    （页 4「仍要生成（缺失项留空）」的产物）。旧写法把它拼进命令行里的 None，
+    subprocess 抛 TypeError —— 那不是 CalledProcessError，generate() 的 except 拦不住，
+    于是一段素材缺失能让 50 段全停、已渲的白做（实测 TypeError: expected str, bytes
+    or os.PathLike object, not NoneType）。现在改成：这一段带着原因失败，其余照跑。
+    """
+
+
+def _digest(payload: Any) -> str:
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str)
+                        .encode('utf-8')).hexdigest()[:16]
+
+
+def _file_stamp(path: Optional[str]) -> str:
+    """素材的 (mtime, size) 摘要；空路径/读不到都归一成固定串。"""
+    if not path:
+        return 'none'
+    try:
+        st = os.stat(path)
+        return f"{int(st.st_mtime)}:{st.st_size}"
+    except OSError:
+        return 'missing'
+
+
+def global_render_signature(encoder_param: dict, style_config: dict,
+                            trans_param: Optional[dict] = None,
+                            bake_fades: bool = True) -> str:
+    """影响"整批片段怎么渲"的参数指纹：换它就必须整批重渲。
+
+    只收真正进画面的量：分辨率、码率、编码器、背景亮度、谱面叠加位置与高度、
+    转场方式。不含输出目录与用户名——那两个改了不该触发重渲。
+    """
+    position = ((style_config or {}).get('position') or {}).get('video') or {}
+    trans = trans_param or {}
+    return _digest({
+        'res': list(encoder_param.get('resolution') or []),
+        'bitrate': encoder_param.get('bitrate'),
+        'codec': encoder_param.get('codec'),
+        'darkness': (style_config or {}).get('darkness'),
+        'overlay': position.get('overlay'),
+        'height': position.get('height'),
+        'transition': 'bake' if bake_fades else 'xfade',
+        'trans_enabled': trans.get('enabled'),
+        'trans_duration': trans.get('duration'),
+    })
+
+
+def clip_render_signature(config: dict) -> str:
+    """单个片段的指纹：它自己的参数 + 输入素材的 mtime/size。
+
+    刻意不含 bg_offset —— 那是渲染时按前序片段累计注入的派生值（顺序变了文件名
+    前缀就变，天然会重渲），把它算进来会让"只改一首"波及全片。
+    """
+    return _digest({
+        'id': config.get('id'),
+        'duration': config.get('duration'),
+        'start': config.get('start'),
+        'end': config.get('end'),
+        'text': config.get('text'),
+        'bg_page': config.get('bg_page'),
+        'no_overlay': config.get('no_overlay'),
+        'no_sound': config.get('no_sound'),
+        'src': {name: _file_stamp(config.get(name))
+                for name in ('main_image', 'full_image', 'video')},
+    })
+
+
+def read_render_manifest(final_clips_dir: str) -> Optional[dict]:
+    """读片段目录里的渲染指纹清单；不存在或读不出来都返回 None（= 没有指纹可依）。"""
+    path = os.path.join(final_clips_dir, RENDER_MANIFEST_NAME)
+    if not is_artifact_valid(path):
+        return None
+    try:
+        data = load_config(path)
+    except Exception as e:
+        print(f"[!] 渲染指纹清单读不出来，本次按旧判据处理（{path}）："
+              f"{type(e).__name__}: {e}")
+        return None
+    if not isinstance(data, dict) or 'clips' not in data:
+        return None
+    return data
+
+
+def write_render_manifest(final_clips_dir: str, global_sig: str,
+                          clips: Dict[str, str]) -> None:
+    """落盘渲染指纹清单（save_config 是原子写）。失败只警告，不打断已经渲好的产物。"""
+    path = os.path.join(final_clips_dir, RENDER_MANIFEST_NAME)
+    try:
+        save_config(path, {'global': global_sig, 'clips': clips,
+                           'written_at': datetime.now().isoformat(timespec='seconds')})
+    except (OSError, ValueError) as e:
+        print(f"[!] 渲染指纹清单没写进去，下次渲染可能沿用陈旧片段（{path}）："
+              f"{type(e).__name__}: {e}")
 
 
 # ==================== 音频处理 ====================
@@ -115,6 +222,9 @@ class VideoGenerator:
         # 淡入淡出 / 响度在唯一一次编码里由 ffmpeg 完成，由 generate() 填充
         self._v_fx = ''
         self._a_fx = ''
+        # 失败原因（缺素材等）。generate() 只回 True/False，原因靠这里带出去，
+        # 由 render_all_video_clips 拼进失败清单，页面才能说清"这段为什么没出片"
+        self.last_error = ''
 
     def _build_effects(self, duration: float, fade_duration: float,
                        gain_db: Optional[float]) -> Tuple[str, str]:
@@ -149,8 +259,14 @@ class VideoGenerator:
         """该片段的背景起播偏移，已折进背景视频一轮长度内。"""
         offset = float(clip_config.get('bg_offset', 0) or 0)
         duration = get_bg_duration(bg_video_path)
-        if offset > 0 and duration > 0:
+        if duration > 0:
             offset %= duration
+        else:
+            # 探测不到长度就不能照原样发 -ss：Best50 累计 500+ 秒，而 bg.mp4 只有几十秒，
+            # -ss 越过文件末尾 → 背景输入零帧 → 整条滤镜图无输出（"Could not open encoder
+            # before EOF"），v1.2.6 记录的 52 段里 45 段静默失败就是这条路。
+            # 归零与 _bg_chain 的 loop 兜底（start=0）同一起点：画面不推进，但不丢片段。
+            offset = 0.0
         return max(offset, 0.0)
 
     def _bg_seek_args(self, bg_video_path: str, clip_config: dict) -> List[str]:
@@ -280,7 +396,7 @@ FFmpeg 命令:
 {clip_config}
 ============================ 错误日志结束 ============================"""
         
-        log_path = f'./videos/error_logs/generation_error_report_{timestamp}.log'
+        log_path = os.path.join(ERROR_LOG_DIR, f'generation_error_report_{timestamp}.log')
         if not os.path.exists(os.path.dirname(log_path)):
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, 'a', encoding='utf-8') as f:
@@ -362,14 +478,16 @@ class InfoSegmentGenerator(VideoGenerator):
 
         try:
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+                _run_encode(cmd)
             except subprocess.CalledProcessError as hw_err:
                 # 硬件编码器探测通过但实际编码失败（段位/驱动行为差异等）：
-                # 回退 libx264 重试一次，避免整段静默丢失
+                # 回退 libx264 重试一次，避免整段静默丢失。
+                # 但"被取消终止"也长这样——不先过一遍检查点，点取消反而会再烧一遍软编。
+                _render_checkpoint()
                 if getattr(self, 'encoder_name', 'libx264') != 'libx264':
                     print(f"[SegmentUtils] {self.encoder_name} 编码失败，回退 libx264 重试: {hw_err}")
                     cmd = _make_cmd(['-vcodec', 'libx264', '-preset', 'medium'])
-                    subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+                    _run_encode(cmd)
                 else:
                     raise
             os.replace(staged_path, output_path)
@@ -377,10 +495,14 @@ class InfoSegmentGenerator(VideoGenerator):
             print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
             return True
         except subprocess.CalledProcessError as e:
-            _discard_staged(staged_path)
             self._log_error(clip_config, output_path,
                             cmd, self.timestamp, e)
             return False
+        finally:
+            # 取消/异常都会留下 .part（旧写法只在 CalledProcessError 分支里清，
+            # RenderCancelled 直接从 finally 外头逃出去，半成品就一直躺在片段目录里）。
+            # os.replace 成功之后这里是空操作。
+            _discard_staged(staged_path)
     
     def _get_bg_video_path(self) -> str:
         """获取背景视频路径"""
@@ -398,9 +520,11 @@ class InfoSegmentGenerator(VideoGenerator):
     def _get_bg_image_path(self, clip_config: dict) -> Optional[str]:
         """获取背景图片路径
 
-        任何"没有可用底图"的情形（无底图开关 / 路径为空 / 文件不存在）统一
-        返回 None 走纯背景渲染——此前普通文本页会把幽灵路径传给 ffmpeg 直接炸，
-        与 quad 路径的优雅跳过行为分歧。
+        任何"没有可用底图"的情形（无底图开关 / 路径为空 / 文件不存在 / 配置里根本没这个键）
+        统一返回 None 走纯背景渲染——此前普通文本页会把幽灵路径传给 ffmpeg 直接炸，
+        而 bg_page=True 那支更是直接下标 `clip_config['full_image']`：intro/ending 的配置
+        是 gen_video_config 造的，里面没有这个键，只有跑过生成图片才会补上 → KeyError 崩全场；
+        值为空串时 abspath("") 得到的是**应用根目录**，ffmpeg 拿到一个目录当图片输入。
         """
         clip_id = clip_config.get('id', '?')
         bg_page = clip_config.get('bg_page', False)
@@ -409,13 +533,16 @@ class InfoSegmentGenerator(VideoGenerator):
         if no_overlay:
             print(f"信息: 片段 {clip_id} 已禁用底板图像")
             return None
-        if not bg_page:
-            # 普通文本页：底图只在真实生成过时才可用
-            raw = (clip_config.get('full_image') or '').strip()
-            if not raw or not os.path.exists(raw):
-                print(f"信息: 片段 {clip_id} 无可用底图，按纯背景渲染")
-                return None
-        return os.path.abspath(clip_config['full_image']).replace('\\', '/')
+        raw = (clip_config.get('full_image') or '').strip()
+        if not raw:
+            print(f"信息: 片段 {clip_id} 声明了底图页但没有底图路径，按纯背景渲染")
+            return None
+        if not os.path.exists(raw):
+            # 降级必须说破：勾了背景板却渲出纯背景，不能让人以为底图生效了
+            print(f"信息: 片段 {clip_id} 的底图不存在（{raw}），本次按纯背景渲染"
+                  f"{'（背景板页）' if bg_page else ''}")
+            return None
+        return os.path.abspath(raw).replace('\\', '/')
 
     def _get_bg_audio_path(self, clip_config: dict) -> Optional[str]:
         """获取背景音频路径"""
@@ -557,7 +684,14 @@ class VideoSegmentGenerator(VideoGenerator):
             float(clip_config['duration']), fade_duration, gain_db)
 
         # 构建FFmpeg命令
-        input_args, filter_complex, audio_stream = self._build_ffmpeg_command(clip_config)
+        try:
+            input_args, filter_complex, audio_stream = self._build_ffmpeg_command(clip_config)
+        except MissingClipInputError as e:
+            # 缺素材只让这一段失败并带上原因：整场停摆会把已渲好的几十段一起废掉，
+            # 而"静默把 None 拼进命令行"抛的是 TypeError，下面的 except 根本接不到。
+            self.last_error = str(e)
+            print(f"[!] 片段 {clip_config.get('id')} 缺输入素材，跳过这一段：{e}")
+            return False
         
         encoding_args = self._build_encoding_args()
         base_args = self._build_base_ffmpeg_args()
@@ -593,13 +727,15 @@ class VideoSegmentGenerator(VideoGenerator):
 
         try:
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+                _run_encode(cmd)
             except subprocess.CalledProcessError as hw_err:
-                # 硬件编码失败：回退 libx264 重试一次，避免整段静默丢失
+                # 硬件编码失败：回退 libx264 重试一次，避免整段静默丢失。
+                # 取消终止也走这个分支，所以先过检查点——否则点「取消」会再烧一遍软件编码。
+                _render_checkpoint()
                 if getattr(self, 'encoder_name', 'libx264') != 'libx264':
                     print(f"[SegmentUtils] {self.encoder_name} 编码失败，回退 libx264 重试: {hw_err}")
                     cmd = _make_cmd(['-vcodec', 'libx264', '-preset', 'medium'])
-                    subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+                    _run_encode(cmd)
                 else:
                     raise
             os.replace(staged_path, output_path)
@@ -607,10 +743,12 @@ class VideoSegmentGenerator(VideoGenerator):
             print(f"片段生成用时{format_time_difference(time.time() - start_time_generation)}")
             return True
         except subprocess.CalledProcessError as e:
-            _discard_staged(staged_path)
             self._log_error(clip_config, output_path,
                             cmd, self.timestamp, e)
             return False
+        finally:
+            # 同 InfoSegmentGenerator：取消逃过 except 也要清掉 .part
+            _discard_staged(staged_path)
 
     def get_audio_source(self, clip_config: dict) -> Tuple[Optional[str], float]:
         """main 片段的响度测量对象：谱面视频从 start 起算的那一段"""
@@ -737,20 +875,34 @@ class VideoSegmentGenerator(VideoGenerator):
         
         return input_args, ''.join(filter_parts), audio_stream
     
-    def _get_main_image_path(self, clip_config: dict) -> Optional[str]:
-        """获取主图片路径"""
-        full_image = clip_config.get('full_image')
-        main_image = clip_config['main_image']
-        if full_image is not None and os.path.exists(full_image):
-            return os.path.abspath(full_image).replace('\\', '/')
-        return os.path.abspath(main_image).replace('\\', '/')
-    
-    def _get_video_path(self, clip_config: dict) -> Optional[str]:
-        """获取视频路径"""
-        video = clip_config.get('video')
+    def _get_main_image_path(self, clip_config: dict) -> str:
+        """获取主图片路径（成绩板图）。缺失就报缺失，别拼一条打不开的命令蒙过去。"""
+        full_image = (clip_config.get('full_image') or '').strip()
+        main_image = (clip_config.get('main_image') or '').strip()
+        for cand in (full_image, main_image):
+            if cand and os.path.exists(cand):
+                return os.path.abspath(cand).replace('\\', '/')
+        raise MissingClipInputError(
+            "成绩板图片不可用（main_image 与 full_image 都指向不存在的文件："
+            f"{main_image or '（空）'} ｜ {full_image or '（空）'}）"
+            "—— 到【生成 Best50 图 / 查看数据】页重新生成图片，再重新生成配置")
+
+    def _get_video_path(self, clip_config: dict) -> str:
+        """获取谱面视频路径。
+
+        旧写法文件不存在时 `return None`，而调用处把它直接拼进 `['-i', video_path]`：
+        subprocess 收到 None 抛 **TypeError**，它不是 CalledProcessError，generate() 的
+        except 接不住 → **一段缺素材能让 50 段全停**，已渲好的白做（实测：
+        TypeError: expected str, bytes or os.PathLike object, not NoneType）。
+        而配置里的空路径是页 4「仍要生成（缺失项留空）」刻意允许的产物，这条路真能走到。
+        """
+        video = (clip_config.get('video') or '').strip()
         if video and os.path.exists(video):
             return os.path.abspath(video).replace('\\', '/')
-        return None
+        raise MissingClipInputError(
+            f"谱面视频不可用（video 字段是空路径或文件不存在：{video or '（空）'}）"
+            "—— 到【搜索、检查和下载视频】页补齐，或把视频按 曲ID-难度.mp4 放进 "
+            "videos/downloads 后重新生成配置")
     
     # def _process_background(self, filter_parts: List[str], input_args: List[str],
     #                     main_image_path: Optional[str], duration: float, darkness: float) -> str:
@@ -848,6 +1000,29 @@ def _discard_staged(staged_path: str):
         pass
 
 
+def _run_encode(cmd: List[str]):
+    """跑一次片段编码，非零返回码抛 CalledProcessError。
+
+    原来这里是 `subprocess.run(check=True, capture_output=True)`——Popen 由 run() 内部私有，
+    cancel_render 拿不到进程对象，**点「取消」只能等这条 ffmpeg 自己编完**（1080p 一段几十秒）。
+    改走 RenderIO 的登记通道后，取消会真的终止本次编码；被终止的片段按失败记账，
+    下一段开头的检查点随即结束整场。
+    """
+    from utils.Quadrants.RenderIO import run_owned_complete
+    rc, out, err = run_owned_complete(cmd)
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd, output=out, stderr=err)
+
+
+def _render_checkpoint():
+    """渲染循环里的取消检查点；没有活动任务时什么都不做（页 6 之外调用也安全）。"""
+    try:
+        from utils.Quadrants.RenderIO import render_checkpoint
+        render_checkpoint()
+    except ImportError:
+        pass
+
+
 def gen_black_video(duration: float, resolution: tuple[int, int]):
     """
     生成纯黑色底板视频
@@ -867,7 +1042,9 @@ def check_rendered_clips_multithreaded(
     video_configs: Dict[str, List[Dict[str, Any]]],
     final_clips_dir: str,
     force_render: bool = False,
-    max_workers: int = 4
+    max_workers: int = 4,
+    global_sig: Optional[str] = None,
+    clip_sigs: Optional[Dict[str, str]] = None
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     多线程检测已渲染的视频片段（检查最终片段存储目录）
@@ -877,10 +1054,19 @@ def check_rendered_clips_multithreaded(
         final_clips_dir: 最终片段存储目录（拼接用的片段存放位置）
         force_render: 是否强制重新渲染
         max_workers: 最大线程数
+        global_sig: 本次渲染的全局参数指纹；None = 不参与判定（旧行为，只"有文件就算已渲染"）
+        clip_sigs: {输出文件名: 片段指纹}，用于同参数下的逐片段判定
     
     Returns:
         (需要渲染的配置列表, 已存在的配置列表)
     """
+    # manifest 为 None 表示这批片段是"没有指纹时代"的产物：沿用旧判据，
+    # 由 render_all_video_clips 在本次收尾时把它们记成 LEGACY 补齐，
+    # 而不是全部推翻（那会让升级用户白白重渲整片）。
+    manifest = read_render_manifest(final_clips_dir) if global_sig else None
+    manifest_clips = (manifest or {}).get('clips') or {}
+    params_changed = bool(manifest) and manifest.get('global') != global_sig
+
     task_queue = Queue()
     result_queue = Queue()
     
@@ -903,10 +1089,19 @@ def check_rendered_clips_multithreaded(
                 break
             
             output_file = os.path.join(final_clips_dir, f"{prefix}_{config['id']}.mp4")
+            name = os.path.basename(output_file)
             # 判据只有一条：非零字节才算已渲染。0 字节的失败产物如果算"已渲染"，会被
             # 直接拼进成片（画面缺一段，界面上却显示成功）。
-            exists = is_artifact_valid(output_file) and not force_render
-            result_queue.put((prefix, config, exists))
+            fresh = is_artifact_valid(output_file) and not force_render
+            if fresh and manifest is not None and params_changed:
+                fresh = False        # 全局参数换过：这批产物不是本次参数的结果
+            if fresh and manifest is not None and clip_sigs:
+                recorded = manifest_clips.get(name)
+                if recorded == LEGACY_SIGNATURE:
+                    pass              # 无指纹可对照，参数没变就照旧沿用
+                else:
+                    fresh = recorded == clip_sigs.get(name)
+            result_queue.put((prefix, config, fresh))
             task_queue.task_done()
     
     # 启动线程
@@ -919,6 +1114,10 @@ def check_rendered_clips_multithreaded(
     
     for t in threads:
         t.join()
+
+    if global_sig and params_changed:
+        print(f"[SegmentUtils] 渲染参数与上次不同（{manifest.get('global')} → {global_sig}），"
+              f"上一轮的 {len(manifest_clips)} 个片段将重新编码")
     
     # 收集结果
     to_render = []
@@ -940,7 +1139,8 @@ def render_all_video_clips(
     encoder_param: dict,
     style_config: dict,
     force_render: bool = False,
-    bake_fades: bool = True
+    bake_fades: bool = True,
+    progress=None
 ):
     """
     生成所有视频片段并保存到最终片段目录。
@@ -964,21 +1164,46 @@ def render_all_video_clips(
     
     resolution = encoder_param['resolution']
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    
+
+    # 旧写法是裸 `return`（= None），而页 6 写的是 `_failed = _render_result or []` ——
+    # None 被当成"零失败"，于是这一程一个片段都没渲，页面照样去拼接并弹「渲染完成」。
+    # 目录里只要有上一轮的片段，拼出来的就是拿旧素材冒充本次成果的成片。缺 main 必须
+    # 走失败通道；main 是空列表同样不是能出片的状态。
+    if not resources.get('main'):
+        why = ("配置缺少 main 段（video_configs.json 里没有 main 或它是空列表），"
+               "本次没有渲染任何片段")
+        print(f"[!] {why}：请回到【编辑 Best50 视频片段】页重新生成配置")
+        return [why]
+
+    # 片段顺序与编号必须和 check_rendered_clips_multithreaded 完全一致
+    # （intro → main → ending，前缀递增），否则指纹会记到别人的文件上。
+    clip_name = lambda p, cfg: f"{p}_{cfg['id']}.mp4"
+    ordered: List[Tuple[int, dict]] = []
+    _p = 0
+    for segment_type in ['intro', 'main', 'ending']:
+        for config in resources.get(segment_type, []):
+            ordered.append((_p, config))
+            _p += 1
+    global_sig = global_render_signature(encoder_param, style_config, trans_param, bake_fades)
+    # 指纹要在注入 bg_offset 之前算：那是派生值，不该参与"这个片段变了吗"的判定
+    clip_sigs = {clip_name(p, cfg): clip_render_signature(cfg) for p, cfg in ordered}
+    manifest = read_render_manifest(final_clips_dir)
+    manifest_clips = (manifest or {}).get('clips') or {}
+
     # 检查已有片段（在最终目录中检查）
     to_render, existing = check_rendered_clips_multithreaded(
-        resources, final_clips_dir, force_render
+        resources, final_clips_dir, force_render, global_sig=global_sig,
+        clip_sigs=clip_sigs
     )
+    if manifest is None and existing:
+        print("[SegmentUtils] 片段目录里还没有渲染指纹：这批旧片段本次按原样沿用，"
+              "若成片出现尺寸/画质不一致或混入旧内容，勾选「覆盖已存在的视频」重渲一次即可建立指纹。")
     
     print(f"需要渲染 {len(to_render)} 个新片段，跳过 {len(existing)} 个已存在片段")
     
     # 如果底板视频不存在则生成一份新的
     if not os.path.exists(f"{bgclips_path}/black_bg.mp4"):
         gen_black_video(5, resolution)
-    
-    if "main" not in resources:
-        print("错误: 没有找到主视频片段的配置！请检查配置文件！")
-        return
     
     # 转场不启用、或交由拼接阶段做 xfade 时，片段内不烘焙淡变
     fade_duration = 0.0
@@ -988,49 +1213,111 @@ def render_all_video_clips(
     vfile_prefix = 0
     bg_elapsed = 0.0   # bg 连续循环：累计本片段之前所有片段的时长（秒）
     failed: List[str] = []   # 编码失败的片段；不回报的话调用方会以为整片渲染成功
+    kept_signatures: Dict[str, str] = {}   # 本次结束时磁盘上确实可用的片段 → 指纹
+    done_count = 0     # 已尝试渲染的段数，只给 progress 用
+    total_to_render = len(to_render)
+
+    def report_progress(name: str):
+        """把"渲到第几段"报给页面。经典路整场跑在常驻工作线程里，
+        页面靠 RENDER_STATUS 轮询——没有这个回调就只能等整片渲完才动一次。"""
+        if progress is None:
+            return
+        try:
+            progress(done_count, total_to_render, name)
+        except Exception as e:
+            print(f"[SegmentUtils] Warning: 进度回调异常（不影响渲染）: {e}")
 
     def render_selected_clips(clip_configs: List[dict], segment_type: str):
-        nonlocal vfile_prefix, bg_elapsed
+        nonlocal vfile_prefix, bg_elapsed, done_count
         for config in clip_configs:
+            # 取消检查点：被终止的那一段已经按失败记账，下一段开头就该结束整场，
+            # 而不是把剩下几十段继续编完（旧写法连这个点都没有，取消等于没点）
+            _render_checkpoint()
             current_prefix = vfile_prefix
+            name = clip_name(current_prefix, config)
             # bg 连续循环：把时序偏移注入配置，生成器的 ffmpeg 命令据此 -ss 起播背景
             config['bg_offset'] = round(bg_elapsed, 3)
             bg_elapsed += float(config.get('duration', 0))
 
             # 最终输出路径（保存到 final_clips_dir）
-            final_output_file = os.path.join(final_clips_dir, f"{current_prefix}_{config['id']}.mp4")
+            final_output_file = os.path.join(final_clips_dir, name)
             
             if config in to_render:
                 if segment_type == "info":
-                    print(f"开始处理头尾: {current_prefix}_{config['id']}.mp4")
+                    print(f"开始处理头尾: {name}")
                     generator = InfoSegmentGenerator(encoder_param, style_config, timestamp)
                 else:
-                    print(f"开始处理主片段: {current_prefix}_{config['id']}({config['song_name']}).mp4")
+                    print(f"开始处理主片段: {name}({config['song_name']})")
                     generator = VideoSegmentGenerator(encoder_param, style_config, timestamp)
 
-                duration = float(config.get('duration', 0) or 0)
-                audio_path, audio_start = generator.get_audio_source(config)
-                gain_db = measure_audio_gain_db(audio_path, audio_start, duration)
-                if not generator.generate(config, final_output_file, fade_duration, gain_db):
-                    failed.append(f"{current_prefix}_{config['id']}")
+                ok = False
+                report_progress(name)
+                try:
+                    duration = float(config.get('duration', 0) or 0)
+                    audio_path, audio_start = generator.get_audio_source(config)
+                    gain_db = measure_audio_gain_db(audio_path, audio_start, duration)
+                    ok = generator.generate(config, final_output_file, fade_duration, gain_db)
+                except MissingClipInputError as e:
+                    # get_audio_source 也会走 _get_video_path：缺素材要在这一程就定性，
+                    # 不能等 subprocess 拿到 None 再抛那种接不住的 TypeError
+                    generator.last_error = str(e)
+                    print(f"[!] 片段 {name} 缺输入素材，跳过这一段：{e}")
+                done_count += 1
+                if not ok:
+                    label = name[:-4] if name.endswith('.mp4') else name
+                    why = getattr(generator, 'last_error', '')
+                    failed.append(f"{label}（{why}）" if why else label)
+                elif is_artifact_valid(final_output_file):
+                    kept_signatures[name] = clip_sigs.get(name, LEGACY_SIGNATURE)
+            elif is_artifact_valid(final_output_file):
+                # 跳过复用的片段：原来带什么指纹就继续记什么；没记录的属于无指纹旧产物
+                kept_signatures[name] = manifest_clips.get(name, LEGACY_SIGNATURE)
             
             vfile_prefix += 1
     
     # 渲染各个部分
-    if 'intro' in resources:
-        render_selected_clips(resources['intro'], 'info')
-    
-    render_selected_clips(resources['main'], 'video')
-    
-    if 'ending' in resources:
-        render_selected_clips(resources['ending'], 'info')
+    # 清单必须无论如何都落盘：中途取消/异常时，已经渲好的那些片段如果没有指纹，
+    # 下一轮会连它们一起重渲（几十段白编）。
+    try:
+        if 'intro' in resources:
+            render_selected_clips(resources['intro'], 'info')
+
+        render_selected_clips(resources['main'], 'video')
+
+        if 'ending' in resources:
+            render_selected_clips(resources['ending'], 'info')
+    finally:
+        # 指纹清单落盘：只记"本次结束时磁盘上可用"的片段。失败与缺失的一个都不写，
+        # 下次它们会被判废重渲，而不是被当成陈旧产物混进拼接清单（见 combine_full_video_direct）。
+        write_render_manifest(final_clips_dir, global_sig, kept_signatures)
 
     if failed:
-        print(f"[SegmentUtils] 警告：{len(failed)} 个片段编码失败，未产出文件，"
-              f"拼接出的完整视频会缺这些段落：{', '.join(failed[:12])}"
-              f"{' …' if len(failed) > 12 else ''}")
-        print(f"[SegmentUtils] 每个片段的 ffmpeg 错误详情见 ./videos/error_logs/ 下本次生成的日志")
+        print(f"[SegmentUtils] 警告：{len(failed)} 个片段没有产出文件，"
+              f"拼接出的完整视频会缺这些段落：")
+        for _one in failed[:12]:
+            print(f"    - {_one}")
+        if len(failed) > 12:
+            print(f"    … 其余 {len(failed) - 12} 段从略")
+        print("[SegmentUtils] ffmpeg 失败详情见 ./videos/error_logs/ 下本次生成的日志；"
+              "带原因括号的属于缺素材，补素材后重新生成配置即可")
     return failed
+
+
+def _probe_duration(path: str) -> Optional[float]:
+    """产物/素材的容器时长（秒）；读不出返回 None。
+
+    读不出既包括文件损坏，也包括"根本不是一个容器"——正是 -f concat 会静默跳过的那类输入。
+    """
+    try:
+        from utils.Quadrants.RenderIO import get_ffmpeg_binary
+        r = subprocess.run(
+            [get_ffmpeg_binary('ffprobe'), '-v', 'error', '-show_entries',
+             'format=duration', '-of', 'csv=p=0', path],
+            capture_output=True, text=True, timeout=60, encoding='utf-8')
+        text = r.stdout.strip()
+        return float(text) if text else None
+    except Exception:
+        return None
 
 
 def _audio_signature(path: str) -> Optional[Tuple[str, int, int]]:
@@ -1081,6 +1368,40 @@ def _unify_audio(sorted_files: List[str], final_clips_dir: str,
     return replaced
 
 
+def _clip_order_key(name: str) -> int:
+    """从 `编号_xxx.mp4` 取排序键；不合规的文件名给可读错误，而不是裸 ValueError。"""
+    head = name.split('_')[0]
+    if not head.isdigit():
+        raise ValueError(f"渲染清单里的文件名不符合「编号_片段ID.mp4」规则：{name}")
+    return int(head)
+
+
+def concat_clip_list(final_clips_dir: str) -> Optional[List[str]]:
+    """本次该拼进成片的片段文件名；返回 None 表示"没有清单可依"，调用方按目录内容处理。
+
+    这是渲染侧与拼接侧唯一的一份"拼哪些段"判据：GPU 路的 IslandConcat 也走这里，
+    否则两条路对同一片段的取舍会分叉（换名单后拼进旧段、缺段照拼、编号撞车收谁都行）。
+    """
+    manifest = read_render_manifest(final_clips_dir)
+    if not manifest:
+        return None
+    clips = manifest.get('clips') or {}
+    if not clips:
+        return None
+    ordered = sorted(clips.keys(), key=_clip_order_key)
+    absent = [n for n in ordered if not is_artifact_valid(os.path.join(final_clips_dir, n))]
+    if absent:
+        raise ValueError(f"渲染清单里有 {len(absent)} 个片段不在磁盘上，"
+                         f"拼接中止以免悄悄少段落：{absent[:8]}")
+    # 编号必须正好是 0..N-1：渲染侧就是按这个顺序发号的（intro → main → ending）
+    nums = [_clip_order_key(n) for n in ordered]
+    if nums != list(range(len(nums))):
+        missing = sorted(set(range(max(nums) + 1)) - set(nums))
+        raise ValueError(f"渲染清单编号不连续！缺 {missing}（当前 {nums}）——"
+                         "多半是清单被改坏或中途中断过，请勾选「覆盖已存在的视频」重渲")
+    return ordered
+
+
 def combine_full_video_direct(final_clips_dir: str, username: str) -> str:
     """
     拼接所有视频片段为完整视频
@@ -1094,8 +1415,18 @@ def combine_full_video_direct(final_clips_dir: str, username: str) -> str:
     """
     print("[信息] ==================== 开始拼接视频 ==================")
     
-    video_files = [f for f in os.listdir(final_clips_dir) if f.endswith(".mp4")]
-    sorted_files = sort_video_files(video_files)
+    # 拼接清单以"本次渲染产出的片段"为准（concat_clip_list 里含"文件在不在"与
+    # "编号是否正好 0..N-1"两道校验）。按目录内容 listdir 有三个实测后果
+    # （见 tests/test_render_freshness.py 的 L 组）：名单变短后遗留的下一号被接到尾巴上；
+    # 同编号的新旧文件同时存在时收哪份取决于 os.listdir 的顺序；上一轮成片也躺在同一目录。
+    listed = concat_clip_list(final_clips_dir)
+    if listed:
+        sorted_files = listed
+        print(f"[信息] 按渲染清单拼接 {len(sorted_files)} 个片段（目录里的其他 mp4 不参与）")
+    else:
+        video_files = [f for f in os.listdir(final_clips_dir) if f.endswith(".mp4")]
+        sorted_files = sort_video_files(video_files)
+        print("[信息] 没有渲染清单可用，按目录内容拼接（旧行为）")
     
     if not sorted_files:
         raise ValueError("Error: 没有有效的视频片段文件！")
@@ -1131,26 +1462,63 @@ def combine_full_video_direct(final_clips_dir: str, username: str) -> str:
         # 拼接输出为 MP4（输出到 final_clips_dir 目录）
         output_path = os.path.join(final_clips_dir, f"{username}_Best50.mp4")
         real_path = os.path.abspath(final_clips_dir)
-        
-        # 其余 5 处都走运行目录里那份 ffmpeg，这处此前漏了：PATH 上没有就会静默失败
+
+        # 先量一边输入：-f concat 对打不开的输入是**跳过它继续拼并返回 0**，
+        # 实测 4 段里有 1 段被换成非 mp4 内容时，产物只有 0.42s（应 1.6s）却一声不响，
+        # 旧写法 check=True 看不出来，还会就地覆盖上一次成功的成片。
+        durations = [(_probe_duration(p), p) for p in sorted_files]
+        unreadable = [os.path.basename(p) for d, p in durations if not d]
+        if unreadable:
+            raise ValueError(f"有 {len(unreadable)} 个片段读不出时长（多半已损坏或不是有效 mp4），"
+                             f"拼接中止以免悄悄缺段落：{unreadable[:8]}")
+        expect_total = sum(d for d, _ in durations)
+
+        # 先写 .part 再原子改名：失败时上一次的成功成片保持原样，
+        # 也不会留下一份"看起来是成品"的半成品（.part 必须显式 -f mp4，
+        # 否则 ffmpeg 从扩展名推不出容器）
+        staged_out = output_path + '.part'
+        if os.path.exists(output_path):
+            print(f"[信息] 输出目录里已有 {os.path.basename(output_path)}，"
+                  f"本次拼接成功后才会替换它")
         from utils.Quadrants.RenderIO import get_ffmpeg_binary
         cmd = [
             get_ffmpeg_binary('ffmpeg'), '-y',
             '-hide_banner',
-            '-loglevel', 'info',
+            '-loglevel', 'error',
             '-f', 'concat',
             '-safe', '0',
-            '-i', f'{real_path}\\mp4_files.txt',
+            '-i', os.path.join(real_path, "mp4_files.txt").replace('\\', '/'),
             '-fflags', '+genpts',
             '-avoid_negative_ts', 'make_zero',
             '-max_interleave_delta', '0',
             '-c', 'copy',
             '-threads', '0',
-            output_path,
+            '-f', 'mp4',
+            staged_out,
         ]
-        subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
+        if result.returncode != 0 or not is_artifact_valid(staged_out):
+            _discard_staged(staged_out)
+            tail = ' / '.join((result.stderr or '').strip().splitlines()[-3:])
+            raise RuntimeError(
+                f"拼接失败（ffmpeg 返回码 {result.returncode}）："
+                f"{tail or '没有错误输出，且没有产出文件'}；上一次的成功成片未被改动")
+
+        got = _probe_duration(staged_out)
+        # 容差按实测定标：这条 mp4 concat 每段只漂 ~8ms（实测 3 段 24.0ms、4 段 23.2ms），
+        # 52 段量级在 0.4s 上下，30ms/段已是一倍多的余量；真少一段是 10s 量级，不会被放过。
+        tolerance = max(0.5, 0.03 * len(durations))
+        if got is None or abs(got - expect_total) > tolerance:
+            _discard_staged(staged_out)
+            raise RuntimeError(
+                f"拼接产物时长对不上：期望 {expect_total:.2f}s（{len(durations)} 段之和），"
+                f"实际 {('%.2f' % got) if got is not None else '读不出'}s，"
+                f"容差 {tolerance:.2f}s —— 有段落没进成片，已丢弃半成品，"
+                f"上一次的成功成片未被改动")
+        os.replace(staged_out, output_path)
         
-        print("[信息] ==================== 视频拼接完成 ==================")
+        print(f"[信息] ==================== 视频拼接完成（{len(durations)} 段 / "
+              f"{got:.2f}s）==================")
         return output_path
     
     except Exception as e:

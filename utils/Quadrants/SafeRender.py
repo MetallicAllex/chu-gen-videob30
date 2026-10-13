@@ -267,9 +267,14 @@ def render_full_video_safe(
     force_render: bool = False,
     clips_only: bool = False,
     progress_callback=None,
+    prefer: str = "quadrants",
     _render_job: Optional[RenderJob] = None,
 ) -> dict:
-    """对外入口：非阻塞获取渲染互斥锁后转交实现；被占用时立即返回错误。"""
+    """对外入口：非阻塞获取渲染互斥锁后转交实现；被占用时立即返回错误。
+
+    prefer="classic" 走页 6「开始渲染」那条经典路（片段内烘焙淡变 + concat 流拷贝拼接），
+    但同样跑在常驻工作线程里 —— 这样浏览器才有进度可轮询、取消才停得下来。
+    """
     job = _render_job or RenderJob(uuid.uuid4().hex)
     job.check_cancelled()
     if not _RENDER_LOCK.acquire(blocking=False):
@@ -283,17 +288,85 @@ def render_full_video_safe(
     try:
         from .RenderIO import set_active_render_job, clear_active_render_job
         set_active_render_job(job)
-        return _render_full_video_safe_impl(
-            video_configs, video_output_path, trans_param, encoder_param,
-            style_config, username, force_render, clips_only, progress_callback,
-            _render_job=job,
-        )
-    finally:
         try:
-            from .RenderIO import clear_active_render_job
-            clear_active_render_job(job)
+            if prefer == "classic":
+                return _render_classic(
+                    video_configs, video_output_path, trans_param, encoder_param,
+                    style_config, username, force_render, clips_only, job,
+                )
+            return _render_full_video_safe_impl(
+                video_configs, video_output_path, trans_param, encoder_param,
+                style_config, username, force_render, clips_only, progress_callback,
+                _render_job=job,
+            )
         finally:
-            _RENDER_LOCK.release()
+            clear_active_render_job(job)
+    finally:
+        _RENDER_LOCK.release()
+
+
+def _render_classic(video_configs, video_output_path, trans_param, encoder_param,
+                    style_config, username, force_render, clips_only,
+                    job: RenderJob) -> dict:
+    """经典渲染路径，跑在常驻工作线程里（页 6 的「开始渲染」）。
+
+    为什么要搬进线程：以前它直接在 Streamlit 脚本线程里跑，脚本不返回 → 页面整场冻结，
+    浏览器里既没有进度也点不动任何东西，「取消」更无从下手（进度只存在于控制台）。
+    语义与原来一致：片段内烘焙淡变（bake_fades 默认 True）+ concat 流拷贝拼接，
+    不走 xfade islands，也不做loudnorm 二次编码。
+    """
+    from utils.SegmentUtils import render_all_video_clips, combine_full_video_direct
+
+    RENDER_STATUS.job = job
+    RENDER_STATUS.phase = "初始化"
+    RENDER_STATUS.backend = "segmentutils"
+    RENDER_STATUS.error = ""
+    RENDER_STATUS.note = ""
+    RENDER_STATUS.clip_idx = 0
+    RENDER_STATUS.total_clips = 0
+    RENDER_STATUS.frame = 0
+    RENDER_STATUS.total_frames = 0
+    RENDER_STATUS.clip_name = ""
+
+    def _cb(done, total, name):
+        job.check_cancelled()
+        RENDER_STATUS.clip_idx = done
+        RENDER_STATUS.total_clips = total
+        RENDER_STATUS.clip_name = str(name)
+
+    try:
+        RENDER_STATUS.phase = "渲染片段（CPU）"
+        failed = render_all_video_clips(
+            video_configs, video_output_path, trans_param, encoder_param,
+            style_config, force_render, progress=_cb,
+        ) or []
+        if failed:
+            detail = "、".join(str(x) for x in failed[:12])
+            more = f" 等 {len(failed)} 段" if len(failed) > 12 else ""
+            raise RuntimeError(f"有 {len(failed)} 段没有产出文件，不拼接成片：{detail}{more}")
+        if not clips_only:
+            RENDER_STATUS.phase = "拼接成片"
+            out = combine_full_video_direct(video_output_path, username)
+            RENDER_STATUS.note = (
+                # 一段都没渲（参数与素材都没变，全被指纹判为"已完成"）时必须说清原因：
+                # 浮窗的「无事可渲」提示认的就是这个前缀。实测把成片路径塞进 note 会让它
+                # 显示成「⚠️ 成片：…一秒结束」，看着像坏了，其实是没活可干。
+                f"成片：{out}" if RENDER_STATUS.total_clips else
+                "未渲染任何片段：参数与素材都没变，全部片段按渲染指纹跳过；"
+                "需要重渲请勾选「覆盖已存在的视频」。"
+                + ("" if clips_only else f"（成片沿用上一次的结果：{out}）")
+            )
+        RENDER_STATUS.phase = "完成"
+        print(f"[SafeRender] 经典路径渲染完成（backend=segmentutils, 线程内）")
+        return {"status": "success", "info": "经典路径渲染完成", "backend": "segmentutils"}
+    except RenderCancelled:
+        raise
+    except Exception as e:
+        RENDER_STATUS.phase = "失败"
+        RENDER_STATUS.error = f"{type(e).__name__}: {e}"
+        print(f"[SafeRender] 经典路径失败: {e}")
+        traceback.print_exc()
+        return {"status": "error", "info": str(e), "backend": "segmentutils"}
 
 
 def _render_full_video_safe_impl(
@@ -465,11 +538,17 @@ def _render_full_video_safe_impl(
             print("[SafeRender] force_render=False：跳过已存在片段，只补渲染缺失部分")
         # 与 quad 路径一致：片段不烘焙转场（bake_fades=False），拼接阶段统一 xfade——
         # 回退补渲的片段与已存在的 GPU 片段过渡风格一致
-        render_all_video_clips(
+        fb_failed = render_all_video_clips(
             video_configs, video_output_path, trans_param,
             fb_encoder_param, style_config, force_render,
             bake_fades=False,
-        )
+        ) or []
+        if fb_failed:
+            # 旧写法把返回值丢了：补渲缺了几段也照样往下拼，最后交出一支"完成"的缺半成片。
+            # 这里必须把失败当终态，让浮窗与状态条报出缺哪些段，而不是继续拼接。
+            detail = "、".join(str(x) for x in fb_failed[:12])
+            more = f" 等 {len(fb_failed)} 段" if len(fb_failed) > 12 else ""
+            raise RuntimeError(f"回退补渲有片段没产出文件：{detail}{more}")
         if not clips_only:
             RENDER_STATUS.phase = "转场拼接"
             trans_enabled = trans_param.get('enabled', True) if trans_param else True
