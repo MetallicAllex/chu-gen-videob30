@@ -4,7 +4,7 @@ import streamlit as st
 from PIL.Image import Resampling
 from PIL import Image, ImageDraw, ImageFont
 from utils.PageUtils import calculate_rating, parse_oped_text_markers
-from utils.PathUtils import load_config, save_config
+from utils.PathUtils import load_config, save_config, is_artifact_valid
 from utils.TextRenderer import render_text_to_image
 from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, font_path, REVERSE_LEVEL_LABELS
 
@@ -854,8 +854,8 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                 text_path = os.path.join(text_dir, file_name)
                 fullbg_path = os.path.join(fullbg_dir, file_name)
                 
-                # 检查是否需要跳过
-                if not force_regen and os.path.exists(text_path) and os.path.exists(fullbg_path):
+                # 检查是否需要跳过（0 字节的失败产物不算已生成，否则页面上会显示"已就绪"却读不出图）
+                if not force_regen and is_artifact_valid(text_path) and is_artifact_valid(fullbg_path):
                     skipped_count += 1
                     text_files.append(text_path)
                     fullbg_files.append(fullbg_path)
@@ -907,6 +907,9 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
         return text_files, fullbg_files
         
     except Exception as e:
+        # 只 st.error 会被调用方的 st.rerun() 冲掉（页 5 生成完立刻 rerun），用户以为成功。
+        # 同时记进 render_error：页 5 与页 6 顶部都有各自的持久展示位。
+        st.session_state.render_error = f"生成评论图失败：{e}\n\n{traceback.format_exc()}"
         st.error(f"生成失败：{str(e)}", icon="❌")
         st.error(traceback.format_exc(), icon="❌")
         return [], []

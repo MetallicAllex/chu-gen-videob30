@@ -231,12 +231,12 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         video_tag = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}"
 
         __image_path = os.path.normpath(os.path.join(images_path, clip_tag + ".png"))
-        missing_img = not os.path.exists(__image_path)
+        missing_img = not is_artifact_valid(__image_path)
         if missing_img:
             __image_path = ""
 
         __video_path = os.path.normpath(os.path.join(videoes_path, video_tag + ".mp4"))
-        missing_vid = not os.path.exists(__video_path)
+        missing_vid = not is_artifact_valid(__video_path)
         if missing_vid:
             __video_path = ""
         
@@ -412,6 +412,49 @@ def merge_b50_data(new_b50_data, old_b50_data):
 
     update_count = len(new_b50_data) - keep_count
     return merged_b50_data, update_count
+
+def migrate_search_args(config_path, old_config_path):
+    """把另一份存档导出的搜索数据（候选列表 + 已选定视频）迁进当前存档。
+
+    返回 (导入条数, 本就相同条数, 当前存档里没对应记录的条数)。
+
+    匹配键只用 (id, level_index)：同一首歌在不同存档里这两个值必然一致。旧实现还额外要求
+    artist / level 全等，而「回填曲库字段」会改动这两个字段 —— 回填过的存档做迁移会静默
+    一条都不中，界面只显示"更新 0 条"。旧实现还是两层循环 O(n²)，并带着一百来行没人会
+    打开的 debug 打印（debug 参数从来没有调用点传 True）。
+    """
+    for label, path in (("当前存档的配置文件", config_path), ("要导入的搜索数据", old_config_path)):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"找不到{label}：{path}")
+
+    old_records = load_config(old_config_path)
+    new_records = load_config(config_path)
+    # (id, level_index) 在同一份存档里唯一；用 get 兜住手工改坏、缺字段的导出件
+    old_map = {(r.get('id'), r.get('level_index')): r for r in old_records}
+
+    updated = skipped = missing = 0
+    for record in new_records:
+        source = old_map.get((record.get('id'), record.get('level_index')))
+        if source is None:
+            missing += 1
+            continue
+        src_list = source.get('video_info_list')
+        src_match = source.get('video_info_match')
+        if record.get('video_info_list') == src_list and record.get('video_info_match') == src_match:
+            skipped += 1
+            continue
+        # 只在导入件里真的有这个键时才覆盖：直接下标会在旧版导出件上 KeyError，
+        # 而赋 None 又会把当前存档已有的选择抹掉
+        if src_list is not None:
+            record['video_info_list'] = src_list
+        if src_match is not None:
+            record['video_info_match'] = src_match
+        updated += 1
+
+    save_config(config_path, new_records)
+    print(f"[迁移] 导入 {updated} 条，跳过相同 {skipped} 条，"
+          f"当前存档中无对应记录 {missing} 条")
+    return updated, skipped, missing
 
 def update_b50_data(b50_raw_file, b50_data_file, req_param):
     """
@@ -754,6 +797,34 @@ def search_one_video(downloader, song_data):
 
     return song_data, output_info
 
+def apply_playlist_matches(b50_data, all_videos, keep_existing=True):
+    """用播放列表 / 合集拉到的视频给整份存档配源，返回 (新配数, 保留未动数)。
+
+    判定与单曲搜索同一套：先过曲名门槛，再要求标题出现该难度标签，且排除多P合集与
+    手元/演奏类候选。
+
+    keep_existing 默认 True：已有 video_info_match 的条目不再改动。旧实现遍历整份存档，
+    把用户在编辑器里手选、或专门指定过分P 的结果一并覆盖掉，还顺手清空了备选列表。
+    """
+    matched_count = 0
+    kept_count = 0
+    for song in b50_data:
+        label = REVERSE_LEVEL_LABELS.get(song['level_index'], '').lower()
+        if keep_existing and song.get('video_info_match'):
+            kept_count += 1
+            print(f"[批量] = {song['song_name']} [{label}] 已有视频信息，未改动")
+            continue
+        hit = [video for _, flags, video in rank_video_candidates(song, all_videos)
+               if 'level_label' in flags and 'multi_part' not in flags and 'noisy' not in flags]
+        if hit:
+            song['video_info_match'] = hit[0]
+            song['video_info_list'] = [hit[0]]
+            matched_count += 1
+            print(f"[批量] 命中 {song['song_name']} [{label}]")
+        else:
+            print(f"[批量] 未命中 {song['song_name']} [{label}]")
+    return matched_count, kept_count
+
 # --- 下载缓存索引 ---
 # 缓存文件名（曲ID-难度.mp4）是 README 与下游剪辑环节的既定约定，不能往文件名里塞分P信息；
 # 但改选候选视频或改选分P后，同名文件可能是按旧选择下的素材。索引用 <clip_name> ->
@@ -782,7 +853,7 @@ def is_video_cached(song, video_download_path, cache_index=None):
     """
     clip_name = video_clip_name(song)
     video_path = os.path.join(video_download_path, f"{clip_name}.mp4")
-    if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+    if not is_artifact_valid(video_path):
         return False
     video_info = song.get('video_info_match') or {}
     p_index = video_info.get('p_index') or 0
@@ -854,7 +925,7 @@ def download_one_video(downloader, song, video_download_path, high_res=False, ca
         return {"status": "error", "info": message}
 
     # 下载器内部可能吞掉异常，以文件是否真正生成作为成功依据
-    if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+    if not is_artifact_valid(video_path):
         message = f"错误: 【{song['song_name']}】（{clip_name}）未生成有效视频文件"
         print(message)
         return {"status": "error", "info": message}
@@ -866,7 +937,7 @@ def st_init_cache_pathes():
     cache_pathes = [
         f"./b30_datas",
         f"./videos",
-        f"./videos/downloads",
+        DOWNLOADS_DIR,
         f"./cred_datas"
     ]
     for path in cache_pathes:
@@ -1079,7 +1150,7 @@ def _load_optional_json(filepath, use_cache=True):
         if filepath and os.path.exists(filepath):
             return load_config(filepath, use_cache=use_cache)
     except Exception as e:
-        print(f"⚠️ 读取曲库 {filepath} 失败: {e}")
+        print(f"[!] 读取曲库 {filepath} 失败: {e}")
     return None
 
 
@@ -1412,11 +1483,11 @@ def _fetch_music_data(name, url, filepath, transformer=None):
             data = transformer(data)
         remote_hash = json_hash(data)   # 国服的版本身份：内容哈希（首页表格与日志 [md5] 同源）
 
-        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+        if not is_artifact_valid(filepath):
             save_config(filepath, data)
             _record_data_version(filepath)
             _record_content_hash(filepath, remote_hash)
-            print(f"✅ （{name}）已下载所需的谱面数据[{remote_hash}]")
+            print(f"[OK] （{name}）已下载所需的谱面数据[{remote_hash}]")
             return
 
         local_hash = json_hash(load_config(filepath))
@@ -1425,13 +1496,13 @@ def _fetch_music_data(name, url, filepath, transformer=None):
             save_config(filepath, data)
             _record_data_version(filepath)
             _record_content_hash(filepath, remote_hash)
-            print(f"🔄［{name}］谱面数据成功更新[{remote_hash}]")
+            print(f"[SYNC]［{name}］谱面数据成功更新[{remote_hash}]")
         else:
             # 内容没变就不重写文件，但要把 mtime 顶上去：启动自动更新拿它当"上次确认新鲜"的时刻，
             # 否则这份没有 ETag 的来源每次开机都会被判定过期、白拉一遍全量。
             os.utime(filepath, None)
             _record_content_hash(filepath, remote_hash)   # 对端确认同版 → "云端上次检查"刷新为这一版
-            print(f"☑️［{name}］谱面数据已是最新[{local_hash}]")
+            print(f"[OK]［{name}］谱面数据已是最新[{local_hash}]")
 
     except Exception as e:
         _note_fetch_failure(name, f"取数出错：{e.__class__.__name__} {e}")
@@ -1479,7 +1550,7 @@ def _blocked_reason(response):
 def _note_fetch_failure(name, reason):
     """失败原因留给界面看 —— 更新没生效却什么都不说，用户只会反复点同一个按钮。"""
     _music_state["last_error"] = f"{name}：{reason}"
-    print(f"⚠️［{name}］{reason}，沿用本地副本")
+    print(f"[!]［{name}］{reason}，沿用本地副本")
 
 
 status_sources_path = f'{music_status_dir}/sources.json'   # 各源的条件请求记账
@@ -1507,7 +1578,30 @@ def _patch_status(path, **sections):
 STATUS_SOURCE_KEYS = ("jp_songs_info", "intl_songs_info", "fish_music_data")
 
 
-def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version_time=None):
+def _row_reconcile(name, data, expected_rows):
+    """
+    把 meta 声称的行数与真正拿到的产物对上。配不上返回一句要给人的话，配上（或没法比）返回 None。
+
+    为什么必须有这一步：meta 与产物是同一个桶里两个对象、在这个镜像域名上是**两条独立缓存**，
+    各自到期各自回源。实测同一个 URL 的缓存在 263 秒 TTL 到点时会从 1561 行翻到 1571 行，
+    而另一条还停在旧版 —— 于是"新 meta + 旧产物"这种配不成一对的组合是常态而非意外。
+    不比对的话，那份旧产物会被盖上新一版的 written_at，首页"本地/云端数据版本"两列同值、
+    判成 ✅ 已是最新，而它其实少一首歌：这正是最坏的一种假绿。
+    """
+    if expected_rows is None or not isinstance(data, list):
+        return None
+    try:
+        expected = int(expected_rows)
+    except (TypeError, ValueError):
+        return None
+    if len(data) == expected:
+        return None
+    return (f"{name}：云端 meta 说 {expected} 行，产物实为 {len(data)} 行"
+            "（镜像两条 URL 各自缓存，这次读到不配对的一版）—— 本次不采信它的版本时刻，下轮会重取")
+
+
+def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version_time=None,
+                     expected_rows=None):
     """
     带 ETag 的公共 JSON 拉取：200 落盘并记下 etag，304 只刷时间戳，网络失败沿用本地副本。
 
@@ -1516,6 +1610,8 @@ def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version
     transformer 用来把原始响应转成落盘形状（日服要重命名难度键、补别名）。
     version_time：落盘数据对应的云端版本时刻（Worker meta 的 written_at）。有它记它，
     没有才退回"到手时刻"；304 分支同样用它对齐版本记账（对端确认了这份就是现役版本）。
+    expected_rows：同一轮 meta 声称的行数，用来跟拿到的产物对账（见 _row_reconcile）。
+    对不上时这份数据仍然落盘（它是某一版真实数据），但版本时刻不予采信。
     """
     headers = {"User-Agent": MUSIC_DATA_USER_AGENT}   # 便于对端日志认人，不是放行凭据
     if source and source not in STATUS_SOURCE_KEYS:
@@ -1545,7 +1641,7 @@ def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version
         # 让一份其实已是最新的副本，从此永远挂着"⬇️ 有新版"。
         if version_time:
             _record_data_version(filepath, version_time)
-        print(f"☑️［{name}］谱面元数据已是最新（304）")
+        print(f"[OK]［{name}］谱面元数据已是最新（304）")
         return False
     if response.status_code != 200:
         _note_fetch_failure(name, _blocked_reason(response))
@@ -1562,12 +1658,26 @@ def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version
     if transformer:
         data = transformer(data)
 
+    mismatch = _row_reconcile(name, data, expected_rows)
+    if mismatch:
+        # 数据照落 —— 它是某一版的真实曲库，比本地那份旧副本新还是旧都由内容自己说话；
+        # 只是这份不能冒充 meta 那一版。走 _music_state["mismatch"] 而不是
+        # _note_fetch_failure：后者会写 last_error，而 last_error 驱动 6 小时退避 ——
+        # 把"该早点重取"的事记成"接下来 6 小时别取"，正好反了。
+        _music_state["mismatch"][name] = mismatch
+        version_time = None
+        print(f"[!]［{name}］{mismatch}")
+    elif expected_rows is not None:
+        # 按源名覆盖/清除：同一轮里后一个源配对成功，不该把前一个源的实话抹掉；
+        # 反过来这个源这次配上了，也不该继续挂着上一轮那条。
+        _music_state["mismatch"].pop(name, None)
+
     try:
         save_config(filepath, data)
     except OSError as e:
         # 后台线程写、前台在读同一份文件时会撞上。这份跳过就行 ——
         # 旧副本仍然完整可读，别让一份被占用把日服、水鱼那几份一起带走。
-        print(f"⚠️［{name}］本地副本正被占用，本次跳过更新: {e}")
+        print(f"[!]［{name}］本地副本正被占用，本次跳过更新: {e}")
         return False
     _record_data_version(filepath, version_time)   # 内容真的换了才会走到这里；304 分支另作对齐
     if not version_time:
@@ -1579,8 +1689,8 @@ def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version
                                                            "last_update": datetime.now().isoformat()}})
         except OSError as e:
             # 数据已经落盘了，记账没写上不该把这一路判成失败（下一轮多拉一次全量而已）
-            print(f"⚠️［{name}］etag 记账没写进去，下一轮会重取全文: {e}")
-    print(f"✅［{name}］谱面元数据已更新")
+            print(f"[!]［{name}］etag 记账没写进去，下一轮会重取全文: {e}")
+    print(f"[OK]［{name}］谱面元数据已更新")
     return True
 
 
@@ -1592,22 +1702,27 @@ def fetch_intl_music_data():
     URL 没配就什么都不做，让国际服定数继续用本地那份副本，别发一次注定失败的请求。
     """
     if not intl_music_info_url:
-        print("⏭️ 未配置 INTL_MUSIC_URL，跳过国际服曲库更新")
+        print("[SKIP] 未配置 INTL_MUSIC_URL，跳过国际服曲库更新")
         return False
     job = (read_upstream_status().get("jobs") or {}).get("intl") or {}
     return _fetch_json_etag("国际服", intl_music_info_url, intl_music_info_path, "intl_songs_info",
-                            version_time=job.get("written_at"))
+                            version_time=job.get("written_at"), expected_rows=job.get("kept"))
 
 
 # --- Worker 侧同步状态 --------------------------------------------------------------
 # 桶里那两个 meta 对象就是 Worker 每轮写的"上次结果"（等价于 GET /status），读回本地缓存一份，
 # 首页就有得显示。它们与产物同源，所以不引入第二个域名；cron 有没有按时跑、有没有 aborted，
-# 从这台机器就能看见，不用开 Cloudflare 面板。
+# 从这台机器就能看见，不用开 Cloudflare 面板 —— 但"有没有按时跑"只能由 checked_at 说，
+# 白名单里少了它这句就是空话（下面的例外条目）。
 # 只缓存界面真要显示的字段。source_url / augment_url 是 Worker 那边的上游地址（在
 # wrangler.toml 里），两个 *_etag 是它做条件请求的记账 —— 抄回本地只会多一份没人读、
 # 又迟早过期的"第二真相"。
+# checked_at 是这一条的例外，也是界面最需要的一个：它是"这一轮 Worker 真的被调用过"的
+# 唯一证据。written_at 只在内容真变时才前进 —— 304 和"算出来逐字节相同"都不动它，所以
+# 只盯 written_at 的话，"跑了但上游没变"与"cron 压根没生效"在首页长得一模一样。
+# 2026-10 那次停摆就是这么全绿了 21 天的（最后几轮同步全靠人在面板里点出来）。
 UPSTREAM_FIELDS = ("source_rows", "kept", "joined", "augmented", "degraded",
-                   "last_error", "written_at")
+                   "last_error", "written_at", "checked_at")
 
 
 def ensure_status_dir():
@@ -1616,7 +1731,10 @@ def ensure_status_dir():
 
 
 UPSTREAM_SECTION = "upstream"        # status/local.json 里的这一段：Worker 侧上次结果
-R2_WRITE_STALE_DAYS = 40      # cron 是每月一次，超过这么多天没写过就该问一句
+# 判的是"云端还在不在跑"，不是"数据新不新"（后者由 written_at 的 ⬇️ 有新版 与 mtime 那套管）。
+# cron 是每月 1 日 / 16 日两次，最大间隔 16 天；这里取 40 天 = 连续跳过两轮多才开口，
+# 免得镜像域名抽风几天没取到 meta（403 是常态）就把人吓一次。
+R2_CONTACT_STALE_DAYS = 40
 
 
 def read_upstream_status():
@@ -1648,11 +1766,11 @@ def fetch_r2_status():
                 job = json.loads(safe_decode(response.content))
                 fresh[key] = {k: job.get(k) for k in UPSTREAM_FIELDS if k in job}
             else:
-                print(f"⚠️ [{key}] API 返回 {response.status_code}")
+                print(f"[!] [{key}] API 返回 {response.status_code}")
         except requests.exceptions.RequestException as e:
-            print(f"⚠️ [{key}] API 请求失败: {e.__class__.__name__}")
+            print(f"[!] [{key}] API 请求失败: {e.__class__.__name__}")
         except ValueError as e:
-            print(f"⚠️ [{key}] 返回非合法 JSON: {e}")
+            print(f"[!] [{key}] 返回非合法 JSON: {e}")
     if not fresh:
         return None
     cached = read_upstream_status()
@@ -1665,7 +1783,7 @@ def fetch_r2_status():
         _patch_status(status_local_path, **{UPSTREAM_SECTION: {
             "fetched_at": datetime.now().isoformat(), "jobs": jobs}})
     except OSError as e:
-        print(f"⚠️ 同步状态缓存写失败: {e}")
+        print(f"[!] 同步状态缓存写失败: {e}")
     return jobs
 
 
@@ -1709,6 +1827,21 @@ def _r2_age_days(stamp):
         return None
 
 
+def _r2_last_contact(job):
+    """云端上次"被调用"距今多少天，以及这个判断用的是哪口钟：(age_days, basis)。
+
+    只有 checked_at 每轮都写（成功、aborted、304、内容没变都写），written_at 只在产物真的
+    换了版本时才前进。所以失联判定必须优先 checked_at；老缓存里的 job 还没这个键，退回
+    written_at 判 —— 那种情况下 basis 会把"我只能按上次写入算"说破，不让它冒充精确值。
+    """
+    for field in ("checked_at", "written_at"):
+        if job.get(field):
+            age = _r2_age_days(job[field])
+            if age is not None:
+                return age, field
+    return None, None
+
+
 def _library_count(path):
     """曲库规模。解析走 _load_optional_json 的 60 秒缓存，不会每次交互都重读几 MB。"""
     data = _load_optional_json(path)
@@ -1720,7 +1853,7 @@ def _library_count(path):
 
 
 def _local_stamp(path):
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
+    if not is_artifact_valid(path):
         return "—"
     return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%m-%d %H:%M")
 
@@ -1738,7 +1871,7 @@ def _record_data_version(filepath, version_time=None):
     try:
         _patch_status(status_versions_path, stamps={filepath: stamp})
     except OSError as e:
-        print(f"⚠️ 数据版本时间没记上（该行显示会退回文件时间）: {e}")
+        print(f"[!] 数据版本时间没记上（该行显示会退回文件时间）: {e}")
 
 
 def _read_data_version(path):
@@ -1753,7 +1886,7 @@ def _data_stamp(path):
     都不是"最近一次保存 / 确认时刻"：304 和"内容没变"只顶 mtime（新鲜度记账），
     不推进版本。升级前落盘的旧数据没有记录，退回 mtime 兜底。
     """
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
+    if not is_artifact_valid(path):
         return "—"
     parsed = _parse_stamp(_read_data_version(path))
     return parsed.strftime("%m-%d %H:%M") if parsed else _local_stamp(path)
@@ -1762,7 +1895,7 @@ def _data_stamp(path):
 def _content_hash(path):
     """无云端版本号的源（国服[落雪]/国服[水鱼]）的版本身份：内容哈希短码。
 
-    与更新日志 ☑️［国服］谱面数据已是最新[md5] 的方括号同一来源（json_hash）——
+    与更新日志 [OK]［国服］谱面数据已是最新[md5] 的方括号同一来源（json_hash）——
     内容没变就是同一版，比"到手时刻"更直接地回答"这是哪一版"。数据走
     _load_optional_json 的 60 秒缓存，哈希本身只是一次 dumps+md5，渲染开销可忽略。
     """
@@ -1781,7 +1914,7 @@ def _record_content_hash(filepath, digest):
     try:
         _patch_status(status_versions_path, hashes={filepath: str(digest)})
     except OSError as e:
-        print(f"⚠️ 内容哈希没记上（云端列会退回本地哈希）: {e}")
+        print(f"[!] 内容哈希没记上（云端列会退回本地哈希）: {e}")
 
 
 def _read_remote_hash(path):
@@ -1814,11 +1947,18 @@ def music_library_status(local_note=None):
     "⬇️ 有新版"（不是故障 —— 16 天窗口内下次启动检查会自动拉平，不进 problems）。
     国服两行的"有新版"探测就是取数时的哈希比对本身（不同即当场下载），不存在
     挂着的待取状态。
+    "⚠️ 云端失联"用的是 checked_at（每轮都写），"⬇️ 有新版"用的是 written_at（只在产物
+    真的换版时写）：前者问"云端还在跑吗"，后者问"本地这份落后了吗"。少了前者，
+    cron 没生效与上游这半月没动过数据在界面上完全同形。
     """
     cached = read_upstream_status()
     jobs = cached.get("jobs") or {}
     missing, stale = music_data_gaps()
     problems = ([f"本机：{local_note}"] if local_note else [])
+    for note in (_music_state.get("mismatch") or {}).values():
+        # 不说就是彻底的静默：这一行的状态列会显示 ⬇️ 有新版（版本时刻退回到手时间），
+        # 看着像正常待同步，其实是这次读到了不配对的一版，而本地那份其实少一首歌。
+        problems.append(f"本机：{note}")
     problems += [f"{name} 收取失败 + 本地无副本" for name in missing]
     problems += [f"{name} 超过 {MUSIC_DATA_STALENESS_HOURS // 24} 天未更新成功" for name in stale]
 
@@ -1828,7 +1968,7 @@ def music_library_status(local_note=None):
         count = _library_count(path)
         job = (jobs.get(job_key) if job_key else None) or {}
         upstream = _fmt_r2_stamp(job["written_at"]) if job.get("written_at") else "—"
-        age = _r2_age_days(job.get("written_at")) if job.get("written_at") else None
+        age, contact_basis = _r2_last_contact(job)
         state = "⚠️ 偏旧" if gap_name in stale else "✅ 已是最新"
         if count is None:
             state = "⚠️ 缺失"
@@ -1842,8 +1982,13 @@ def music_library_status(local_note=None):
         if job.get("degraded"):
             state = "⚠️ 云端降级"
             problems.append(f"{name}：云端降级出货（{job['degraded']}），版本/谱师列可能有缺")
-        if age is not None and age > R2_WRITE_STALE_DAYS:
-            problems.append(f"{name}：镜像已 {age} 天未更新")
+        if age is not None and age > R2_CONTACT_STALE_DAYS:
+            # 这句说的是"没人调用过 Worker"，与上面两句（跑过、但那轮出事）不是一回事，
+            # 也和"数据旧"不是一回事 —— 混成一句"镜像已 N 天未更新"就谁也定不了性。
+            state = "⚠️ 云端失联"
+            basis = ("上次被调用" if contact_basis == "checked_at"
+                     else "上次写入（这份缓存里还没有 checked_at，只能按写入时刻算）")
+            problems.append(f"{name}：云端已 {age} 天没跑过同步（按{basis}算），cron 可能没生效")
         if state == "✅ 已是最新":
             # 同一口钟的对比：本地这份的版本落后于云端现役版本 → 有新版可拉。
             # 只在"正常"时覆盖 —— 缺失/偏旧/云端问题说的是更要紧的事。
@@ -1855,7 +2000,7 @@ def music_library_status(local_note=None):
                 state = "⬇️ 有新版"
         if job_key is None:
             # 国服这类源上游不发布版本时间，内容哈希就是版本身份 —— 与更新日志
-            # ☑️［国服］谱面数据已是最新[md5] 的方括号同源；没有云端列可对比，
+            # [OK]［国服］谱面数据已是最新[md5] 的方括号同源；没有云端列可对比，
             # "有新版"的探测就是取数时的哈希比对本身（不同即当场下载）。
             # 云端列记"上次取数时对端返回的哈希"；尚未记账时用本地哈希兜底 ——
             # 副本要么是远端原样落盘、要么被确认同版，两者本来就是同一个码。
@@ -1907,7 +2052,7 @@ def fetch_music_data():
     """
     获取谱面数据
     """
-    print("🔄️ 开始更新谱面数据...")
+    print("[SYNC] 开始更新谱面数据...")
     ensure_status_dir()   # etag 记账都写在 status/ 下，save_config 不会自己建目录
     
     # 1. 获取国服别名数据
@@ -1919,9 +2064,9 @@ def fetch_music_data():
             aliases_data = response.json()
             for alias_item in aliases_data.get("aliases", []):
                 alias_map[str(alias_item["song_id"])] = alias_item["aliases"]
-            print(f"📋 已获取 {len(alias_map)} 条别名数据")
+            print(f"[LIST] 已获取 {len(alias_map)} 条别名数据")
     except Exception as e:
-        print(f"⚠️ 获取别名数据失败: {e}")
+        print(f"[!] 获取别名数据失败: {e}")
     
     # 2. 通用函数：为歌曲添加别名
     def add_aliases(songs, id_field):
@@ -1972,19 +2117,23 @@ def fetch_music_data():
     # "本地数据版本"（本地这份是云端哪一版）和"云端数据版本"（云端现在是哪一版）
     # 才是同一口钟的时间。meta 读不到就退回"到手时刻"，失败只留日志。
     fetch_r2_status()
+    jp_job = (read_upstream_status().get("jobs") or {}).get("jp") or {}
     _fetch_json_etag(
         "日服",
         jp_music_info_url or base64.b64decode(song_data_jp).decode('utf-8'),
         jp_music_info_path,
         "jp_songs_info",
         transformer=jp_transformer,
-        version_time=(read_upstream_status().get("jobs") or {}).get("jp", {}).get("written_at"),
+        version_time=jp_job.get("written_at"),
+        # 只有真走镜像才对账：直连 chunirec 拿到的是没增强、也没被 Worker 重排的那一份，
+        # 与 meta 的 source_rows 不是同一个口径，硬比只会自己造一条假告警。
+        expected_rows=jp_job.get("source_rows") if jp_music_info_url else None,
     )
 
     # 4. 水鱼曲库与版本表（国服筛选要用的派生字段来源）
     fetch_fish_music_data()
     fetch_intl_music_data()
-    print("✅ 谱面数据更新完成")
+    print("[OK] 谱面数据更新完成")
 
 
 # --- 启动时备齐曲库 -----------------------------------------------------------------
@@ -2009,7 +2158,11 @@ if intl_music_info_url:
 MUSIC_DATA_ALL = MUSIC_DATA_CORE + MUSIC_DATA_FILTER_ONLY
 
 _music_lock = threading.Lock()
-_music_state = {"running": False, "note": None, "last_error": None, "finished_at": None}
+_music_state = {"running": False, "note": None, "last_error": None, "mismatch": {},
+                "finished_at": None}
+# mismatch 按源名存一格，单独一路，不进 last_error：那份数据是某一版的真实曲库、已经落盘
+# 成功，只是别拿 meta 的版本时刻给它盖章。混进 last_error 就等于申请了一次 6 小时退避，
+# 而这件事需要的是下一轮早点重取。
 # 上一轮失败要跨会话留下来：短时间高频探测会让这条链路偶发拒绝（本轮排查就把它撞成 403 /
 # 连接重置过），每次开应用都重试全套请求只会让它继续拒。只在"文件都在、只是过期"时退避。
 # 记录写在 status/local.json 里（和云端状态同一份：同一时刻、同一个写者、同一个读的人）。
@@ -2037,7 +2190,7 @@ def music_data_gaps(staleness_hours=MUSIC_DATA_STALENESS_HOURS):
     missing, stale = [], []
     horizon = time.time() - staleness_hours * 3600
     for name, path in MUSIC_DATA_ALL:
-        if not os.path.exists(path) or os.path.getsize(path) == 0:
+        if not is_artifact_valid(path):
             missing.append(name)
         elif os.path.getmtime(path) < horizon:
             stale.append(name)
@@ -2092,13 +2245,13 @@ def start_music_data_update(staleness_hours=MUSIC_DATA_STALENESS_HOURS, force=Fa
             except OSError as e:
                 # 只是少一次退避依据，不该把已经拿到的曲库丢掉；但要说一声，
                 # 否则"为什么下一轮又去撞"查无可查
-                print(f"⚠️ 本轮结果没记上账（下次可能重复取数）: {e}")
+                print(f"[!] 本轮结果没记上账（下次可能重复取数）: {e}")
             # running 最后才落：看到"跑完"的人必须同时看到已落盘的记录，
             # 否则下一轮会读到上一轮的旧原因，误判成还在退避期
             _music_state.update(running=False, note=note, finished_at=time.time())
             _music_lock.release()
 
-    _music_state.update(running=True, note=None, last_error=None)
+    _music_state.update(running=True, note=None, last_error=None, mismatch={})
     threading.Thread(target=run, daemon=True).start()
     return True
 

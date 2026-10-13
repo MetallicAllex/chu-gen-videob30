@@ -81,9 +81,10 @@ _ffmpeg_version_checked = False
 def get_ffmpeg_binary(tool_name: str = 'ffmpeg') -> str:
     """解析 FFmpeg 工具路径：运行目录 → 应用根目录 → PATH。
 
-    只信 os.getcwd() 不够：下载合并在 `bilibili_download` 里会先 chdir 到 videos/downloads，
-    这时随包放在应用根目录的那份 ffmpeg.exe 就"看不见"了。PATH 上没有 ffmpeg 的机器于是必然
-    合并失败，而页面其它环节照常 —— 因为它们没换过工作目录。
+    只信 os.getcwd() 不够：随包的 ffmpeg.exe 放在应用根，而 cwd 取决于用户怎么启动
+    （快捷方式"起始于"填错、从别处 streamlit run 都不一样）。PATH 上没有 ffmpeg 的机器
+    于是会在这一步默默拿不到工具。以前 B 站下载合并还会把 cwd 切到 videos/downloads
+    （现已取消，见 video_crawler.bilibili_download），那时连页面其它环节的解析都不一致。
     """
     executable = f"{tool_name}.exe" if os.name == 'nt' else tool_name
     app_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -31,6 +31,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from utils.PathUtils import is_artifact_valid
 from utils.Variables import REVERSE_LEVEL_LABELS, bgclips_path, audios_path
 
 from . import QuadAccel
@@ -688,7 +689,7 @@ def render_all_clips(
         # 进度展示用可读名（标签页标题/任务浮窗），ID 只用于落盘命名
         display_name = f"开头第 {page_no} 页"
         output_file = os.path.join(video_output_path, f"{clip_idx}_{clip_name}.mp4")
-        if os.path.exists(output_file) and not force_render:
+        if is_artifact_valid(output_file) and not force_render:
             print(f"[QuadRenderer] 跳过已存在: {display_name}")
             bg_elapsed += float(config.get('duration', 0))
             clip_idx += 1
@@ -704,7 +705,7 @@ def render_all_clips(
         clip_name = config['id']
         display_name = f"{config.get('song_name', clip_name)} [{REVERSE_LEVEL_LABELS[config['level_index']]}]"
         output_file = os.path.join(video_output_path, f"{clip_idx}_{clip_name}.mp4")
-        if os.path.exists(output_file) and not force_render:
+        if is_artifact_valid(output_file) and not force_render:
             print(f"[QuadRenderer] 跳过已存在: {display_name}")
             bg_elapsed += float(config.get('duration', 0))
             clip_idx += 1
@@ -720,7 +721,7 @@ def render_all_clips(
         clip_name = config['id']
         display_name = f"结尾第 {page_no} 页"
         output_file = os.path.join(video_output_path, f"{clip_idx}_{clip_name}.mp4")
-        if os.path.exists(output_file) and not force_render:
+        if is_artifact_valid(output_file) and not force_render:
             print(f"[QuadRenderer] 跳过已存在: {display_name}")
             bg_elapsed += float(config.get('duration', 0))
             clip_idx += 1

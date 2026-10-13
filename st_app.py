@@ -1,14 +1,25 @@
-import sys
 import streamlit as st
+import os
+import sys
+
+# 工作目录锚定到应用根（本文件所在目录），必须在导入 utils 之前：曲库/缓存/存档路径都是
+# './music_datasets'、'./cache'、'b30_datas' 这类相对写法，cwd 不是应用根时数据会落到别处
+# （实测：下载期间进程被 chdir 到 videos/downloads 时，后台曲库线程就在那里建出 music_datasets/）。
+# 锚在这里而不是把每个路径改成绝对，是为了让 video_configs.json 里存的相对路径格式不变。
+# 每轮 rerun 都会重新执行 st_app.py，所以这条也自愈被别的代码改走的 cwd。
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 from utils import DataUtils as DU
+
 
 # 控制台默认代码页不是 UTF-8 时（手工 `streamlit run st_app.py`，未走 start.bat 的
 # chcp 65001），渲染里 print 曲名中的 `・` 等字符会抛 UnicodeEncodeError 打断整条
 # 渲染。只放宽错误处理、不改编码，输出内容照常。
 for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, 'reconfigure'):
+    reconfigure = getattr(_stream, 'reconfigure', None)
+    if callable(reconfigure):
         try:
-            _stream.reconfigure(errors='replace')
+            reconfigure(errors='replace')
         except Exception:
             pass
 
@@ -37,19 +48,23 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 
 # ========== 检查存档状态 ==========
+
+
 def has_datas():
     return st.session_state.get('has_data', False)
 
+
 def has_valid_save():
     """检查是否有有效存档"""
-    return (st.session_state.get('config_saved', False) and 
+    return (st.session_state.get('config_saved', False) and
             st.session_state.get('save_id') is not None and
             st.session_state.get('data_updated_step1', False))
 
+
 # ========== 定义所有页面（根据状态设置 visibility）==========
 homepage = st.Page("st_pages/0_homepage.py",
-                title="首页",
-                icon=":material/home:")
+                   title="首页",
+                   icon=":material/home:")
 
 setup = st.Page("st_pages/1_Setup_Achivments.py",
                 title="获取 / 管理存档",
@@ -59,39 +74,39 @@ setup = st.Page("st_pages/1_Setup_Achivments.py",
 
 # 需要存档的页面 - 根据状态决定是否可见
 img_gen = st.Page("st_pages/Generate_Pic_Resources.py",
-                title="生成 Best50 图 / 查看数据",
-                icon=":material/photo_library:",
-                visibility="visible" if has_valid_save() else "hidden")
+                  title="生成 Best50 图 / 查看数据",
+                  icon=":material/photo_library:",
+                  visibility="visible" if has_valid_save() else "hidden")
 
 custom_style = st.Page("st_pages/Custom_Video_Style.py",
-                    title="视频样式编辑器",
-                    icon=":material/palette:",
-                    visibility="visible" if has_valid_save() else "hidden")
+                       title="视频样式编辑器",
+                       icon=":material/palette:",
+                       visibility="visible" if has_valid_save() else "hidden")
 
 custom_save = st.Page("st_pages/Make_Custom_Save.py",
-                    title="编辑 Best50 数据",
-                    icon=":material/leaderboard:",
-                    visibility="visible" if has_valid_save() else "hidden")
+                      title="编辑 Best50 数据",
+                      icon=":material/leaderboard:",
+                      visibility="visible" if has_valid_save() else "hidden")
 
 download = st.Page("st_pages/3_Confirm_Videos.py",
-                title="搜索、检查和下载视频",
-                icon=":material/video_settings:",
-                visibility="visible" if has_valid_save() else "hidden")
+                   title="搜索、检查和下载视频",
+                   icon=":material/video_settings:",
+                   visibility="visible" if has_valid_save() else "hidden")
 
 edit_comment = st.Page("st_pages/4_Edit_Video_Content.py",
-                title="编辑 Best50 视频片段",
-                icon=":material/movie_edit:",
-                visibility="visible" if has_valid_save() else "hidden")
+                       title="编辑 Best50 视频片段",
+                       icon=":material/movie_edit:",
+                       visibility="visible" if has_valid_save() else "hidden")
 
 edit_intro_ending = st.Page("st_pages/5_Edit_OpEd_Content.py",
-                title="编辑开场和结尾",
-                icon=":material/edit_note:",
-                visibility="visible" if has_valid_save() else "hidden")
+                            title="编辑开场和结尾",
+                            icon=":material/edit_note:",
+                            visibility="visible" if has_valid_save() else "hidden")
 
 composite = st.Page("st_pages/6_Compostie_Videos.py",
-                title="合成视频",
-                icon=":material/animated_images:",
-                visibility="visible" if has_valid_save() else "hidden")
+                    title="合成视频",
+                    icon=":material/animated_images:",
+                    visibility="visible" if has_valid_save() else "hidden")
 
 # ========== 创建导航 ==========
 nav_dict = {

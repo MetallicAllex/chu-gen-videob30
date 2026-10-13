@@ -1,7 +1,9 @@
+import os
 import re, subprocess
 import shutil, streamlit as st
 from decimal import ROUND_HALF_UP, Decimal
 from concurrent.futures import ThreadPoolExecutor
+from utils.PathUtils import APP_ROOT
 from utils.Variables import CHUNI_CHAIN_TYPES, CHUNI_COMBO_TYPES, LEVEL_LABELS, REVERSE_LEVEL_LABELS
 
 def escape_markdown_text(text: str) -> str:
@@ -78,7 +80,11 @@ def get_ffmpeg_version():
             from utils.Quadrants.RenderIO import get_ffmpeg_binary
             ffmpeg_bin = get_ffmpeg_binary('ffmpeg')
         except Exception:
-            ffmpeg_bin = shutil.which('ffmpeg') or 'ffmpeg'
+            # 拿不到 RenderIO 时不能只信 PATH：随包的 ffmpeg.exe 在应用根，而裸 'ffmpeg'
+            # 在 Windows 上只按当前目录解析，启动方式一变就把明明装了的 ffmpeg 报成"未安装"。
+            bundled = os.path.join(APP_ROOT, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+            ffmpeg_bin = next((c for c in (bundled, shutil.which('ffmpeg')) if c and os.path.exists(c)),
+                              'ffmpeg')
         result = subprocess.run([ffmpeg_bin, '-version'], 
                               capture_output=True, 
                               text=True, 

@@ -10,13 +10,23 @@ Pillow>=11.0.0,<12.0.0
 pytubefix>=8.5.0
 pyyaml>=6.0.1
 bilibili-api-python~=17.4.2
+# 这两个是 bilibili-api / httpx 的传递依赖，不写就任其漂移：aiohttp 3.13 起会直接取
+# yarl.URL.host_port_subcomponent（yarl 1.11 没有该属性），装成 3.13 + yarl 1.11 时
+# B 站凭证校验以 AttributeError 崩掉整页。下限按 aiohttp 3.13 的声明写死。
+aiohttp>=3.13,<4.0
+yarl>=1.17,<2.0
+# B 站的 nav/凭证校验响应是 Content-Encoding: br。aiohttp 3.13 调
+# Decompressor.decompress/process(data, max_length)（其 speedups 声明即 Brotli>=1.2），
+# 而 python-brotli 1.1.0 的 process() 只收一个参数，TypeError 被 aiohttp 改写成
+# "Can not decode content-encoding: br"，看起来像网络问题。
+Brotli>=1.2,<2
 flask>=3.1.0
 streamlit>=1.55.0
 pandas>=2.0,<3
 lxml>=5.3.0
 streamlit_sortables>=0.3.1
 streamlit_searchbox>=0.1.24
-httpx
+httpx>=0.24,<1.0
 opencv-python>=4.8.0
 jieba>=0.42.1
 pilmoji>=2.0.5

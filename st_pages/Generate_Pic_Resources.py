@@ -22,7 +22,8 @@ def st_generate_b30_images(placeholder, save_paths):
         # 构建预期的图片文件名（根据你的命名规则调整）
         expected_filename = f"{prefix}_{index}.png"  # 或其他扩展名
         expected_path = os.path.join(image_path, expected_filename)
-        return os.path.exists(expected_path), expected_filename
+        # 用同一条产物判据：0 字节的失败 PNG 不能算"已生成"而跳过
+        return is_artifact_valid(expected_path), expected_filename
     
     def worker(index, record_detail):
         # 先检查图片是否已存在

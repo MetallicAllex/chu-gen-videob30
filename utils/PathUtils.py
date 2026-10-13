@@ -1,7 +1,27 @@
+import re
 import streamlit as st
 from datetime import datetime
 from moviepy import VideoFileClip
 import os, json, yaml, subprocess, platform, threading, time
+
+# 应用根 = 本文件所在 utils/ 的上一级，按 __file__ 定位而不是按当前工作目录。
+# 随包分发时用户未必从应用根启动（快捷方式"起始于"填错、从别处 streamlit run），那时按
+# 相对路径读配置会抛 "global_config.yaml not found" —— 表现正好是"只有读配置的那几个页面
+# 报错、其他页面正常"。（以前 B 站下载期间还会把整个进程的 cwd 切到 videos/downloads，
+# 那条已在 video_crawler.bilibili_download 里取消。）
+APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GLOBAL_CONFIG_PATH = os.path.join(APP_ROOT, "global_config.yaml")
+
+# 渲染临时产物的统一归宿（ts_files.txt / 音频规范化副本 / island 主体段等）。以前六处各写
+# 各的 './videos/temp_generated'，只在 st_app.py 启动时 chdir 过才成立；其中一处是
+# shutil.rmtree —— cwd 被别的启动方式带偏就会删错目录，所以收成一条按 __file__ 锚定的常量。
+TEMP_GENERATED_DIR = os.path.join(APP_ROOT, "videos", "temp_generated")
+
+# 谱面确认素材的共享下载目录。这里刻意保持**相对**写法：README 承诺的命名约定是
+# `{song_id}-{难度}.mp4`，而 video_configs.json 里存下的就是 `videos\downloads\...` 这种
+# 相对路径（页 4 生成配置时按 cwd 解析）。收成一条常量是为了消灭"四个地方各写一遍"，
+# 改成绝对路径会连带改动存档里的路径格式。可写性由 st_app.py 启动时的 chdir 保证。
+DOWNLOADS_DIR = os.path.join("videos", "downloads")
 
 def get_user_base_dir(username):
     """Get base directory for user data"""
@@ -30,13 +50,37 @@ def get_data_paths(username, timestamp=None):
         'output_video_dir': os.path.join(version_dir, "videos"),
     }
 
+SAVE_ID_PATTERN = re.compile(r"^\d{8}_\d{6}$")
+
+
+def is_save_id(name):
+    """存档目录名的形状（YYYYmmdd_HHMMSS）。用户手动放进 b30_datas 里的杂项目录不是存档。"""
+    return bool(SAVE_ID_PATTERN.match(name))
+
+
+def is_artifact_valid(path):
+    """产物是否真的可用：是个文件，而且非零字节。
+
+    判据必须只有一份：下载/渲染都把"文件存在"当成"已生成"，而 ffmpeg 或 httpx 中断很可能
+    留下 0 字节壳子。两处口径不一致时会出现"下载页要重下、生成配置却当它已就绪"互相打架。
+    """
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
 def get_user_versions(username):
-    """Get all available versions for a user"""
+    """列出一个用户的全部存档版本；名字不合形状的目录一律不当存档看待
+
+    各页面都拿 `datetime.strptime(save_id.split("_")[0], "%Y%m%d")` 显示日期，混进来一个
+    `backup` 之类的目录会让这些页面一起 ValueError。
+    """
     base_dir = get_user_base_dir(username)
     if not os.path.exists(base_dir):
         return []
-    versions = [d for d in os.listdir(base_dir) 
-               if os.path.isdir(os.path.join(base_dir, d))]
+    versions = [d for d in os.listdir(base_dir)
+               if is_save_id(d) and os.path.isdir(os.path.join(base_dir, d))]
     return sorted(versions, reverse=True)
 
 def _read_config(file_path):
@@ -47,10 +91,16 @@ def _read_config(file_path):
         return read()
     except PermissionError:
         # Windows 上 os.replace 的目标有一个极短的"删除待定"窗口，此时新开读句柄会被
-        # 拒绝（WinError 13），文件本身完好。后台在刷曲库就会撞上，退让一次重试，
-        # 别把它读成"曲库缺失"。
-        time.sleep(0.05)
-        return read()
+        # 拒绝（WinError 13），文件本身完好。后台在刷曲库就会撞上，退让重试，
+        # 别把它读成"曲库缺失"。只退让一次 50ms 不够（并发压测里会偶发穿透），
+        # 改成与 save_config 同一口径的多次短退让；真读不到才抛原始错误。
+        for _ in range(20):
+            time.sleep(0.03)
+            try:
+                return read()
+            except PermissionError:
+                continue
+        raise
 
 
 # 缓存键必须带上文件版本：只按路径缓存时，save_config 写完再读仍然拿到旧内容
@@ -98,27 +148,45 @@ def save_config(config_file, config_data):
             os.remove(tmp_file)
 
 def read_global_config():
-    if os.path.exists("global_config.yaml"):
-        with open("global_config.yaml", "r", encoding='utf-8') as f:
+    if os.path.exists(GLOBAL_CONFIG_PATH):
+        with open(GLOBAL_CONFIG_PATH, "r", encoding='utf-8') as f:
             return yaml.load(f, Loader=yaml.FullLoader)
-    else:
-        raise FileNotFoundError("global_config.yaml not found")
+    raise FileNotFoundError(
+        f"未找到 global_config.yaml（查找位置：{GLOBAL_CONFIG_PATH}）。"
+        f"请确认应用是否完整解压，且该文件位于应用根目录")
 
 def write_global_config(config):
+    """写回全局配置。失败必须让调用方知道：旧实现只 print 后返回 None，
+    页 6 紧接着就 toast「配置已保存！」，磁盘没写进去也报成功。
+    """
+    tmp_file = f"{GLOBAL_CONFIG_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        with open("global_config.yaml", "w", encoding='utf-8') as f:
+        with open(tmp_file, 'w', encoding='utf-8') as f:
             yaml.dump(config, f)
-    except Exception as e:
-        print(f"Error writing global config: {e}")
+        for attempt in range(20):
+            try:
+                os.replace(tmp_file, GLOBAL_CONFIG_PATH)
+                return
+            except PermissionError:
+                time.sleep(0.03)
+        raise PermissionError(f"{GLOBAL_CONFIG_PATH} 一直被占用，本次未更新（旧副本保持完整）")
+    finally:
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
 
 def get_video_duration(video_path):
-    """Returns the duration of a video file in seconds"""
+    """返回时长（秒），探测失败返回 None。
+
+    不能返回 0：页 4 用它算时间轴上界（`max_minutes = duration // 60`），文件本身正常、
+    只是 moviepy 那一刻被占用/读不动时，0 会把起止选择器塌成 0..0 —— 用户对着一个能播的
+    视频填不进任何区间，而且界面看不出是探测失败。调用方必须显式判 None 再回退默认值。
+    """
     try:
         with VideoFileClip(video_path, audio=False) as clip:
             return clip.duration
     except Exception as e:
         print(f"Error getting video duration: {e}")
-        return 0
+        return None
 
 def open_file_explorer(path):
     try:

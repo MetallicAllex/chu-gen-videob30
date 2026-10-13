@@ -6,7 +6,44 @@ from pytubefix import YouTube, Search
 from utils.PathUtils import read_global_config
 from utils.PageUtils import remove_html_tags_and_invalid_chars
 from bilibili_api import login_v2, user, search, video, Credential, sync, HEADERS
-import os, json, asyncio, pickle, httpx, traceback, subprocess, shutil, requests, time
+import os, json, asyncio, pickle, threading, traceback, subprocess, shutil, requests, time
+
+# httpx 单独 import：它在合并那行里会先抛裸 ModuleNotFoundError，用户看不到该装什么。
+# 本项目的视频分片下载本来就依赖 httpx，缺它等于下载功能不可用，所以这里 fail fast 并给指令。
+try:
+    import httpx
+except ImportError as exc:
+    raise ImportError(
+        "缺少 httpx，B 站请求与视频分片下载无法工作。请执行：\n"
+        "    pip install \"httpx>=0.24\"\n"
+        "从源码运行请先 conda activate chu-gen-videob30；用 Release 包则联系作者补入依赖。"
+    ) from exc
+
+# B 站请求改走 httpx 传输层，不依赖便携包里 aiohttp 那一串三方版本耦合：
+# aiohttp 3.13 无条件读 yarl.URL.host_port_subcomponent（yarl<1.17 没有该属性 ⇒ 每次请求
+# AttributeError），又按 Brotli>=1.2 的双参 process(data, max_length) 调 python-brotli
+# （1.1.0 的 process 只收一个参数 ⇒ TypeError 被 aiohttp 的裸 except 改写成
+# "Can not decode content-encoding: br"，看起来像 B 站挂了/风控）。两种半装组合在发行包里
+# 都可能碰到，且用户侧无法要求他们 pip install。httpx 自带 URL 类型、按单参 process 解码，
+# 两处一并绕开。
+try:
+    from bilibili_api.utils.network import select_client, request_settings
+except ImportError as exc:
+    raise ImportError(
+        "bilibili-api 版本过旧，没有 utils.network.select_client，无法切换传输层。"
+        "请升级到 bilibili-api-python~=17.4.2。"
+    ) from exc
+
+try:
+    select_client('httpx')
+except Exception as exc:
+    # 不静默退回 aiohttp：那等于把上面那串版本耦合又请回来。宁可显式失败让用户来找作者。
+    raise RuntimeError(
+        f"切换到 httpx 传输层失败：{type(exc).__name__}: {exc}。"
+        "这通常是 bilibili-api 或 httpx 版本不匹配；请不要改回 aiohttp 硬跑，"
+        "把这条报错连同 bilibili-api-python / httpx 版本发给作者。"
+    ) from exc
+
 
 # ffmpeg 的路径解析与实际调用都收在 merge_streams() 里（统一走 RenderIO.get_ffmpeg_binary）；
 # 不再用 os.system 拼 shell 字符串，也就不再需要按平台写重定向。
@@ -16,6 +53,24 @@ SEARCH_SCAN_SIZE = 50
 BILI_URL_PREFIX = "https://www.bilibili.com/video/"
 YTB_URL_PREFIX = "https://www.youtube.com/watch?v="
 YTB_DATAV3_ENDPOINT = "https://www.googleapis.com/youtube/v3/"
+
+
+def normalize_proxy(address):
+    """把用户填的代理地址补成 httpx / requests 认得的形态，空值返回 None。
+
+    `global_config.yaml` 与界面占位符写的都是 `127.0.0.1:7890` 这种不带 scheme 的形式，
+    而 httpx 会直接 ValueError("Unknown scheme for proxy URL")，requests 则是原样透传、
+    到建连接时才抛 InvalidProxyURL —— 于是"勾了代理反而全失败"和"填对了也没用"看起来
+    是同一种故障。已带 scheme 的（含 socks5://）原样保留。
+    """
+    if address is None:
+        return None
+    text = str(address).strip()
+    if not text:
+        return None
+    if '://' in text:
+        return text
+    return f"http://{text}"
 
 def custom_po_token_verifier() -> Tuple[str, str]:
 
@@ -90,7 +145,9 @@ def convert_duration_to_seconds(duration: str) -> int:
     try:
         minutes, seconds = map(int, duration.split(':'))
         return minutes * 60 + seconds
-    except:
+    except (ValueError, TypeError, AttributeError):
+        # 裸 except 会连 KeyboardInterrupt 一起吞掉；这里真正要兜的只有
+        # "mm:ss 解析不了"（非数字、多段冒号、传进来的不是字符串）
         return int(duration)
 
 # def load_credential(credential_path):
@@ -134,6 +191,30 @@ def convert_duration_to_seconds(duration: str) -> int:
 #         print(f"#####【bilibili】缓存登录成功：{sync(user.get_self_info(credential))['name']}")
 #         return credential
 
+def save_credential(credential, credential_path):
+    """原子写回凭证：临时文件 + os.replace，和 PathUtils.save_config 一个口径。
+
+    凭证 pickle 坏一半的话，下次 load_credential 的 pickle.load 会抛，然后按"损坏"分支
+    把文件删掉，用户被强制重新扫码 —— 所以绝不能就地截断重写。
+    """
+    folder = os.path.dirname(credential_path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp_file = f"{credential_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp_file, 'wb') as f:
+            pickle.dump(credential, f)
+        for _ in range(20):
+            try:
+                os.replace(tmp_file, credential_path)
+                return
+            except PermissionError:
+                time.sleep(0.03)
+        raise PermissionError(f"{credential_path} 一直被占用，凭证未写回")
+    finally:
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+
 def load_credential(credential_path):
     if not os.path.isfile(credential_path):
         print("#####【未找到bilibili登录凭证，请先扫码登录】")
@@ -159,7 +240,8 @@ def load_credential(credential_path):
                 dedeuserid=loaded_data.dedeuserid,
                 ac_time_value=loaded_data.ac_time_value
             )
-        except:
+        except Exception:
+            # 裸 except 会把 Ctrl+C 也算成"凭证无效"并返回 None，控制台的取消操作因此没反馈
             traceback.print_exc()
             print("#####【bilibili】登录凭证无效，请重新扫码登录")
             return None, None
@@ -174,9 +256,19 @@ def load_credential(credential_path):
             if need_refresh:
                 print("#####【bilibili】正在尝试刷新登录凭据。")
                 sync(credential.refresh())
-        except:
+                # B 站刷新是换发新 cookie：不落盘的话内存里是新的、磁盘上还是旧的。
+                # 旧值就此作废，下次启动判失效 → 用户被强制重新扫码（作者本机实测撞过）。
+                # 写回单独兜异常：刷新已经成功，本次会话这份凭据是能用的；Windows 上
+                # os.replace 被别的句柄挡住时不该把"存不下"报成"登录失效"。
+                try:
+                    save_credential(credential, credential_path)
+                    print("#####【bilibili】刷新后的凭据已写回本地")
+                except Exception as e:
+                    print(f"#####【bilibili】刷新成功但写回失败: {e}；本次可用，"
+                          f"下次启动可能要重新扫码")
+        except Exception as e:
             traceback.print_exc()
-            print("#####【bilibili】刷新登录凭证失败，请重新扫码登录")
+            print(f"#####【bilibili】刷新登录凭证失败: {e}，请重新扫码登录")
             return None, None
         
         username = sync(user.get_self_info(credential))['name']
@@ -199,7 +291,7 @@ def load_credential(credential_path):
 #                 f.write(chunk)
 #         print("完成。\n")
 
-async def download_url_from_bili(url: str, out: str, info: str, max_retries=3):
+async def download_url_from_bili(url: str, out: str, info: str, max_retries=3, proxy=None):
     """
     从B站下载流文件，支持断点续传和自动重试
     
@@ -230,7 +322,8 @@ async def download_url_from_bili(url: str, out: str, info: str, max_retries=3):
                 headers['Range'] = f'bytes={downloaded_size}-'
                 print(f"\n      -- [尝试续传，从 {downloaded_size} 字节处继续]")
             
-            async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True) as sess:
+            async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True,
+                                         proxy=proxy) as sess:
                 resp = await sess.get(url)
                 
                 # 检查响应状态
@@ -331,6 +424,11 @@ def _pick_bili_streams_compat(detecter, high_res):
     best_audio = max(audio_streams, key=lambda s: s.audio_quality.value, default=None)
     return [best_video, best_audio]
 
+class UserFacingDownloadError(RuntimeError):
+    """原因已经写给使用者看了：外层不要再套一层 "YouTube 下载失败: RuntimeError: …"，
+    否则界面上那句话会既啰嗦又重复视频 ID（用户要把它粘回来反馈）。"""
+
+
 def _ffmpeg_bin(tool_name: str = 'ffmpeg') -> str:
     """复用渲染链路那个解析器（运行目录 → 应用根目录 → PATH）。
 
@@ -378,10 +476,16 @@ def merge_streams(input_files, output_file):
 
 
 def stash_failed_streams(temp_files, clip_name):
-    """合并失败时把输入流改名留下，否则现场被清掉就没法手工复现这条 ffmpeg 命令。"""
+    """合并失败时把输入流改名留下，否则现场被清掉就没法手工复现这条 ffmpeg 命令。
+
+    留原位（输入所在目录）而不是当前工作目录：调用方传的是绝对路径，
+    拼相对名会把现场丢到用户启动程序的那个目录里。
+    """
     kept = []
     for name in temp_files:
-        target = f"failed_{clip_name}_{name}"
+        folder = os.path.dirname(name)
+        stamped = f"failed_{clip_name}_{os.path.basename(name)}"
+        target = os.path.join(folder, stamped) if folder else stamped
         if os.path.exists(name):
             try:
                 os.replace(name, target)
@@ -404,7 +508,8 @@ def _detect_bili_streams(detecter, high_res):
         print("      -- [bilibili-api 选流失败，改用兼容模式挑选媒体流]")
         return _pick_bili_streams_compat(detecter, high_res)
 
-async def bilibili_download(bvid, credential, output_name, output_path, high_res=False, p_index=0):
+async def bilibili_download(bvid, credential, output_name, output_path, high_res=False, p_index=0,
+                            proxy=None):
     v = video.Video(bvid=bvid, credential=credential)
     download_url_data = await v.get_download_url(p_index)
     detecter = video.VideoDownloadURLDataDetecter(data=download_url_data)
@@ -412,46 +517,41 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
     streams = _detect_bili_streams(detecter, high_res)
     is_flv_mp4 = detecter.check_flv_mp4_stream()
     if streams[0] is None or (not is_flv_mp4 and streams[1] is None):
-        raise Exception(f"{bvid} 第 {p_index + 1} 分P 没有可下载的媒体流（可能需要大会员权限，或该分P 尚未转码完成）")
+        raise UserFacingDownloadError(
+            f"{bvid} 第 {p_index + 1} 分P 没有可下载的媒体流（可能需要大会员权限，或该分P 尚未转码完成）")
 
-    # 必须在下面的 os.chdir 之前转成绝对路径：output_path 可能是 "./videos/downloads" 这类相对路径，
-    # 切换工作目录后再解析会指向不存在的嵌套目录，ffmpeg 会静默合并失败
+    # 这里以前会 os.chdir 到 videos/downloads 好让临时文件用裸文件名。cwd 是整个进程共享的，
+    # 下载几十秒里后台曲库线程按 './music_datasets/...' 这类相对路径落盘，数据就写进了
+    # videos/downloads（实测会在那里建出 music_datasets/status）。现在一律绝对路径，不切目录。
     output_file = os.path.abspath(os.path.join(output_path, f"{output_name}.mp4"))
-    
-    # 确保输出目录存在
     os.makedirs(output_path, exist_ok=True)
-    
-    # 切换到临时文件所在目录
-    original_dir = os.getcwd()
-    os.chdir(output_path)
-    
-    try:
-        if is_flv_mp4:
-            # FLV 流下载（增加重试次数）
-            await download_url_from_bili(streams[0].url, "flv_temp.flv", "FLV 音视频", max_retries=5)
-            error = merge_streams(["flv_temp.flv"], output_file)
-            if error:
-                kept = stash_failed_streams(["flv_temp.flv"], output_name)
-                raise Exception(f"封装 FLV 失败: {error}（输入已保留为 {', '.join(kept)}）")
-            os.remove("flv_temp.flv")
-            print(f"下载完成，存储为: {output_name}.mp4")
-        else:
-            # MP4 流下载（增加重试次数）
-            await download_url_from_bili(streams[0].url, "video_temp.m4s", "视频流", max_retries=5)
-            await download_url_from_bili(streams[1].url, "audio_temp.m4s", "音频流", max_retries=5)
-            
-            print(f"下载完成，正在合并视频和音频")
-            error = merge_streams(["video_temp.m4s", "audio_temp.m4s"], output_file)
-            if error:
-                kept = stash_failed_streams(["video_temp.m4s", "audio_temp.m4s"], output_name)
-                raise Exception(f"合并音视频失败: {error}（输入已保留为 {', '.join(kept)}）")
-            for temp in ("video_temp.m4s", "audio_temp.m4s"):
-                if os.path.exists(temp):
-                    os.remove(temp)
-            print(f"合并完成，存储为: {output_name}.mp4")
-    finally:
-        # 恢复原始目录
-        os.chdir(original_dir)
+    flv_temp = os.path.join(output_path, "flv_temp.flv")
+    video_temp = os.path.join(output_path, "video_temp.m4s")
+    audio_temp = os.path.join(output_path, "audio_temp.m4s")
+
+    if is_flv_mp4:
+        # FLV 流下载（增加重试次数）
+        await download_url_from_bili(streams[0].url, flv_temp, "FLV 音视频", max_retries=5, proxy=proxy)
+        error = merge_streams([flv_temp], output_file)
+        if error:
+            kept = stash_failed_streams([flv_temp], output_name)
+            raise UserFacingDownloadError(f"封装 FLV 失败: {error}（输入已保留为 {', '.join(kept)}）")
+        os.remove(flv_temp)
+        print(f"下载完成，存储为: {output_name}.mp4")
+    else:
+        # MP4 流下载（增加重试次数）
+        await download_url_from_bili(streams[0].url, video_temp, "视频流", max_retries=5, proxy=proxy)
+        await download_url_from_bili(streams[1].url, audio_temp, "音频流", max_retries=5, proxy=proxy)
+
+        print(f"下载完成，正在合并视频和音频")
+        error = merge_streams([video_temp, audio_temp], output_file)
+        if error:
+            kept = stash_failed_streams([video_temp, audio_temp], output_name)
+            raise UserFacingDownloadError(f"合并音视频失败: {error}（输入已保留为 {', '.join(kept)}）")
+        for temp in (video_temp, audio_temp):
+            if os.path.exists(temp):
+                os.remove(temp)
+        print(f"合并完成，存储为: {output_name}.mp4")
 
 class Downloader(ABC):
     @abstractmethod
@@ -478,7 +578,8 @@ class PurePytubefixDownloader(Downloader):
     """
     def __init__(self, proxy=None, use_oauth=False, use_potoken=False, auto_get_potoken=False, 
                  search_max_results=5, search_scan_pages=2, use_api=False, api_key=None):
-        self.proxy = proxy
+        # 归一后下游 5 处 {'http': self.proxy, ...} 才不会被 requests 原样透传成 InvalidProxyURL
+        self.proxy = normalize_proxy(proxy)
         # use_oauth 和 use_potoken 互斥，优先使用use_potoken
         self.use_potoken = use_potoken
         if use_potoken:
@@ -883,6 +984,15 @@ class PurePytubefixDownloader(Downloader):
                 video = yt.streams.filter(adaptive=True, file_extension='mp4').\
                     order_by('resolution').desc().first()
                 audio = yt.streams.filter(only_audio=True).first()
+                # 挑不到流时 .first() 给的是 None，不查就会在下一行炸成
+                # "'NoneType' object has no attribute 'download'"，对使用者毫无信息量。
+                # YouTube 上只有 webm/VP9 自适应流、或音频档缺失的视频都会走到这里。
+                if video is None or audio is None:
+                    missing = '、'.join(n for n, s in (('视频', video), ('音频', audio)) if s is None)
+                    raise UserFacingDownloadError(
+                        f"{video_id} 没有可下载的高分辨率 mp4 {missing}流"
+                        f"（该视频可能只提供 webm/VP9，或音轨缺失）；"
+                        f"请取消勾选「下载高分辨率视频」重试，或为这条曲目换一条候选视频")
                 down_video = video.download(output_path, "video_temp")
                 down_audio = audio.download(output_path, "audio_temp")
                 print(f"下载完成，正在合并视频和音频")
@@ -890,13 +1000,19 @@ class PurePytubefixDownloader(Downloader):
                 error = merge_streams([down_video, down_audio], output_file)
                 if error:
                     # 失败时不动临时文件：留在原地才能手工复现这条命令
-                    raise Exception(f"合并音视频失败: {error}")
+                    raise UserFacingDownloadError(f"合并音视频失败: {error}")
                 os.remove(down_video)
                 os.remove(down_audio)
                 print(f"合并完成，存储为: {output_name}.mp4")
             else:
-                downloaded_file = yt.streams.filter(progressive=True, file_extension='mp4').\
-                    order_by('resolution').desc().first().download(output_path)
+                progressive = yt.streams.filter(progressive=True, file_extension='mp4').\
+                    order_by('resolution').desc().first()
+                if progressive is None:
+                    raise UserFacingDownloadError(
+                        f"{video_id} 没有 progressive（音视频合一）的 mp4 流，"
+                        f"这类视频通常只提供 webm，或需要合并下载；"
+                        f"请勾选「下载高分辨率视频」走合并档，或换一条候选视频")
+                downloaded_file = progressive.download(output_path)
                 # 重命名下载到的视频文件
                 new_filename = f"{output_name}.mp4"
                 output_file = os.path.join(output_path, new_filename)
@@ -910,10 +1026,17 @@ class PurePytubefixDownloader(Downloader):
 
             return output_file
             
+        except UserFacingDownloadError:
+            # 原因已是给人看的话，原样上抛，不再套 "YouTube 下载失败（id）: RuntimeError: …"
+            raise
         except Exception as e:
-            print(f"下载视频时发生错误:")
+            # 旧实现在这里 print + traceback 然后 return None：调用方（download_one_video）
+            # 只能靠"目标文件在不在"倒推成败，于是 bot 检测、缺 mp4 流、改名被杀软/网盘占用
+            # 这些完全不同的故障，在界面上全塌成一句「未生成有效视频文件」，而真正的原因只
+            # 留在没人会看的控制台里（start.bat 是双击启动的 GBK 窗口）。
+            print("下载视频时发生错误:")
             traceback.print_exc()
-            return None
+            raise RuntimeError(f"YouTube 下载失败（{video_id}）: {type(e).__name__}: {e}") from e
 
 class BilibiliQrCodeLoginSession:
     """
@@ -928,13 +1051,17 @@ class BilibiliQrCodeLoginSession:
     2. 循环调用 check_state() 检查登录状态
     3. 登录成功后调用 get_credential() 获取凭证
     """
-    def __init__(self):
+    def __init__(self, proxy=None):
         self._qr_key = None
         self._credential = None
         self._generated = False
+        # 连不上 B 站的人才更需要代理：登录如果照直连走，代理用户会卡在"生成二维码失败"，
+        # 根本到不了下载那一步。
+        self._proxy = normalize_proxy(proxy)
 
     async def _request(self, api, params=None):
-        async with httpx.AsyncClient(headers=HEADERS, timeout=15.0, follow_redirects=False) as sess:
+        async with httpx.AsyncClient(headers=HEADERS, timeout=15.0, follow_redirects=False,
+                                     proxy=self._proxy) as sess:
             return await sess.get(api["url"], params=params)
 
     def generate_qrcode(self):
@@ -1112,7 +1239,12 @@ class BilibiliDownloader(Downloader):
     #         print(f"正在尝试第 {attempt + 1} 次重新登录...")
     
     def __init__(self, proxy=None, no_credential=False, credential_path="cred_datas/bilibili_cred.pkl", search_max_results=5, search_scan_pages=2, skip_login=False):
-        self.proxy = proxy
+        self.proxy = normalize_proxy(proxy)
+        # 以前 self.proxy 只是存着没人读：界面勾了"使用代理"、B 站搜索/取信息/下载分片全部
+        # 照直连走，用户以为自己已经挂上代理，于是风控问题怎么查都查不出来。
+        # bilibili_api 的 API 调用走它自己的全局设置（set_proxy 会下发给已缓存的会话），
+        # 分片下载走我们自己的 httpx，两边都要给。
+        request_settings.set_proxy(self.proxy or "")
         self.search_max_results = search_max_results
         self.search_scan_pages = max(1, int(search_scan_pages or 1))
         self.credential_path = credential_path
@@ -1342,8 +1474,8 @@ class BilibiliDownloader(Downloader):
         try:
             credential.raise_for_no_bili_jct()
             credential.raise_for_no_sessdata()
-        except:
-            print("\n#####【登录失败，请重试】")
+        except Exception as e:
+            print(f"\n#####【登录失败，请重试】({type(e).__name__}: {e})")
             return False
         
         print(f"\n#####【登录bilibili成功，登录账号为：{sync(user.get_self_info(credential))['name']}】")
@@ -1458,7 +1590,8 @@ class BilibiliDownloader(Downloader):
                               output_name=output_name, 
                               output_path=output_path,
                               high_res=high_res,
-                              p_index=p_index)
+                              p_index=p_index,
+                              proxy=self.proxy)
         )
 
     def get_video_info(self, video_id):

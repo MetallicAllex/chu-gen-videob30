@@ -3,6 +3,274 @@
 > 仓库内只维护这一份全量更新日志（相对上一个发布版本的全部改动），含实测数字、成因、完整已知问题、发行包注意事项。
 > 面向自己人与反馈排查；对外简略说明在出包时另行摘录，仓库内不留第二份。
 
+## [1.2.6a] - 2026-10-02 出包，工作树截至 2026-10-13
+
+相对 v1.2.6 的全量改动：20 个已跟踪文件 +800/−524（`git diff --numstat HEAD`，不含本文件：
+`st_pages/3_Confirm_Videos.py`
++129/−322、`utils/DataUtils.py` +196/−43、`utils/video_crawler.py` +192/−59、`utils/PathUtils.py` +84/−16、
+`utils/fetch_settings.py` +51/−17）。按环节记录，**行号以本次提交为准**。
+
+- **与用户手上那份包对齐过**：`dist/chu-gen-videob30-v1.2.6a.zip`（2026-10-02 16:35、53,950,830 字节）里
+  14 个承重文件逐个 md5 比对，**12 个与当前工作树字节相同**，只有 `utils/DataUtils.py`（包后再 +93/−11）与
+  `st_app.py`（+33/−28，导入顺序与续行缩进 + `callable(reconfigure)` 硬化）是出包之后再改的。
+  也就是说本节描述的绝大部分**已经随 v1.2.6a 发出去了**，包后新增只有「曲库镜像对账」那一节。
+  版本号 `st_pages/0_homepage.py:98` 现在仍写 **v1.2.6**，出包前要改。
+
+### 传输层：B 站请求从 aiohttp 换到 httpx
+
+- 现场是进「搜索、检查和下载视频」页就 `AttributeError: 'URL' object has no attribute 'host_port_subcomponent'`。
+  根因**不在业务代码，在随包 `runtime/` 的半装状态**：`site-packages` 里同时有 `yarl-1.11.1.dist-info` 与
+  `yarl-1.23.0.dist-info`，真正被 import 到的模块 `__version__` 是 **1.11.1**，实测
+  `hasattr(yarl.URL('https://x.bilibili.com'), 'host_port_subcomponent')` → **False**；而 `aiohttp 3.13.3` 的
+  `client_reqrep.py:1061` 无条件读这个属性（它自己的 METADATA `:42` 就写着 `yarl<2.0,>=1.17.0`）。
+  B 站凭证校验（nav）是页面进来后的第一个请求，于是一进来就整页 traceback。
+- 同型的第二处：`Brotli-1.1.0.dist-info` 与 `brotli-1.2.0.dist-info` 并存，磁盘上的 `_brotli.pyd` 实测
+  **821248** 字节、`_brotli.__version__` = 1.1.0，而 1.2.0 那份 RECORD 记的是 **856576**
+  （`brotli-1.2.0.dist-info/RECORD`）。aiohttp 3.13 按 `speedups` 声明（METADATA `:45` `Brotli>=1.2`）以
+  双参 `process(data, max_length)` 调用，1.1.0 的 `process` 只收一参 ⇒ TypeError 被 http_parser 的裸 except
+  改写成 **`Can not decode content-encoding: br`**。报的是编码、坏的是依赖版本，看着像 B 站挂了或风控。
+- **为什么不修 runtime**：`runtime/` 是便携包，终端用户没有 pip、也常常正开着应用（`.pyd` 被占用，
+  卸载直接 WinError 5）。修法落在源码层：`utils/video_crawler.py:38` 在 import 期 `select_client('httpx')`，
+  让 `bilibili_api` 的 HTTP 全走 httpx（0.26.0），一次绕开 yarl 属性与 Brotli 签名两处耦合。
+  三道 fail-fast 而不是静默退回：httpx 装没装（`:13-20`，提示里直接给 `pip install "httpx>=0.24"` 与
+  conda/Release 两种出路）、`bilibili_api.utils.network.select_client` 存不存在（`:29-35`，要求
+  `bilibili-api-python~=17.4.2`）、切换本身有没有成功（`:37-45`，报错文案写明**不要改回 aiohttp 硬跑**、
+  连同两个版本号发给作者）。静默退回等于把那串版本耦合再请回来。
+- 换传输层带来的两处写法差异一起处理：`normalize_proxy`（`:58-73`）把裸 `127.0.0.1:7890` 补成
+  `http://127.0.0.1:7890`，已带 scheme 的（含 `socks5://`）原样保留 —— `global_config.yaml` 与界面占位符
+  历来是不带 scheme 的形态，而 httpx 在构造期就 `ValueError: Unknown scheme for proxy URL`，requests 反而
+  原样透传到建连接时才抛 `InvalidProxyURL`，于是"勾了代理反而全失败"和"填对了也没用"长得一模一样。
+  另两处是 `bilibili_api` 自己的全局设置 `request_settings.set_proxy(self.proxy or "")`（`:1247`，登出传空串
+  而不是 None，会下发给已缓存的会话）和两处自建 `httpx.AsyncClient(..., proxy=...)`（`:325`、`:1063`）。
+- `requirements.txt:13-22` 把三个下限钉死并留成因注释：`aiohttp>=3.13,<4.0`、`yarl>=1.17,<2.0`、
+  `Brotli>=1.2,<2`。**这只管新装**；已装用户（含 v1.2.6a）的修复面仍是**只覆盖 `utils/video_crawler.py`
+  一个文件**（测试 G4 就是按"旧 `RenderIO.py` 共存"造的场景）。
+- 反向验证过开关真的生效：填一个不可达代理，改前能拿到 **50 条**搜索结果（说明请求压根没走代理那条路），
+  改后直接 `httpx.ConnectError` 冒出来。
+
+### 「未生成有效视频文件」剩下的几个来源
+
+v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`os.system` + `FFMPEG_PATH` 裸名已不在 HEAD 里）。本轮在这条
+判据周围还剩几类会塌成同一句话，逐个堵住：
+
+- **YouTube 那条是静默失败**：`download_video` 原来是 `except Exception: traceback.print_exc(); return None`，
+  异常只进控制台，页面拿到 None 后由 `utils/DataUtils.py:856` / `:928` 的存在性校验报"未生成有效视频文件"。
+  现在引入 `UserFacingDownloadError`（`utils/video_crawler.py:427`），在 6 个抛点带出原因：B 站无可选流 `:520`、
+  FLV 封装 `:538`、双流合并 `:550`、YouTube 取流为空 `:992`、合并失败 `:1003`、`:1011`；外层 `:1029` 原样重抛、
+  `:1032` 把其它异常包成 `YouTube 下载失败（{video_id}）: {类型}: {消息}`。
+- **下载期间的进程级 chdir 取消**：`bilibili_download` 原来为让临时文件用裸文件名而 `os.chdir` 到
+  `videos/downloads`，``:523` 注释记录了为什么不能这么干 —— cwd 是整进程共享的，下载期间后台曲库线程
+  就在那里建出 `music_datasets/`。`flv_temp` / `video_temp` / `audio_temp`（`:528` 起）与
+  `stash_failed_streams`（`:478`）改为按输入所在目录绝对化，失败现场仍留在输入旁边。
+- **0 字节产物曾被当成"已生成"**：判据收敛见下一节。
+- **页 3 的下载闸门**：`st_download_video`（`:176`）返回**可用素材数**而不是无条件 `download_completed = True`，
+  `ready_count`（`:232`）按 `video_info_match` + `is_video_cached` 统计，调用点 `:766` 写
+  `download_completed = ... > 0`。0 可用 ⇒ `st.error`（`:237-245`，附首条失败原因与 ffmpeg 提示）并**锁住
+  「下一步」**；部分失败 ⇒ `st.warning`（`:246-252`）给 `可用 N/总数` 和曲名清单。改前是"全部失败也解锁"，
+  用户带着空素材进页 4。
+- **为什么作者机测不出来**（同 v1.2.6 那节的机制，这里补两条）：他机 `runtime/` 不是半装态、PATH 上有
+  `E:\FFmpegTools\bin`，且始终从应用根启动。本轮新暴露的这条不对称是**游客 vs 登录 + 选流档位**：
+  同一存档同一网络，游客开高分辨率实测仍只到 `852×480`（视频/音频 0.79 / 0.57 Mbps），登录后实测选到
+  **1920×1080 h264 60fps 3103451 bps**（视频流 53.87MB + 音频流 1.92MB），合并产物 `ffprobe` 两条轨齐。
+
+### 路径锚定与产物判据
+
+- `st_app.py:10` 在**导入 utils 之前** `os.chdir(应用根)`（`from utils import DataUtils as DU` 现在在 `:12`）。
+  曲库/缓存/存档历来是 `./music_datasets`、`./cache`、`b30_datas` 这类相对写法，逐条改绝对会把
+  `video_configs.json` 里存的相对路径格式改掉，所以锚在入口；每轮 rerun 都重跑这行，
+  被别的代码改走的 cwd 会自愈。
+- `utils/PathUtils.py` 新增 `:12 APP_ROOT`、`:13 GLOBAL_CONFIG_PATH`、`:18 TEMP_GENERATED_DIR`（绝对）；
+  `:24 DOWNLOADS_DIR` **故意保持相对**（同上，测试 I6 验的是"各页不再各写字面量"，并证明与绝对写法
+  normpath 等价）。此前按 cwd 拼 `videos/temp_generated` 的三处改用常量：`utils/SegmentUtils.py:1062`
+  （音频统一临时目录）、`utils/Quadrants/IslandConcat.py:38`（**导入期**的 `abspath('./videos/temp_generated')`，
+  把启动时那个 cwd 冻结进模块）、`utils/Quadrants/SafeRender.py:210`（这一步是 **rmtree**，cwd 被带偏
+  就删错目录）。`6_Compostie_Videos.py:194`（建目录）与 `:381-382`（收尾清理）同理。
+- 同一族的另一半是**工具解析**：`utils/PageUtils.py:85-87` 的 `get_ffmpeg_version` 在拿不到 `RenderIO` 时
+  先试 `APP_ROOT/ffmpeg.exe` 再退到 `shutil.which`，不再只信 PATH —— 随包那份 exe 在应用根，而裸 `'ffmpeg'`
+  在 Windows 上按当前目录解析，启动方式一变就把明明装了的 ffmpeg 报成"未安装"。
+- `global_config.yaml not found`：`read_global_config`（`:150`）报错带上查找位置；`write_global_config`
+  （`:158`）改原子替换（旧写法 `except: print` 把写失败吞成"配置没生效"）；`_read_config`（`:86`）在
+  Windows 的"文件占用 / delete pending"窗口里按 **20×30ms** 重试（原来单发 50ms，测试 C1 自己先不稳）。
+- `get_video_duration`（`:177`）失败返回 **None** 而不是 0。0 会被当真实时长，`max_minutes = 0` ⇒
+  页 4 起止选择器塌成 `0..0`，正常视频也填不进区间；`st_pages/4_Edit_Video_Content.py:333-334` 显式回退
+  `DEFAULT_VIDEO_MAX_DURATION`（测试 E6/E7）。
+- **唯一判据** `PathUtils.is_artifact_valid`（`:61`，isfile + size>0），19 处调用点：
+  `DataUtils.py:234/:239/:856/:928/:1486/:1856/:1889/:2193`、`ImageUtils.py:858`、
+  `QuadRenderer.py:692/:708/:724`、`SegmentUtils.py:908`、`3_Confirm_Videos.py:467/:532`、
+  `4_Edit_Video_Content.py:333/:542/:545`、`Generate_Pic_Resources.py:26`。裸 `os.path.exists` 把 0 字节
+  失败产物当"已生成"，链路是：跳过重渲 → 直接拼进成片 → 界面显示成功。
+- **失败要留在页面上**：`ImageUtils.py:912` 生成评论图失败写 `st.session_state.render_error`（页 5 生成完就
+  `st.rerun()`，当场那句 `st.error` 会被冲掉）；页 5 `:411-417` 给持久展示位、`:527` 每次点「生成评论图」先清
+  旧记录；页 6 `:485-488` 把"渲染完成"toast 移进 `else` 分支，`_failed` 非空时改口 ⚠️（耗时统计对两者都成立，
+  所以留在分支外）。`1_Setup_Achivments.py:179` 存档"文件在但读不出来"以前静默当没存档（用户看到存档凭空
+  消失），现在仍按未配置处理但打印位置与原因；`:1019` 空白存档从 `print(f'[{json.dumps(...)}]', file=f)`
+  改走 `save_config(..., [new_data])`。
+
+### B 站登录态与 OAuth 令牌
+
+- `save_credential`（`video_crawler.py:194`）原子写 pkl；`load_credential`（`:218`，回写在 `:266-269`）把
+  "刷新成功但写盘失败"与"凭证无效"分开 —— 嵌套 try，写失败只警告、本次会话照常可用（这条回归是我上一轮
+  引入的）。实测一次真实刷新后 pkl 从 `3e24531d1521…` 变成 `f1b7bf70e5fc…`，没有截断。
+- `fetch_settings.py:185/:188/:194` 登录态改三态 True / False / **None**：pkl 读不出来时以前只有"未登录"一种
+  显示，用户会去重复扫码；现在 `bilibili_cred_error` 带 `类型: 消息`，面板写"原因：…"。
+  `bilibili_login_dialog(proxy=None)`（`:27`）与 `bilibili_logout()`（`:119`）同步维护该状态；`:158`
+  「使用代理」的 help 按实际生效范围重写。
+- 落雪令牌：`OAuthUtils.py:149` `save_lxns_token` 改 `.tmp` + `os.replace`（半截写会在下次 load 时
+  JSONDecodeError，而那条路径是"损坏 → 返回 None"，用户只看到"未登录"、不知道令牌其实还在只是被写坏了）；
+  `:234` 把 `except Exception: pass` 拆成两档 —— 传输入口失败（`ConnectionError` / `Timeout`）**保留**
+  refresh_token 直接返回 None，上游明确拒绝才 `clear_lxns_token()`。一次断网不再把用户推去重走整条浏览器授权。
+
+### 页 3（搜索、检查和下载视频）
+
+- **1022 → 829 行**。删两块注释掉的旧实现（原 `copy_search_args` 那 150 行调试版 + 一段 15 行死代码），
+  压平状态重算（恒不成立的 `isinstance(..., list)` 分支、`check_matched_songs` 被连调两次）。
+- `:68-74` 换存档时把控件会话键一起清：`record_selector` 存着上一份存档的曲目字符串，新存档的 options 里没有
+  它，Streamlit 恢复旧值会直接抛；`refresh_cache` 是不带 `clip_id` 的全局键，同理串档。用
+  `st.session_state.pop(k, None)` —— 随包 streamlit 1.55.0 的 `SessionState.pop(self, key, default=…)`
+  实测存在（AppTest 那个包装对象没有 `pop`，测试里改用 `del`）。
+- `:86 if current_paths is None: st.stop()`。以前只 warning 不中止，最后崩在 `current_paths['config_yt']` 的
+  `TypeError: 'NoneType' object is not subscriptable`。**位置必须在「更换存档」折叠栏之后**：写进 `save_id`
+  分支会把这里唯一能当场改选存档的出口一起 stop 掉。
+- `polite_wait`（`:167`）：只要发过请求就按 `search_wait_time` 等，纯缓存命中不等。改前失败曲目是
+  "失败 → continue"绕开了 sleep，等于零间隔连打平台；两条循环都走它（`:226`、`:282`）。
+- `:176`/`:181` 等待参数只有一个来源：`st_download_video` 收 `settings`（下载器实际按哪份构造）而不是
+  `G_config`，否则"界面改了、下载器没改"。
+- `:532` + `:546` 播放列表缓存：读不出来（半截写/手工改坏）时**回源重取并原子写回**，缓存能自愈；
+  `is_artifact_valid(cache_file)` 挡 0 字节。
+- `:685` 缓存索引只在 `update_count > 0 or len(merged) != len(old_index)` 时写盘（`merge_b50_data` 在长度不符时
+  返回 `update_count=0` 却做的是整体替换，所以两个条件都要）—— 以前每轮 rerun 都重写一次 json。
+- `:741-742` `current_index` 钳位（页 4 早有 `safe_index`，页 3 没有）：存档删曲后越界取 `b30_config[i]`。
+- `:795` 与 `:824-827` 迁移结果写 `st.session_state.migrate_report` 并给持久展示位 —— `st.caption` 撑不过
+  `st.rerun()`，用户点完就看不见了。
+- `migrate_search_args` 从页 3 移进 `utils/DataUtils.py:416`：索引键改成 `(id, level_index)`（原来 5 字段逐一
+  比对是 O(n²)，且 artist/level 一变就导入失败），返回 `(updated, skipped, missing)`，`.get` 兜字段缺失。
+  `apply_playlist_matches(b50_data, all_videos, keep_existing=True)`（`:800`）：批量匹配不再覆盖已手选的候选。
+
+### 控制台可编码性（GBK 代码页）
+
+- `DataUtils.py` 曾有 **19 处** `print` 含 GBK 编不进的字（⚠️✅🔄⏭📋 等）。这些 print 多数落在 except 分支里，
+  也就是"善后"本身抛新异常、把真正的失败原因盖掉。改成 `[!] / [OK] / [SYNC] / [SKIP] / [LIST]` 前缀；
+  扫描器在 `tests/test_paths_io.py:195 _bad_prints`，G1/G2 断言零命中且"扫描确实覆盖 `utils/` 与
+  `utils/Quadrants/`"。
+- **本轮我自己又踩了同一类**：`tests/test_paths_io.py:162` 的断言名带 `✅`，用 `python tests/test_paths_io.py`
+  直跑时在 GBK 控制台抛 UnicodeEncodeError，**整轮测试跑到 F6 就断**（现场是 traceback，而不是某条 FAIL）。
+  修法是 `tests/support.py` 里对 stdout/stderr `reconfigure(errors='replace')`（与 `st_app.py:18-24` 同一处置）
+  并把那个 emoji 从断言名去掉。同型问题在比对脚本上又复现一次（打印含 ✅ 的 diff 行），已用 UTF-8 输出绕过。
+- `6_Compostie_Videos.py:383-386` `cleanup_after_render` 的 `except: pass` 改成打印原因后继续收尾；
+  `video_crawler.py` 的裸 `except:` 由 HEAD 的 `:93`/`:162`/`:177`/`:1345` 四处收成为
+  `:148`（`ValueError/TypeError/AttributeError`）、`:243`、`:259-269`、`:1477` —— 裸 except 会连
+  `KeyboardInterrupt` 一起吞掉，控制台的取消操作因此没反馈。
+
+### 曲库镜像对账（v1.2.6a 之后才加，未随包发出）
+
+`utils/DataUtils.py` 包后 +93/−11 那一块：
+
+- `_row_reconcile`（`:1581`）把 meta 声称的行数与真正拿到的产物对上。meta 与产物是同一个桶里的两个对象、
+  在镜像域名上是**两条独立缓存**，各自到期各自回源：实测同一 URL 的缓存在 263 秒 TTL 到点时从 **1561 行翻到
+  1571 行**，另一条还停在旧版 —— "新 meta + 旧产物"是常态。不比对的话旧产物会被盖上新的 `written_at`，
+  首页"本地/云端数据版本"两列同值、判成 ✅ 已是最新，而它其实少一首歌。
+- 对不上时**数据照落、版本时刻不采信**（`version_time = None`，`:1667`），并记进 `_music_state["mismatch"]`
+  （`:2161`）而**不是** `_note_fetch_failure`：后者写 `last_error`，而 `last_error` 驱动 6 小时退避 ——
+  把"该早点重取"记成"接下来 6 小时别取"正好反了。展示侧 `:1961` 把它拼进 `本机：…`，否则状态列显示
+  ⬇️ 有新版看着像正常待同步。按源名覆盖/清除，避免同轮后一个源把前一个源的实话抹掉。
+- 失联判定改用 `checked_at`：`_r2_last_contact`（`:1830`）优先 `checked_at`（每轮都写，成功/aborted/304/
+  内容没变都写），退回 `written_at` 并在文案里说破"只能按写入时刻算"。`R2_WRITE_STALE_DAYS`（40 天）改名
+  `R2_CONTACT_STALE_DAYS`（`:1737`），cron 是每月 1/16 日两次、最大间隔 16 天，取 40 天等于连续跳过两轮多才
+  开口；白名单 `:1725` 补 `checked_at`。**只盯 `written_at` 的话，"跑了但上游没变"与"cron 压根没生效"在首页
+  长得一模一样** —— 2026-10 那次停摆就是这么全绿了 21 天。
+- `st_app.py` 包后再 +33/−28，其中两处**本轮已收口**：`from utils import DataUtils as DU` 原本被 IDE 自动提到
+  了文件第 1 行，也就是 `os.chdir` 之前 —— 与 `:5-9` 那条注释写的"必须在导入 utils 之前"正相反。
+  查证过程：扫 `utils/*.py` 的模块级语句，没有一处在做文件系统访问或 `os.getcwd()` 求值
+  （`PathUtils` 的 `APP_ROOT`/`TEMP_GENERATED_DIR` 按 `__file__` 算，`Variables.root_path` 是 `"./assets"`
+  这种留给调用期解析的相对串），所以**当时并无实害**；但假规矩会误导后人，已把这条 import 挪回 chdir 之后
+  （`:10` → `:12`，`DU` 的首个使用点远在 `:37`）。同批 `callable(reconfigure)` 硬化与 `st.Page` 续行缩进对齐保留。
+
+### 测试与验证口径
+
+- `tests/test_paths_io.py` **47 项**、`tests/test_ffmpeg_merge.py` **26 项**，都在**还原后的半装 `runtime/`** 上跑
+  到 `合计 N 项，失败 0 项`（GBK 控制台直跑也不中断，即上一节那条）。分组：A 判据 / B 存档识别 /
+  C 原子写并发（含"并发读写期间任何时刻都是完整文档"）/ D 页 1 空白存档 / E 判据唯一性 /
+  F 渲染与临时目录不变量 / G 控制台编码 / H 迁移 / I 页 3 不变量。
+- 源码级断言一律用 AST 或"必须出现的调用形状"，并在 `git show HEAD:<file>` 上做过**反向验证**（改前必红）：
+  F6（`toast("渲染完成！")` 的行号必须落在 `_failed` 分支区间内）、I1–I6；否则就是恒真断言。
+- 页 3 用 `streamlit.testing.v1.AppTest` 在沙盒里真跑起来并出过截图（`output/visual/page3_render.png`）；
+  同一沙盒对 HEAD 版本能复现原崩溃：`p3_head.py:956 → update_editor:503 → IndexError`。
+- 选流与合并链路（E/D 组 + A/B/C 组）在无网络、无用户素材的条件下验；真实下载与真实凭证改写各跑过一次，
+  数字见「未生成有效视频文件」与「B 站登录态」两节。
+
+### 发布包体检（dist/ 里两份包 vs 工作树）
+
+包已挪到 `dist/`（`.gitignore:27` 覆盖），里面现存两份：`chu-gen-videob30-v1.2.6.zip`（2026-09-20 13:54，
+61,772,448 字节，144 个文件，未压缩 72.85MB）与 `chu-gen-videob30-v1.2.6a.zip`（2026-10-02 16:35，
+53,950,830 字节，247 个文件，未压缩 66.61MB）。逐条比过清单：
+
+- **v1.2.6a 不是 `script/build_release.ps1` 出的**：脚本在打包前会把 payload 里的 `__pycache__` /
+  `.pytest_cache` / `.ipynb_checkpoints` 目录与 `.pyc` / `.pyo` / `.tmp` 整批剥掉（`:163-167`），
+  而这份包里有 **117 个 `.pyc`**（未压缩多 2.67MB），包括**已删页面的孤儿字节码**
+  `st_pages/__pycache__/2_Search_For_Videos-ori.cpython-313.pyc`、`2_Search_For_Videoes_old.cpython-313.pyc`，
+  以及一批 **cpython-313** 的缓存 —— 而包内 `runtime/` 是 3.12。等于热修包**绕过了脚本的四道前置拦截**
+  （`$RequiredRel` 承重缺失、悬空 import、疑似凭证、构建后回读校验）。
+  影响要分级说清：**不会跑错代码** —— 源码都在包里，`.pyc` 只在源文件 mtime+size 对得上时才复用，
+  对不上就重编；页面导航是显式 `st.Page`，孤儿 pyc 不会被当成页面。代价是包体卫生 + **这版没跑过承重清单**
+  （1.2.6a 恰好不缺文件，是我逐 md5 验出来的，不是脚本挡出来的）。
+- **v1.2.6 的「仓库清理」确实落进了包里**：v1.2.6a 相对 v1.2.6 少 14 个文件、省 6.92MB —— 11 份 `-bak`
+  （`bg_bak.mp4` 4.55MB、`bgm_bak.mp3` 1.33MB、`content_base-bak.png`×2、`init/{2,3,4}-bak`、
+  `Frames/{0,2,3,4}-bak`）+ `Base/content/versions/jp-mate.webp` + 死页面 `st_pages/2_Search_For_Videos.py`
+  + `utils/VideoUtils.py`。与 v1.2.6 那节的清单逐项对上。
+- **素材没有停在旧状态**（这条是好消息）：包里 `assets/Audios/bgm.mp3` = 1,390,091 字节、
+  `assets/BgClips/bg.mp4` = 16,549,117 字节，**都与工作树当前值一致**；v1.2.6 包里还是旧的
+  4,801,509 / 15,283,775。也就是 bgm 换小、bg 换过两版之后，热修包带的是新的一份。
+- **随包 CHANGELOG 的口径从 v1.2.6a 起变了**：v1.2.6 包里那份只有 **764 字节**（占位/摘录件 —— 包出在
+  9-20 13:54，而 `cd322c3 v1.2.6` 这个 commit 在 9-21 01:30，全量文档是事后写的），v1.2.6a 包里是
+  **33,355 字节的全量工程台账**（含已知问题与实测数字），工作树现在是 55,707 字节。
+  所以 v1.2.6 那节末条"随包分发的是这份全量口径"**对 v1.2.6 包并不成立，从 1.2.6a 才成立**。
+- **`runtime-licenses/` 没接进任何发布环节**：里面有 `FFmpeg-LICENSE.txt`（35,147 字节）与 `SOURCES.txt`
+  （265 字节，记的是 Python 3.12.10 与 "FFmpeg 7.1 Windows full build" + 源码包链接）。
+  `build_release.ps1` 全文不引用它，`setup_runtime.ps1` 也不引用 —— 于是**带 runtime 那条链没有把许可证一起带上**。
+  顺带核了一遍 ffmpeg 的三处口径，跑 `-version` 实测（只读 banner，不转码）：
+  **当前仓库根这两份是同一套 release，不是两个日期的 nightly** —— `ffmpeg 7.1-full_build-www.gyan.dev`
+  与 `ffprobe 7.1-full_build-www.gyan.dev`，`libavcodec 61.19.100`、`libavformat 61.7.100` 两边逐字相同，
+  与 `SOURCES.txt` 记的 7.1 full build 相符；NVENC 编码器在位（`-encoders` 里 3 个 nvenc）。
+  ⇒ v1.2.6 那节「随包 ffmpeg 与 ffprobe 来自不同 commit 的 nightly，建议换成套 release 构建」这条**对现在这两份
+  已经不成立**（换过了，或当时量的是别的文件）。历史那节没改，修正记在这里。
+  **连带影响**：v1.2.6 的「视频合成 · 测试环境与口径」那条写的也是"随包 ffmpeg `2026-04-16-git` 构建"，
+  也就是说那整批性能表（1080p 单片段 52.69s → 13.9s、50 段全片约 44 分钟 → 约 15 分钟等）是在
+  **另一个构建**上测的。要引用它们得按现在这对 7.1 release 重跑一遍，或至少在对外说明里注明测量环境。
+  还剩一处对不上：`setup_runtime.ps1:60` 下载的是 **9.0.1 essentials**
+  （`gh.zwy.one/github.com/GyanD/codexffmpeg/releases/download/9.0.1/…`）—— 与现在包外这对 7.1 full 不是同一条线。
+- **两份 dist 包都是纯源码包**：`unzip -l` 里 `ffmpeg.exe` / `ffprobe.exe` / `start.bat` / `runtime/` 命中数都是 **0**
+  （与 `$NeverShip` 一致）。所以"用户机器上的 ffmpeg 从哪来"发生在**这条链之外**的装配步骤里，
+  `runtime-licenses/` 要接的正是那一步。
+
+### 已知问题（1.2.6a 遗留）
+
+- ~~**`st_app.py` 的 chdir 与 utils 导入顺序对不上注释**~~ —— **本轮已改**：那条 import 从 `:1` 挪回
+  `os.chdir`（`:10`）之后的 `:12`，与注释一致了。改前先证过它当时并无实害（`utils/*.py` 没有模块级 cwd 求值），
+  所以这一条是"假规矩"而不是 bug；详见「曲库镜像对账」末条。
+- **`check_refresh → save_credential` 那条真实分支没被观测到**：需要一个临期 token 才能走到，实测的 pkl 改写
+  来自另一条路径。上线后要盯"登入后隔天失效"的反馈。
+- **`runtime/` 的半装状态本轮没修**（明确要求不动 runtime）。想修的人：先关掉正在运行的应用，否则 `.pyd`
+  占用会 WinError 5；`pip check` 会直接把 yarl/Brotli 与 aiohttp 的冲突报出来。新装按 `requirements.txt` 不受影响。
+- `fetch_settings.py:153` 的列宽 `[1, 0.35, 1.35]` 在窄窗口下会把「使用代理」那一行挤成一列竖排 —— 本轮之前的
+  版式问题，没动（改它会连带影响面板里其它行的对齐，按一次只改一个变量单独处理）。
+- 挂着的两处一致性：`check_matched_songs`（`3_Confirm_Videos.py:286`）第三个返回值仍无人使用；缓存索引跨存档
+  来回切换会互相顶掉条目（`videos/downloads` 是同一目录、两存档共用）。
+- `quadrants` 缺 `cffi` / `pydantic`，且 `requirements.txt:34` 钉 `==1.3.0` 而本机实测 1.0.2（v1.2.6 那节写的
+  `:24` 已被本轮新增的三行下限顶下去）；GPU import 包在 try 里，缺它不挡下载与渲染主路。
+- ~~**`httpx` 是裸名没钉版本**~~ —— **本轮已钉**：`requirements.txt:29` 改为 `httpx>=0.24,<1.0`，与
+  `video_crawler.py:18` 提示语里承诺的下限对上。随包那份实测 0.26.0，在区间内；`anyio` 实测 4.11.0。
+
+### 发行包注意（1.2.6a）
+
+- 版本号 `st_pages/0_homepage.py:98` 仍写 **v1.2.6**。
+- `tests/`（3 个文件）与 `runtime-licenses/` **未跟踪**（都不在 `.gitignore` 里，是 `??` 状态）。
+  发布包已挪进 `dist/`，而 `dist/` 早在 `.gitignore:27` —— 所以**根目录那份 zip 的噪声问题不存在了**，
+  不需要再加 ignore 条目。`tests/` 不进客户端包（`script/build_release.ps1` 的 `$Dirs` 不含它）。
+- 只覆盖 `utils/video_crawler.py` 一个文件仍能修好已装用户的下载（测试 G4）；**但本轮之后这条不再充分**：
+  页 3 的下载闸门、产物判据与路径锚定分布在 `st_pages/3_Confirm_Videos.py`、`utils/PathUtils.py`、
+  `utils/DataUtils.py`，单发一个文件会让"闸门说没素材"与"判据说已生成"互相矛盾。给老包补热修时要按这一节
+  的文件清单一起发。
+
 ## [1.2.6] - 2026-09-20
 
 相对 v1.1.2.1 的全量改动：26 个已跟踪文件 +5394/−2689，新增 10 个文件约 4.5k 行；版本号在

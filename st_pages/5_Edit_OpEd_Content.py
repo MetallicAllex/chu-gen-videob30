@@ -408,6 +408,14 @@ def video_settings_widget(config_file_path):
 #         st.error(traceback.format_exc(), icon="❌")
 #         return [], []
 
+# 生成评论图失败会写进 render_error（见 ImageUtils.render_all_images）。页 5 生成完就
+# st.rerun()，当场那句 st.error 会被冲掉，所以在这里留一个能撑到用户回来看的展示位。
+if st.session_state.get('render_error'):
+    with st.expander("上次生成评论图失败，点击查看原因", icon="❌", expanded=True):
+        st.code(st.session_state.render_error, language='text')
+        if st.button("我已读过，清掉这条提示", key="clear_render_error"):
+            del st.session_state.render_error
+
 if not username:
     st.error("请先获取 Best50 存档！", icon="❌")
     st.stop()
@@ -515,6 +523,8 @@ if config:
         if st.button("生成评论图", width='stretch', icon="🖼️", help="如果上方没有文字版图像预览，也请使用此按钮生成"):
             st.toast("正在生成图像。", icon="⏳")
             # render_text(video_config_file, current_paths['custom_style'], current_paths, force_render)
+            # 先清掉上一次的失败记录，否则这次成功也会挂着旧红条（页 6 同一口径）
+            st.session_state.pop('render_error', None)
             render_all_images(video_config_file, current_paths['custom_style'], current_paths, force_render)
             time.sleep(3)
             st.rerun()

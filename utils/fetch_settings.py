@@ -3,10 +3,11 @@
 搜索页（Step 2）与下载页合并后由视频页复用，避免设置控件和下载器参数映射在两处各写一份。
 """
 import streamlit as st
-import os, time, pickle
+import os, time
 from utils.PathUtils import write_global_config
 from utils.video_crawler import (BilibiliDownloader, PurePytubefixDownloader,
-                                 BilibiliQrCodeLoginSession, create_downloader, load_credential)
+                                 BilibiliQrCodeLoginSession, create_downloader, load_credential,
+                                 save_credential)
 from bilibili_api import sync, user
 
 CREDENTIAL_PATH = "./cred_datas/bilibili_cred.pkl"
@@ -23,10 +24,10 @@ SETTING_KEYS = ('downloader', 'use_proxy', 'proxy_address', 'no_credential', 'do
 
 
 @st.dialog("Bilibili 扫码登录", width="small")
-def bilibili_login_dialog():
+def bilibili_login_dialog(proxy=None):
     """Bilibili 二维码登录对话框：打开后自动轮询扫码结果，无需手动刷新"""
     def reset_session():
-        for key in ['bili_dlg_session', 'bili_dlg_qr']:
+        for key in ['bili_dlg_session', 'bili_dlg_qr', 'bili_dlg_proxy']:
             st.session_state.pop(key, None)
 
     def status_text(state, message):
@@ -36,8 +37,11 @@ def bilibili_login_dialog():
         }
         return f"当前：[{preset.get(state) or message}]"
 
-    if 'bili_dlg_session' not in st.session_state:
-        st.session_state.bili_dlg_session = BilibiliQrCodeLoginSession()
+    # 会话是按 key 复用的：代理刚改过还沿用旧会话，就会出现"勾了代理但二维码仍直连"的错位
+    if ('bili_dlg_session' not in st.session_state
+            or st.session_state.get('bili_dlg_proxy') != proxy):
+        st.session_state.bili_dlg_session = BilibiliQrCodeLoginSession(proxy)
+        st.session_state.bili_dlg_proxy = proxy
 
     session = st.session_state.bili_dlg_session
 
@@ -84,9 +88,8 @@ def bilibili_login_dialog():
             reset_session()
             return
 
-        os.makedirs("cred_datas", exist_ok=True)
-        with open(CREDENTIAL_PATH, 'wb') as f:
-            pickle.dump(credential, f)
+        # 用原子写回，避免半截 pickle 被下次 load_credential 判为损坏删掉
+        save_credential(credential, CREDENTIAL_PATH)
 
         st.session_state.bilibili_logged_in = True
         reset_session()
@@ -111,6 +114,14 @@ def credential_state():
     if not os.path.exists(CREDENTIAL_PATH):
         return (False, 0)
     return (True, os.path.getmtime(CREDENTIAL_PATH))
+
+
+def bilibili_logout():
+    """删除本地凭证文件并复位登录态"""
+    if os.path.exists(CREDENTIAL_PATH):
+        os.remove(CREDENTIAL_PATH)
+    st.session_state.bilibili_logged_in = False
+    st.rerun()
 
 
 def settings_from_config(G_config) -> dict:
@@ -145,7 +156,9 @@ def render_fetch_settings(G_config, settings=None) -> dict:
                                               index=["bilibili", "youtube"].index(base['downloader']))
         with col2:
             base['use_proxy'] = st.checkbox("使用代理", value=base['use_proxy'],
-                                            help="在搜索时使用代理，某些情况下可以概率绕过风控")
+                                            help="搜索、下载与扫码登录都走这个代理（两个源都一样）。"
+                                                 "地址写 127.0.0.1:7890 或 http://127.0.0.1:7890 都可以，"
+                                                 "缺的 scheme 会自动补。某些情况下可以概率绕过风控")
         with col3:
             base['proxy_address'] = st.text_input("输入代理地址", value=base['proxy_address'],
                                                   disabled=not base['use_proxy'], placeholder="默认 127.0.0.1:7890")
@@ -164,20 +177,41 @@ def render_fetch_settings(G_config, settings=None) -> dict:
                 cred_state = credential_state()
                 if st.session_state.get('bilibili_cred_state') != cred_state or 'bilibili_logged_in' not in st.session_state:
                     st.session_state.bilibili_cred_state = cred_state
-                    st.session_state.bilibili_logged_in = load_credential(CREDENTIAL_PATH)[0] is not None
+                    # load_credential 里的 check_valid() 是渲染期的真实网络请求：B 站风控、断网、
+                    # aiohttp/yarl 之类的依赖对不上都会从这里抛出，旧写法让整页只剩一片 traceback。
+                    # 收敛成"状态未知"第三态，原因照实显示，凭证文件不碰。
+                    try:
+                        st.session_state.bilibili_logged_in = load_credential(CREDENTIAL_PATH)[0] is not None
+                        st.session_state.bilibili_cred_error = None
+                    except Exception as e:
+                        st.session_state.bilibili_logged_in = None
+                        st.session_state.bilibili_cred_error = f"{type(e).__name__}: {e}"
 
                 if not base['no_credential']:
-                    if st.session_state.bilibili_logged_in:
+                    logged = st.session_state.bilibili_logged_in
+                    if logged is None:
+                        st.warning(f"无法确认 Bilibili 登录状态，高分辨率下载可能失败。\n\n"
+                                   f"- 原因：{st.session_state.bilibili_cred_error}\n"
+                                   f"- 本地凭证文件未做任何改动，网络或依赖恢复后点「重新检测」", icon="⚠️")
+                        check_col, logout_col = st.columns(2)
+                        with check_col:
+                            if st.button("重新检测", key="bilibili_recheck", icon="🔄", width="stretch"):
+                                st.session_state.pop('bilibili_cred_state', None)
+                                st.rerun()
+                        with logout_col:
+                            if st.button("登出", key="bilibili_logout", icon="🚪", width="stretch"):
+                                bilibili_logout()
+                    elif logged:
                         st.success("已登录 Bilibili 账号（如果您的显示状态有问题，请以控制台实际输出为准）", icon="✅")
                         if st.button("登出", key="bilibili_logout", icon="🚪", width="stretch"):
-                            if os.path.exists(CREDENTIAL_PATH):
-                                os.remove(CREDENTIAL_PATH)
-                            st.session_state.bilibili_logged_in = False
-                            st.rerun()
+                            bilibili_logout()
                     else:
                         st.error("未登录 Bilibili 账号（本地凭证缺失或已失效），请扫码登录", icon="❎")
                         if st.button("登入", key="bilibili_login_btn", type="primary", icon="🔐", width="stretch"):
-                            bilibili_login_dialog()
+                            # 用当前控件值而不是已保存的配置：刚填好代理还没点保存时，
+                            # 登录也该走它（否则界面勾了代理、二维码仍直连）
+                            bilibili_login_dialog(
+                                base['proxy_address'] if base['use_proxy'] else None)
 
                 if base['no_credential']:
                     st.info("二维码首次无法登录，请在弹出后关闭，待重新登录的二维码弹出后再扫描登录。", icon="ℹ️")

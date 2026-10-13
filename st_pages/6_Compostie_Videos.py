@@ -191,7 +191,7 @@ video_settings_widget(style_config, current_paths['custom_style'])
 _video_res = G_config['VIDEO_RES']
 _trans_enable = G_config['VIDEO_TRANS_ENABLE']
 _trans_time = G_config['VIDEO_TRANS_TIME']
-os.makedirs('./videos/temp_generated', exist_ok=True)
+os.makedirs(TEMP_GENERATED_DIR, exist_ok=True)
 # 定义默认值
 trans_enable = _trans_enable
 trans_time = _trans_time
@@ -378,10 +378,12 @@ with btn_col1:
     def cleanup_after_render():
         """清理渲染后的临时文件和状态"""
         try:
-            shutil.rmtree('./videos/temp_generated')
-            os.makedirs('./videos/temp_generated', exist_ok=True)
-        except:
-            pass
+            shutil.rmtree(TEMP_GENERATED_DIR)
+            os.makedirs(TEMP_GENERATED_DIR, exist_ok=True)
+        except Exception as e:
+            # 裸 except: pass 会把"没清理掉"变成静默事实，下次渲染撞上残留才炸，
+            # 而且看不出根因。清理失败不阻断收尾，但要留在控制台。
+            print(f"清理临时渲染目录失败（不阻断收尾）：{type(e).__name__}: {e}｜目录：{TEMP_GENERATED_DIR}")
             
         # 恢复状态
         st.session_state.global_rendering = False
@@ -475,11 +477,15 @@ if st.session_state.global_rendering:
             if not clips_only:
                 combine_full_video_direct(video_output_path, username)
         
-        # 渲染成功
+        # 耗时对成功和失败都成立；但"渲染完成"这句旧写法放在 if _failed / else 之外，
+        # 缺了大半段落的成片也会弹 ✅ —— 结论必须跟着 _failed 走。
         duration = time.time() - start_time  # 用完成的当前时间减去开始时间获取生成时长
         formatted_total_time = format_time_difference(duration)
         print(f"生成操作完成，总耗时{formatted_total_time}")
-        st.toast("渲染完成！", icon="✅")
+        if _failed:
+            st.toast(f"渲染结束，但有 {len(_failed)} 个片段失败（详情见下方）", icon="⚠️")
+        else:
+            st.toast("渲染完成！", icon="✅")
         
     except Exception as e:
         # 存进 session_state 供整页重跑后继续展示（见页面上方的 render_error 区块）

@@ -21,6 +21,7 @@ import subprocess
 import time
 
 from utils.DataUtils import sort_video_files
+from utils.PathUtils import TEMP_GENERATED_DIR
 
 from .RenderIO import get_ffmpeg_binary, get_ffmpeg_encoder_args, get_active_render_job
 
@@ -32,7 +33,9 @@ from .RenderIO import get_ffmpeg_binary, get_ffmpeg_encoder_args, get_active_ren
 # 渲染临时产物的统一归宿（ts_files.txt / final_output.mp4 / island 主体段等）。
 # 集中到 videos/temp_generated 下，避免散落在存档 videos 目录与仓库根目录；
 # 渲染 worker 的 finally 会清理整个 temp_generated。
-TEMP_ROOT = os.path.abspath('./videos/temp_generated')
+# 用 PathUtils 锚定到应用根，不在导入期按 os.getcwd() 冻结 —— 否则启动方式一变，
+# 这里算出的目录就和 worker 清理的目录不是同一个。
+TEMP_ROOT = TEMP_GENERATED_DIR
 
 def _get_video_duration(filepath: str) -> float:
     """用 ffprobe 获取视频时长（秒）。文件被短暂占用（扫描/同步/预览）时退让重试，

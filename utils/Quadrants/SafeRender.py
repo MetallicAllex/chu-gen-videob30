@@ -24,6 +24,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Set
 
+from utils.PathUtils import TEMP_GENERATED_DIR
+
 from .RenderIO import (get_ffmpeg_binary, detect_hw_encoder, retry_on_lock,
                        is_transient_lock_error)
 
@@ -203,7 +205,9 @@ def _ensure_render_worker():
                     # 但若产物目录本身就在 temp_generated 之内（测试/特殊配置），跳过——
                     # 不能把刚渲染完的片段连带删掉
                     try:
-                        _tg = os.path.abspath('./videos/temp_generated')
+                        # 按 __file__ 锚定，不在工作线程里按 cwd 算：这一步是 rmtree，
+                        # cwd 被带偏就会删错目录。
+                        _tg = TEMP_GENERATED_DIR
                         _vo = os.path.abspath(job.get('video_output_path', '') or '')
                         if not (_vo and (_vo == _tg or _vo.startswith(_tg + os.sep))):
                             import shutil

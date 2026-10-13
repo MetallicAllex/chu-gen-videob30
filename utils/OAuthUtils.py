@@ -160,8 +160,16 @@ def save_lxns_token(token_data):
     token_data["saved_at"] = time.time()
     if token_data.get("expires_in"):
         token_data["expires_at"] = time.time() + token_data["expires_in"]
-    with open(LXNS_TOKEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(token_data, f, ensure_ascii=False, indent=2)
+    # 原子替换：截断写会变成下次 load_lxns_token 的 JSONDecodeError，而那条路径是
+    # "损坏 → 返回 None"，用户只看到"未登录"，完全不知道令牌其实还在、只是被写坏了。
+    tmp_file = f"{LXNS_TOKEN_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(token_data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, LXNS_TOKEN_FILE)
+    finally:
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
 
 
 def load_lxns_token():
@@ -223,8 +231,15 @@ def get_lxns_access_token(stale_token=None):
             new_data.setdefault("refresh_token", refresh_token)
             save_lxns_token(new_data)
             return new_data.get("access_token")
-        except Exception:
-            pass  # 刷新失败，走重新授权
+        except (requests.ConnectionError, requests.Timeout) as e:
+            # 传输入口失败（断网、超时、代理不通）不等于这个 refresh_token 作废。
+            # 旧写法 except Exception: pass 后直接 clear_lxns_token()，一次网络抖动就把
+            # 用户推去重走整条浏览器授权。令牌留着，下次再试。
+            print(f"落雪令牌刷新未能完成（网络：{e}），已保留现有 refresh_token")
+            return None
+        except Exception as e:
+            # 上游明确拒绝（HTTP 错误码 / success=false）才是真作废
+            print(f"落雪令牌刷新被上游拒绝: {e}，需要重新授权")
 
     clear_lxns_token()
     return None

@@ -14,6 +14,7 @@ from moviepy import ImageClip
 from utils.DataUtils import sort_video_files
 from utils.ImageUtils import create_blank_image
 from utils.PageUtils import format_time_difference
+from utils.PathUtils import is_artifact_valid, TEMP_GENERATED_DIR
 from utils.Variables import HARD_RENDER_METHOD, REVERSE_LEVEL_LABELS, image_root_path
 
 
@@ -379,7 +380,7 @@ class InfoSegmentGenerator(VideoGenerator):
             _discard_staged(staged_path)
             self._log_error(clip_config, output_path,
                             cmd, self.timestamp, e)
-            return None
+            return False
     
     def _get_bg_video_path(self) -> str:
         """获取背景视频路径"""
@@ -609,7 +610,7 @@ class VideoSegmentGenerator(VideoGenerator):
             _discard_staged(staged_path)
             self._log_error(clip_config, output_path,
                             cmd, self.timestamp, e)
-            return None
+            return False
 
     def get_audio_source(self, clip_config: dict) -> Tuple[Optional[str], float]:
         """main 片段的响度测量对象：谱面视频从 start 起算的那一段"""
@@ -902,7 +903,9 @@ def check_rendered_clips_multithreaded(
                 break
             
             output_file = os.path.join(final_clips_dir, f"{prefix}_{config['id']}.mp4")
-            exists = os.path.exists(output_file) and not force_render
+            # 判据只有一条：非零字节才算已渲染。0 字节的失败产物如果算"已渲染"，会被
+            # 直接拼进成片（画面缺一段，界面上却显示成功）。
+            exists = is_artifact_valid(output_file) and not force_render
             result_queue.put((prefix, config, exists))
             task_queue.task_done()
     
@@ -1056,7 +1059,7 @@ def _unify_audio(sorted_files: List[str], final_clips_dir: str,
     不一致的输入只会按第一段建轨，后续段的时间基全错（见 _build_base_ffmpeg_args）。
     """
     from utils.Quadrants.RenderIO import get_ffmpeg_binary
-    tmp_dir = './videos/temp_generated/audio_unify'
+    tmp_dir = os.path.join(TEMP_GENERATED_DIR, 'audio_unify')
     os.makedirs(tmp_dir, exist_ok=True)
     replaced = {}
     for name in sorted_files:

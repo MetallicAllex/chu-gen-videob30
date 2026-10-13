@@ -1,9 +1,10 @@
 import streamlit as st
 from datetime import datetime
 from utils.PathUtils import *
-import shutil, time, random, traceback, os, json, re
+import shutil, time, random, traceback, os, re
 from utils.DataUtils import (download_one_video, search_one_video, merge_b50_data,
-                            rank_video_candidates, video_match_warning,
+                            rank_video_candidates, video_match_warning, apply_playlist_matches,
+                            migrate_search_args,
                             is_video_cached, load_video_cache_index)
 from utils.Variables import REVERSE_LEVEL_LABELS, VIDEO_LISTS
 from utils.PageUtils import escape_markdown_text
@@ -64,18 +65,13 @@ with st.container(border=True):
                 if st.button("使用此存档", help="（只需要点击一次！）", width='stretch', icon="▶️"):
                     if selected_save_id:
                         st.session_state.save_id = selected_save_id
-                        # 清除旧的匹配状态，强制重新初始化
+                        # 清除旧的匹配状态，强制重新初始化。控件的会话键必须一起清：
+                        # record_selector 里存着上一份存档的曲目字符串，新存档的 options 里没有它，
+                        # Streamlit 恢复旧值时会直接抛；refresh_cache 是不带 clip_id 的全局键，同理串档。
                         song_status = ['matched_count', 'unmatched_count', 'total_songs', 'current_index',
-                                       'download_completed']
+                                       'download_completed', 'record_selector', 'refresh_cache']
                         for song_key in song_status:
-                            if song_key in st.session_state:
-                                del st.session_state[song_key]
-                            # if 'unmatched_count' in st.session_state:
-                            #     del st.session_state.unmatched_count
-                            # if 'total_songs' in st.session_state:
-                            #     del st.session_state.total_songs
-                            # if 'current_index' in st.session_state:
-                            #     del st.session_state.current_index
+                            st.session_state.pop(song_key, None)
                         st.rerun()
                     else:
                         st.error("存档路径无效！", icon="❌")
@@ -83,6 +79,12 @@ with st.container(border=True):
             st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
             st.stop()
 ### Savefile Management - End ###
+
+# 后面每一环都要用 current_paths['config_yt'] 之类。以前这里只 warning 不中止，最后崩在
+# 对 None 取下标上（TypeError: 'NoneType' object is not subscriptable），用户看到的是整页
+# traceback 而不是"先选一份存档"。放在更换存档的折叠栏之后，保证这里仍来得及直接选一份。
+if current_paths is None:
+    st.stop()
 
 def get_web_search_url(song_data, dl_type):
     """生成网页搜索URL"""
@@ -161,26 +163,24 @@ def update_match_info(placeholder, video_info):
         # 显示修改分P按钮
         if st.button("修改分P视频", key=f"change_p_{id}", width='stretch'):
             change_video_page({'video_info_match': video_info, 'clip_id': id}, p_index)
-        
-        # 分P信息展示
-        # if 'p_index' in video_info:
-        #     p_index = video_info['p_index']
-        #     info_col1, info_col2, info_col3 = st.columns(3)
-        #     with info_col1:
-        #         st.markdown(f"**⏱️ 总时长：** {video_info['duration']} 秒")
-        #     with info_col2:
-        #         st.markdown(f"**📑 分P序号：** p{p_index + 1}")
-        #     with info_col3:
-        #         st.markdown(f"**🔗 视频链接：** [打开视频]({video_info['url']}/?p={str(p_index + 1)})")
-            
-        #     # 显示修改分P按钮
-        #     if st.button("修改分P视频", key=f"change_p_{id}", width='stretch'):
-        #         change_video_page({'video_info_match': video_info, 'clip_id': id}, p_index)
 
-def st_download_video(placeholder, dl_instance, G_config, b30_config):
-    search_wait_time = G_config['SEARCH_WAIT_TIME']
-    download_high_res = G_config['DOWNLOAD_HIGH_RES']
-    video_download_path = f"./videos/downloads"
+def polite_wait(search_wait_time, attempted):
+    """向平台发过请求就要隔一段再发下一次；纯缓存命中没发请求，不用等。
+
+    旧写法只在下载成功时等待，于是"连续失败"反而变成零间隔连打接口 —— 恰恰是最需要退避
+    的场景（风控期越敲越糟）。区间两端相等时 randint 也能取到该值，所以只看下限。
+    """
+    if attempted and search_wait_time[0] > 0:
+        time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
+
+def st_download_video(placeholder, dl_instance, settings, b30_config):
+    """批量下载。settings 必须是"下载器实际按它构造"的那份（saved_settings）：
+    以前这里读 G_config（磁盘），而批量搜索读控件值（可能还没保存），于是间隔时间按新值
+    生效、扫描页数与候选条数按旧值生效 —— 同一个页面上两套参数口径，用户以为改了其实没改。
+    """
+    search_wait_time = settings['search_wait_time']
+    download_high_res = settings['download_high_res']
+    video_download_path = DOWNLOADS_DIR
     
     os.makedirs(video_download_path, exist_ok=True)
     
@@ -220,21 +220,40 @@ def st_download_video(placeholder, dl_instance, G_config, b30_config):
                     write_container.write(f"✅［{i}/{total_songs}］下载成功 →  {song['song_name']}")
                 else:
                     write_container.write(f"❌［{i}/{total_songs}］下载失败 →  {song['song_name']}: {result['info']}")
-                    failed_songs.append(song['song_name'])
+                    failed_songs.append((song['song_name'], result['info']))
 
-                # 智能等待
-                if result['status'] == 'success' and search_wait_time[0] > 0:
-                    wait_time = random.randint(search_wait_time[0], search_wait_time[1])
-                    time.sleep(wait_time)
+                # 缓存命中在上面已经 continue，走到这里就是真发过一次下载请求
+                polite_wait(search_wait_time, True)
 
-            if failed_songs:
+            # 放行判据只认"本地确有可用素材"，不能拿"整批循环没抛异常"当成功：用户机器 PATH 上没有
+            # ffmpeg 时，B 站 50 首会全部停在「未生成有效视频文件」，旧写法照样解锁了「下一步」。
+            # 复用 is_video_cached 这条正典判据（文件非零字节 + 来源与当前选定一致），与缓存检查、
+            # 页 4 的素材扫描同一口径。
+            ready_count = sum(1 for song in b30_config
+                              if song.get('video_info_match')
+                              and is_video_cached(song, video_download_path, cache_index))
+
+            failed_names = '、'.join(name for name, _ in failed_songs)
+            if not ready_count:
+                st.error(
+                    f"下载结束，本地没有任何可用素材（{len(failed_songs)} 首失败），「下一步」保持锁定。\n\n"
+                    f"- 首条失败原因：{failed_songs[0][1] if failed_songs else '没有曲目带有可用的视频信息'}\n"
+                    f"- 整批全部失败最常见的原因是本机没有可用的 ffmpeg（B 站两条分辨率分支都要过它封装），"
+                    f"请把 `utils/video_crawler.py` 更新到最新版，或把 `ffmpeg.exe` 放进应用目录后重试\n"
+                    f"- 其余排查见 README「常见问题 - 视频抓取相关」",
+                    icon="❌"
+                )
+            elif failed_songs:
                 st.warning(
-                    f"下载完成，但有 {len(failed_songs)} 首失败：{'、'.join(failed_songs)}\n\n"
-                    f"可重新点击下载重试（已下载的视频会自动跳过），或在上方编辑器为这些曲目重新搜索、更换候选视频。",
+                    f"下载完成，可用素材 {ready_count}/{total_songs}，有 {len(failed_songs)} 首失败：{failed_names}\n\n"
+                    f"可重新点击下载重试（已下载的视频会自动跳过），或在上方编辑器为这些曲目重新搜索、更换候选视频。"
+                    f"缺的素材在【编辑 Best50 视频片段】生成配置时会被逐条拦下。",
                     icon="⚠️"
                 )
             else:
                 st.success("下载完成！请点击下一步按钮核对视频素材的详细信息。", icon="✅")
+
+    return ready_count
 
 def st_search_all_videos(dl_instance, placeholder, search_wait_time, config_file):
     """批量搜索缺少视频信息的曲目，每搜完一首立即落盘，中断后可从下一首继续"""
@@ -259,9 +278,8 @@ def st_search_all_videos(dl_instance, placeholder, search_wait_time, config_file
 
                 save_config(config_file, b30_config)
 
-                # 与下载环节同一套等待判定：间隔下限大于 0 就睡（上下限相等时 randint 也能取到该值）
-                if search_wait_time[0] > 0:
-                    time.sleep(random.randint(search_wait_time[0], search_wait_time[1]))
+                # 与下载环节同一套等待判定：发过请求就退避
+                polite_wait(search_wait_time, True)
 
             progress_bar.progress(1.0, text="搜索完成！")
 
@@ -279,224 +297,6 @@ def check_matched_songs(config):
             unmatched_names.append(song['song_name'])
     
     return matched_count, unmatched_count, unmatched_names
-
-# def copy_search_args(config_path, old_config_path):
-#     """
-#     复制旧存档的 视频候选列表 和 视频匹配列表 到新存档
-
-#     Args:
-#         config_path: 新的 b30_config_<平台>.json 完整路径
-#         old_config_path: 旧的 old_b30_search_config.json 完整路径
-
-#     Raises:
-#         FileNotFoundError: 未找到存档数据
-
-#     Returns:
-#         dict: 更新后的配置数据
-#     """
-#     if not os.path.exists(config_path) or not os.path.exists(old_config_path):
-#         missing_file = config_path if not os.path.exists(config_path) else old_config_path
-#         raise FileNotFoundError("找不到配置文件：" + missing_file)
-
-#     # 读取配置文件
-#     old_config_data = load_config(old_config_path)
-#     new_config_data = load_config(config_path)
-
-#     updated_count = 0
-#     skipped_count = 0
-
-#     # 获取对应的记录列表
-#     try:
-#         old_records = old_config_data
-#         new_records = new_config_data
-#     except KeyError as e:
-#         raise FileNotFoundError(f"在配置中找不到对应的数据: {e}")
-
-#     # 遍历所有记录进行匹配和更新
-#     for old_record in old_records:
-#         for new_record in new_records:
-#             # 检查匹配条件：id, song_name, artist, level, level_index
-#             if (old_record['id'] == new_record['id'] and
-#                 old_record['song_name'] == new_record['song_name'] and
-#                 old_record['artist'] == new_record['artist'] and
-#                 old_record['level'] == new_record['level'] and
-#                 old_record['level_index'] == new_record['level_index']):
-                
-#                 # 检查需要更新的字段是否相同
-#                 need_update = False
-#                 fields_to_check = ['video_info_list', 'video_info_match']
-                
-#                 for field in fields_to_check:
-#                     if old_record.get(field) != new_record.get(field):
-#                         need_update = True
-#                         break
-                
-#                 if need_update:
-#                     # 更新剪辑参数
-#                     new_record['video_info_list'] = old_record['video_info_list']
-#                     new_record['video_info_match'] = old_record['video_info_match']
-#                     updated_count += 1
-#                 else:
-#                     skipped_count += 1
-                
-#                 break  # 找到匹配后跳出内层循环
-
-#     # 保存更新后的配置
-#     save_config(config_path, new_config_data)
-
-#     print(f"已成功更新 {updated_count} 条记录的搜索参数，跳过 {skipped_count} 条无需更新（不符合）的记录")
-#     return new_config_data
-
-def copy_search_args(config_path, old_config_path, debug=False):
-    """
-    复制旧存档的 视频候选列表 和 视频匹配列表 到新存档
-
-    Args:
-        config_path: 新的 b30_config_<平台>.json 完整路径
-        old_config_path: 旧的 old_b30_search_config.json 完整路径
-        debug: 是否启用调试模式，输出详细的匹配信息
-
-    Raises:
-        FileNotFoundError: 未找到存档数据
-
-    Returns:
-        dict: 更新后的配置数据
-    """
-    if debug:
-        print(f"[DEBUG] 开始复制搜索参数")
-        print(f"[DEBUG] 新配置文件: {config_path}")
-        print(f"[DEBUG] 旧配置文件: {old_config_path}")
-    
-    if not os.path.exists(config_path) or not os.path.exists(old_config_path):
-        missing_file = config_path if not os.path.exists(config_path) else old_config_path
-        if debug:
-            print(f"[DEBUG] 文件不存在: {missing_file}")
-        raise FileNotFoundError("找不到配置文件：" + missing_file)
-
-    if debug:
-        print(f"[DEBUG] 文件存在检查通过，开始读取配置文件")
-    
-    # 读取配置文件
-    old_config_data = load_config(old_config_path)
-    new_config_data = load_config(config_path)
-
-    if debug:
-        print(f"[DEBUG] 旧配置文件数据条数: {len(old_config_data)}")
-        print(f"[DEBUG] 新配置文件数据条数: {len(new_config_data)}")
-
-    updated_count = 0
-    skipped_count = 0
-    unmatched_count = 0
-
-    # 获取对应的记录列表
-    try:
-        old_records = old_config_data
-        new_records = new_config_data
-        
-        if debug:
-            print(f"[DEBUG] 成功获取记录列表")
-    except KeyError as e:
-        if debug:
-            print(f"[DEBUG] 获取记录列表时出错: {e}")
-        raise FileNotFoundError(f"在配置中找不到对应的数据: {e}")
-
-    # 遍历所有记录进行匹配和更新
-    for i, old_record in enumerate(old_records):
-        if debug:
-            print(f"[DEBUG] 处理旧记录 #{i}: {old_record['song_name']} - {old_record['level']}")
-        
-        matched = False
-        
-        for j, new_record in enumerate(new_records):
-            # 检查匹配条件：id, song_name, artist, level, level_index
-            match_conditions = (
-                old_record['id'] == new_record['id'] and
-                old_record['song_name'] == new_record['song_name'] and
-                old_record['artist'] == new_record['artist'] and
-                old_record['level'] == new_record['level'] and
-                old_record['level_index'] == new_record['level_index']
-            )
-            
-            if debug and match_conditions:
-                print(f"[DEBUG]   - 找到匹配的新记录 #{j}")
-                print(f"[DEBUG]     歌曲: {old_record['song_name']}")
-                print(f"[DEBUG]     难度: {old_record['level']}")
-                print(f"[DEBUG]     难度索引: {old_record['level_index']}")
-                print(f"[DEBUG]     艺术家: {old_record['artist']}")
-                print(f"[DEBUG]     ID: {old_record['id']}")
-            
-            if match_conditions:
-                matched = True
-                
-                # 检查需要更新的字段是否相同
-                need_update = False
-                fields_to_check = ['video_info_list', 'video_info_match']
-                
-                if debug:
-                    print(f"[DEBUG]     检查字段是否需要更新:")
-                
-                for field in fields_to_check:
-                    old_value = old_record.get(field)
-                    new_value = new_record.get(field)
-                    
-                    # if debug:
-                        # print(f"[DEBUG]       {field}:")
-                        # print(f"[DEBUG]         旧值: {old_value}")
-                        # print(f"[DEBUG]         新值: {new_value}")
-                    
-                    if old_value != new_value:
-                        need_update = True
-                        if debug:
-                            print(f"[DEBUG]         → 需要更新")
-                
-                if need_update:
-                    if debug:
-                        print(f"[DEBUG]     执行更新操作")
-                    
-                    # 更新剪辑参数
-                    new_record['video_info_list'] = old_record['video_info_list']
-                    new_record['video_info_match'] = old_record['video_info_match']
-                    
-                    if debug:
-                        print(f"[DEBUG]         video_info_list 已更新为: {old_record.get('video_info_list')}")
-                        print(f"[DEBUG]         video_info_match 已更新为: {old_record.get('video_info_match')}")
-                    
-                    updated_count += 1
-                else:
-                    if debug:
-                        print(f"[DEBUG]     字段相同，无需更新")
-                    skipped_count += 1
-                
-                break  # 找到匹配后跳出内层循环
-        
-        if not matched and debug:
-            print(f"[DEBUG]   ! 未找到匹配的新记录")
-            print(f"[DEBUG]     歌曲: {old_record.get('song_name', 'Unknown')}")
-            print(f"[DEBUG]     难度: {old_record.get('level', 'Unknown')}")
-            print(f"[DEBUG]     艺术家: {old_record.get('artist', 'Unknown')}")
-            print(f"[DEBUG]     可能的匹配条件:")
-            print(f"[DEBUG]       ID: {old_record.get('id', 'Unknown')}")
-            print(f"[DEBUG]       level_index: {old_record.get('level_index', 'Unknown')}")
-            unmatched_count += 1
-
-    if debug:
-        print(f"[DEBUG] 统计信息:")
-        print(f"[DEBUG]   更新记录数: {updated_count}")
-        print(f"[DEBUG]   跳过记录数: {skipped_count}")
-        print(f"[DEBUG]   未匹配记录数: {unmatched_count}")
-
-    # 保存更新后的配置
-    save_config(config_path, new_config_data)
-    
-    if debug:
-        print(f"[DEBUG] 配置已保存到: {config_path}")
-
-    print(f"已成功更新 {updated_count} 条记录的搜索参数，跳过 {skipped_count} 条无需更新（不符合）的记录")
-    
-    if unmatched_count > 0 and debug:
-        print(f"[DEBUG] 注意: 有 {unmatched_count} 条旧记录未找到匹配项")
-    
-    return new_config_data
 
 def update_editor(placeholder, config, current_index, dl_instance, record_ids):
     with placeholder.container(border=True):
@@ -664,7 +464,7 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                             key=f"selected_lists_{song['clip_id']}",
                         )
                         cache_dir = "./cache/playlist_cache"
-                        has_cache = any(os.path.exists(os.path.join(cache_dir, f"{k.replace(':', '_')}.json")) for k in selected_lists) if selected_lists else False
+                        has_cache = any(is_artifact_valid(os.path.join(cache_dir, f"{k.replace(':', '_')}.json")) for k in selected_lists) if selected_lists else False
                     else:
                         selected_lists = []
                 else:
@@ -729,41 +529,35 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
                         all_playlist_videos = []
                         for key in selected_lists:
                             cache_file = os.path.join(cache_dir, f"{key.replace(':', '_')}.json")
-                            if not refresh_cache and os.path.exists(cache_file):
-                                with open(cache_file, 'r', encoding='utf-8') as f:
-                                    cached = json.loads(f.read())
-                                all_playlist_videos.extend(cached)
-                                print(f"[批量] 缓存命中: {key} ({len(cached)} 个视频)")
-                                continue
+                            if not refresh_cache and is_artifact_valid(cache_file):
+                                try:
+                                    cached = load_config(cache_file)
+                                except (OSError, ValueError) as e:
+                                    # 半截缓存以前会让之后每一次批量匹配都在解析处炸掉，而且没有
+                                    # 任何自愈路径（命中门只看文件在不在）。读不出就当没缓存，回源重拉。
+                                    print(f"[批量] 缓存不可用（{type(e).__name__}: {e}），改为重新拉取: {key}")
+                                else:
+                                    all_playlist_videos.extend(cached)
+                                    print(f"[批量] 缓存命中: {key} ({len(cached)} 个视频)")
+                                    continue
                             _, list_id = key.split(":", 1)
                             print(f"[批量] 拉取列表: {key}")
                             videos = dl_instance.search_video_from_playlist(list_id)
-                            with open(cache_file, 'w', encoding='utf-8') as f:
-                                f.write(json.dumps(videos, ensure_ascii=False))
+                            save_config(cache_file, videos)   # 原子写，不再就地截断别人的缓存
                             all_playlist_videos.extend(videos)
                             print(f"[批量]   → 已获取 {len(videos)} 个视频")
                         print(f"[批量] 共 {len(all_playlist_videos)} 个视频，开始匹配 {len(b30_config)} 首曲目")
-                        match_count = 0
-                        for s in b30_config:
-                            diff_label = REVERSE_LEVEL_LABELS[s['level_index']].lower()
-                            # 与搜索路径共用同一套判定：先过曲名门槛（原曲/MV 类已被 ranker 丢弃），
-                            # 再要求标题出现该难度标签，且排除多P合集与手元/演奏类存疑候选
-                            matched = [video for _, flags, video in rank_video_candidates(s, all_playlist_videos)
-                                       if 'level_label' in flags
-                                       and 'multi_part' not in flags and 'noisy' not in flags]
-                            if matched:
-                                s['video_info_match'] = matched[0]
-                                s['video_info_list'] = [matched[0]]
-                                match_count += 1
-                                print(f"[批量] ✓ {s['song_name']} [{diff_label}]")
-                            else:
-                                print(f"[批量] ✗ {s['song_name']} [{diff_label}]")
+                        match_count, kept_count = apply_playlist_matches(b30_config, all_playlist_videos)
                         save_config(b30_config_file, b30_config)
                         matched_count, unmatched_count, _ = check_matched_songs(b30_config)
                         st.session_state.matched_count = matched_count
                         st.session_state.unmatched_count = unmatched_count
-                        st.success(f"批量匹配完成！已匹配 {match_count}/{len(b30_config)} 首曲目", icon="✅")
-                        print(f"[批量] 完成: {match_count}/{len(b30_config)} 首已匹配")
+                        st.success(f"批量匹配完成！本次新配 {match_count} 首"
+                                   + (f"，已有视频信息的 {kept_count} 首未改动" if kept_count else "")
+                                   + f"（合计 {matched_count}/{len(b30_config)} 首有源）", icon="✅")
+                        if kept_count:
+                            st.caption("要换掉已选的视频，请用编辑器里的「重新搜索本曲」或手动输入视频 ID")
+                        print(f"[批量] 完成: 新配 {match_count} 首，保留 {kept_count} 首")
                         time.sleep(2)
                         st.rerun()
                     elif search_platform == "YouTube":
@@ -881,11 +675,17 @@ if not os.path.exists(b30_config_file):
     shutil.copy(b50_data_file, b30_config_file)
     st.toast(f"已生成 {downloader_type} 的 Best50 索引文件", icon="ℹ️")
 
-# 用最新成绩数据补齐索引，同时保留已有的视频匹配信息
-merged_b30_config, update_count = merge_b50_data(load_config(b50_data_file), load_config(b30_config_file))
-save_config(b30_config_file, merged_b30_config)
-if update_count > 0:
-    st.toast(f"已加载 {downloader_type} 的 Best50 索引，共更新 {update_count} 条数据", icon="✅")
+# 用最新成绩数据补齐索引，同时保留已有的视频匹配信息。
+# 只在确有变化时写盘：这段在页面顶层，每轮 rerun 都会执行，旧写法连"点下一个/动控件"都要
+# 原子替换一次全量 JSON —— 既和后台曲库线程抢 os.replace（PathUtils 那 20 次退让就是为此
+# 存在），也可能凭空弹一次"已更新 N 条"。
+# 注意不能只看 update_count：merge_b50_data 在长短不一致时返回 0 却做的是整份替换。
+old_index = load_config(b30_config_file)
+merged_b30_config, update_count = merge_b50_data(load_config(b50_data_file), old_index)
+if update_count > 0 or len(merged_b30_config) != len(old_index):
+    save_config(b30_config_file, merged_b30_config)
+    if update_count > 0:
+        st.toast(f"已加载 {downloader_type} 的 Best50 索引，共更新 {update_count} 条数据", icon="✅")
 
 ### 批量搜索（原 Step 2 主操作降级为工具）###
 batch_search_area = st.expander("批量搜索全部未匹配曲目", icon="🔍")
@@ -903,7 +703,7 @@ with batch_search_area:
     if st.button("开始批量搜索", width='stretch', type="primary", icon="🔍"):
         try:
             st_search_all_videos(dl_instance, batch_search_area,
-                                 fetch_settings['search_wait_time'], b30_config_file)
+                                 saved_settings['search_wait_time'], b30_config_file)
             st.toast("搜索完成！请在下方逐条核对候选视频。", icon="✅")
             st.toast("如果站点存在此视频但未找到，请尝试重新搜索多几次。", icon="⚠️")
         except Exception as e:
@@ -912,27 +712,13 @@ with batch_search_area:
 
 b30_config = load_config(b30_config_file)
 
-# 完全重新初始化匹配状态计数 - 删除旧的错误状态
-if 'matched_count' in st.session_state and isinstance(st.session_state.matched_count, list):
-    del st.session_state.matched_count
-if 'unmatched_count' in st.session_state and isinstance(st.session_state.unmatched_count, list):
-    del st.session_state.unmatched_count
-
-# 重新初始化匹配状态计数 - 每次加载新存档都重新计算
-if 'matched_count' not in st.session_state or 'unmatched_count' not in st.session_state or 'total_songs' not in st.session_state:
-    matched_count, unmatched_count, unmatched_names = check_matched_songs(b30_config)
-    st.session_state.matched_count = matched_count
-    st.session_state.unmatched_count = unmatched_count
-    st.session_state.total_songs = len(b30_config)
-else:
-    # 如果已经存在状态，但存档可能已经变化，重新检查
-    matched_count, unmatched_count, unmatched_names = check_matched_songs(b30_config)
-    if (st.session_state.matched_count != matched_count or 
-        st.session_state.unmatched_count != unmatched_count or
-        st.session_state.total_songs != len(b30_config)):
-        st.session_state.matched_count = matched_count
-        st.session_state.unmatched_count = unmatched_count
-        st.session_state.total_songs = len(b30_config)
+# 匹配计数每轮都按当前 b30_config 重算（换存档、批量搜索、编辑器改动都会让它变化）。
+# 以前这里有 20 行：isinstance(..., list) 的清理分支是死代码（check_matched_songs 只会返回
+# int），if/else 两个分支算的又是同一件事，unmatched_names 还算两遍然后丢掉。
+matched_count, unmatched_count, _ = check_matched_songs(b30_config)
+st.session_state.matched_count = matched_count
+st.session_state.unmatched_count = unmatched_count
+st.session_state.total_songs = len(b30_config)
 
 if b30_config:
     # 显示进度信息
@@ -941,7 +727,6 @@ if b30_config:
     
     # 如果有未匹配的歌曲，显示警告
     if st.session_state.unmatched_count > 0:
-        _, _, unmatched_names = check_matched_songs(b30_config)
         st.warning(f"还有 {st.session_state.unmatched_count} 首曲目缺少视频信息，请使用手动搜索功能补充", icon="⚠️")
 
     # 获取所有视频片段的ID
@@ -949,6 +734,14 @@ if b30_config:
     
     # 使用session_state来存储当前选择的视频片段索引
     if 'current_index' not in st.session_state:
+        st.session_state.current_index = 0
+
+    # 指针要跟着曲目数钳位：曲目会在【编辑 Best50 数据】里被删或重排，切档只清了 current_index，
+    # 从那一页返回时残留的下标会越界（update_editor 里 config[current_index] 直接 IndexError）。
+    # 页 4 有同形的 safe_index 处理，这里以前没有。
+    if st.session_state.current_index >= len(b30_config):
+        st.session_state.current_index = len(b30_config) - 1
+    elif st.session_state.current_index < 0:
         st.session_state.current_index = 0
 
     # 片段预览和编辑组件，使用empty容器
@@ -970,8 +763,8 @@ if b30_config:
     
     if st.button("确认并开始下载视频", disabled=not dl_instance or not has_video_info, width='stretch', icon="⏬"):
         try:
-            st_download_video(download_info_placeholder, dl_instance, G_config, b30_config)
-            st.session_state.download_completed = True
+            st.session_state.download_completed = \
+                st_download_video(download_info_placeholder, dl_instance, saved_settings, b30_config) > 0
         except Exception as e:
             st.session_state.download_completed = False
             st.error(f"下载过程中出现错误: {e}", icon="⚠️")
@@ -994,9 +787,15 @@ if b30_config:
                             """
                             ):
                 try:
-                    copy_search_args(b30_config_file, exported_b30_search_config_file)
-                    st.toast("数据迁移成功！3 秒后刷新", icon="✅")
-                    time.sleep(3)
+                    migrated, same, no_match = migrate_search_args(
+                        b30_config_file, exported_b30_search_config_file)
+                    # 结果存进 session_state 再刷：只 print 到控制台的话，"更新 0 条"到底是
+                    # 存档本来就一样、还是导入件对不上 (id, 难度)，用户分不出来。
+                    # 写成 caption 也活不过这次 st.rerun()。
+                    st.session_state.migrate_report = (
+                        f"导入 {migrated} 条，本就相同 {same} 条，"
+                        f"当前存档有 {no_match} 条在导入件里找不到对应"
+                        + ("：导入件多半来自另一份成绩" if no_match else ""))
                     st.rerun()
                 except Exception as e:
                     st.error(f"迁移失败：{e}", icon="❌")
@@ -1019,5 +818,13 @@ if b30_config:
                         
                 except Exception as e:
                     st.error(f"导出失败：{e}", icon="❌")
+
+        # 上一次迁移的结果要能撑过 st.rerun()：否则用户点完按钮只看到 3 秒 toast，
+        # 之后"到底导入了几条"无处可查
+        if st.session_state.get('migrate_report'):
+            st.info(f"上次迁移结果：{st.session_state.migrate_report}", icon="📥")
+            if st.button("清掉这条结果", key="clear_migrate_report", icon="🧹"):
+                del st.session_state.migrate_report
+                st.rerun()
 else:
     st.error("配置文件加载失败，请检查文件完整性！", icon="❌")

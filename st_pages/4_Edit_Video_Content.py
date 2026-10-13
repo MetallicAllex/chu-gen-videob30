@@ -83,7 +83,7 @@ with st.container(border=True):
 image_output_path = f"{current_paths['image_dir']}/background"
 video_config_output_file = current_paths['video_config']
 old_video_config_file = current_paths['old_video_config']
-video_download_path = f"./videos/downloads"
+video_download_path = DOWNLOADS_DIR
 
 def refresh_main_image_paths(config_path, username, save_id, max_order_id=None):
     """
@@ -328,10 +328,10 @@ def update_preview(preview_placeholder, config, current_index):
 
         # 从文件中获取视频的时长
         video_path = item['video']
-        if os.path.exists(video_path):
-            video_duration = int(get_video_duration(video_path))
-        else:
-            video_duration = DEFAULT_VIDEO_MAX_DURATION
+        # 文件在 ≠ 探测得到：get_video_duration 探不到时返回 None，这里必须落到默认上限，
+        # 否则 max_minutes = 0，起止选择器会塌成 0..0 —— 正常视频也填不进区间。
+        probed = get_video_duration(video_path) if is_artifact_valid(video_path) else None
+        video_duration = int(probed) if probed else DEFAULT_VIDEO_MAX_DURATION
 
         def get_valid_time_range(config_item, video_duration=DEFAULT_VIDEO_MAX_DURATION):
             start = config_item.get('start', 0)
@@ -539,10 +539,10 @@ def build_missing_report(b50_data, images_path, videos_path):
         if not song.get('clip_id'):
             continue
         image_path = os.path.normpath(os.path.join(images_path, song['clip_id'] + '.png'))
-        if not os.path.exists(image_path):
+        if not is_artifact_valid(image_path):
             images.append(song['clip_id'])
         video_tag = f"{song['id']}-{REVERSE_LEVEL_LABELS.get(song['level_index'])}.mp4"
-        if not os.path.exists(os.path.normpath(os.path.join(videos_path, video_tag))):
+        if not is_artifact_valid(os.path.normpath(os.path.join(videos_path, video_tag))):
             videos.append(video_tag)
     report = {}
     if images:
@@ -725,7 +725,7 @@ if st.button("下一步", icon="➡️", width='stretch'):
 st.header("⚙️附加设置", divider="rainbow")
 with st.container(border=False):
     video_config_file = current_paths['video_config']
-    video_download_path = f"./videos/downloads"
+    video_download_path = DOWNLOADS_DIR
     absolute_path = os.path.abspath(os.path.dirname(video_config_file))
     additional_setting1, additional_setting2 = st.columns(2)
     # st.write("若因手动更新 b50 等原因需要检查和修改配置，点击下方按钮打开配置文件夹。")

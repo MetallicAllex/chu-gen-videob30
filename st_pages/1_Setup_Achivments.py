@@ -174,6 +174,9 @@ def load_user_info_from_file(username):
             })
             return True
         except Exception as e:
+            # 文件在但读不出来（半截写 / 手工改坏）以前被静默当成"没有存档"，用户只会看到
+            # 存档凭空消失。控制流保持不变（仍返回 False），但把位置和原因留下。
+            print(f"读取 {user_info_path} 失败，本次按未配置处理：{type(e).__name__}: {e}")
             return False
     return False
 
@@ -1012,8 +1015,8 @@ if st.session_state.get('config_saved', False):
                     "full_chain": None,
                     "play_count": 0
                 }
-                with open(f'{save_dir}/b30_config.json', 'w', encoding='utf-8') as f:
-                    print(f'[{json.dumps(new_data, ensure_ascii=False)}]', file=f)
+                # 非原子写 + 手搓方括号：崩溃或断电就留下一个空壳存档，且格式与别的写入者不一致
+                save_config(f'{save_dir}/b30_config.json', [new_data])
                 st.session_state.save_id = save_id
                 st.session_state.data_updated_step1 = True
                 st.session_state.config_saved = True
