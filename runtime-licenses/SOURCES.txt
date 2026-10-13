@@ -1,0 +1,4 @@
+Python 3.12.10: https://www.python.org/downloads/release/python-31210/
+FFmpeg 7.1 Windows full build: https://www.gyan.dev/ffmpeg/builds/
+FFmpeg source: https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+Python and package licenses are also retained inside runtime.
