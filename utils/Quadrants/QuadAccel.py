@@ -22,8 +22,19 @@ QuadAccel.py - Quadrants GPU 合成计算核心
 - bg_brightness：0~1 系数，在 FrameCompositor 内换算为 0~255 的**加性偏移**
 """
 
+# Quadrants 的两个模式在静态分析下不可建模，只按规则关闭这三族（不是整文件放行）：
+#   reportPossiblyUnboundVariable —— 文件头是 `try: import quadrants as qd
+#     / except ImportError: QUAD_AVAILABLE = False` 的可选依赖守卫，于是 qd 在每个用到
+#     它的行都"可能未绑定"。实测本文件这 248 条**全部落在 qd 这一个名字上**，且运行时
+#     由 is_available() 挡住，不会真的解引用未绑定的 qd。
+#   reportCallIssue / reportGeneralTypeIssues —— `@qd.kernel(fastcache=True)` 的装饰器
+#     重载，以及 `qd.types.NDArray[qd.u8, 3]` 这种"下标当类型注解"的写法，pyright 一律
+#     判不合法（Expected class but received "DataTypeCxx"），本文件 33 条全是这一类。
+# 标注真写错的那类（`= None` 的参数、Optional 成员访问）不在关闭范围内，照常报。
+# pyright: reportPossiblyUnboundVariable=false, reportCallIssue=false, reportGeneralTypeIssues=false
+
 import os
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -36,6 +47,7 @@ except ImportError:
 
 _quad_initialized = False
 _quad_available = False
+_quad_backend = ''   # 'gpu' | 'cpu' | ''：init_quad 实际把运行时建在哪个后端上
 
 
 if QUAD_AVAILABLE:
@@ -82,7 +94,7 @@ def init_quad(arch=None) -> bool:
     Returns:
         bool: 初始化是否成功（成功后 is_available() 为 True）。
     """
-    global _quad_initialized, _quad_available
+    global _quad_initialized, _quad_available, _quad_backend
     if _quad_initialized:
         return _quad_available
     if not QUAD_AVAILABLE:
@@ -93,14 +105,17 @@ def init_quad(arch=None) -> bool:
     try:
         if arch is not None:
             qd.init(arch=arch)
+            _quad_backend = 'cpu' if arch is qd.cpu else 'gpu'
         else:
             device = os.environ.get("QUAD_DEVICE", "gpu").lower()
             if device == "cpu":
                 qd.init(qd.cpu)
+                _quad_backend = 'cpu'
                 print("[QuadAccel] 初始化 CPU 模式")
             else:
                 try:
                     qd.init(qd.gpu)
+                    _quad_backend = 'gpu'
                     print("[QuadAccel] 初始化 GPU 模式")
                 except Exception as gpu_err:
                     print(f"[QuadAccel] qd.gpu 初始化失败（{gpu_err}），回退 qd.cpu")
@@ -109,6 +124,7 @@ def init_quad(arch=None) -> bool:
                     except Exception:
                         pass
                     qd.init(qd.cpu)
+                    _quad_backend = 'cpu'
         _quad_initialized = True
         _quad_available = True
     except Exception as e:
@@ -129,6 +145,16 @@ def init_quad(arch=None) -> bool:
 
 def is_available() -> bool:
     return QUAD_AVAILABLE and _quad_initialized and _quad_available
+
+
+def quad_backend() -> str:
+    """Quadrants 运行时实际落在哪个后端：'gpu' / 'cpu' / ''（还没初始化）。
+
+    没有可用 CUDA 设备的机器上 `qd.init(qd.gpu)` 会抛 CUDA_ERROR_NO_DEVICE，init_quad 随即
+    回退 `qd.cpu`——此时运行时"可用"，但那**不是 GPU**。界面必须按这个值说话，否则状态条
+    会写着「渲染片段（GPU）」而全场在 CPU 上跑（实测：独显休眠后就是这个状态）。
+    """
+    return _quad_backend
 
 
 def is_cuda_context_error(text: str) -> bool:
@@ -274,16 +300,22 @@ if QUAD_AVAILABLE:
         out_h: qd.i32, out_w: qd.i32,
         out: qd.types.NDArray[qd.u8, 3],
     ):
-        """Info 片段：纯背景（u8 加性亮度偏移）"""
+        """Info 片段：纯背景（u8 加性亮度偏移）
+
+        输出必须上下都夹：darkness<0（页面语义"变暗"，发行包默认 -0.25）时
+        bg + darkness*255 是负数，而 f32→u8 的负值落点**按后端不同**——CUDA 饱和到 0
+        （所以 GPU 上看不出问题），x64 后端按 256 取模回绕（实测输入 0 → 输出 193、
+        输入 55 → 248：暗部整片翻成亮块）。缺下夹的这段在 quadrants_cpu 状态下才显形。
+        """
         for i, j in qd.ndrange(out_h, out_w):
             # 输入为 BGR（cv2 原生），反序读取使输出仍为 RGB（免每帧 BGR→RGB 转换）
             r = qd.cast(bg_video[i, j, 2], qd.f32) + bg_brightness
             g = qd.cast(bg_video[i, j, 1], qd.f32) + bg_brightness
             b = qd.cast(bg_video[i, j, 0], qd.f32) + bg_brightness
 
-            out[i, j, 0] = qd.cast(qd.min(r, 255.0), qd.u8)
-            out[i, j, 1] = qd.cast(qd.min(g, 255.0), qd.u8)
-            out[i, j, 2] = qd.cast(qd.min(b, 255.0), qd.u8)
+            out[i, j, 0] = qd.cast(qd.min(qd.max(r, 0.0), 255.0), qd.u8)
+            out[i, j, 1] = qd.cast(qd.min(qd.max(g, 0.0), 255.0), qd.u8)
+            out[i, j, 2] = qd.cast(qd.min(qd.max(b, 0.0), 255.0), qd.u8)
 
     @qd.kernel(fastcache=True)
     def _two_layer_composite_withoverlay_fast_kernel(
@@ -294,7 +326,11 @@ if QUAD_AVAILABLE:
         out_h: qd.i32, out_w: qd.i32,
         out: qd.types.NDArray[qd.u8, 3],
     ):
-        """Info 片段：背景 + 全幅叠加层（alpha 混合）"""
+        """Info 片段：背景 + 全幅叠加层（alpha 混合）
+
+        下界夹取同 bgonly kernel，不可省：叠加层 alpha=0 的区域原样透传背景，
+        darkness<0 时那里同样是负数（x64 后端会回绕成亮块）。
+        """
         for i, j in qd.ndrange(out_h, out_w):
             # 输入为 BGR/BGRA（cv2 原生），反序读取使输出仍为 RGB
             r = qd.cast(bg_video[i, j, 2], qd.f32) + bg_brightness
@@ -307,9 +343,9 @@ if QUAD_AVAILABLE:
             g = g * inv_sa + qd.cast(overlay_image[i, j, 1], qd.f32) * sa
             b = b * inv_sa + qd.cast(overlay_image[i, j, 0], qd.f32) * sa
 
-            out[i, j, 0] = qd.cast(qd.min(r, 255.0), qd.u8)
-            out[i, j, 1] = qd.cast(qd.min(g, 255.0), qd.u8)
-            out[i, j, 2] = qd.cast(qd.min(b, 255.0), qd.u8)
+            out[i, j, 0] = qd.cast(qd.min(qd.max(r, 0.0), 255.0), qd.u8)
+            out[i, j, 1] = qd.cast(qd.min(qd.max(g, 0.0), 255.0), qd.u8)
+            out[i, j, 2] = qd.cast(qd.min(qd.max(b, 0.0), 255.0), qd.u8)
 
     @qd.kernel(fastcache=True)
     def _three_layer_fast_kernel(
@@ -514,12 +550,15 @@ class FrameCompositor:
     def __init__(
         self,
         mode: str = "main",                 # "main" 或 "info"
-        bg_video: np.ndarray = None,        # 背景帧 (H, W, 3) uint8（占位/首帧）
+        # 三个图层参数都允许不传（下面按 mode 校验并给出明确报错），标注必须是
+        # Optional：写成 `np.ndarray = None` 时静态上"None 不是 ndarray"，而调用方
+        # 恰恰在 info 模式下不传 score_layer、无底板时不传 overlay_image。
+        bg_video: Optional[np.ndarray] = None,      # 背景帧 (H, W, 3) uint8（占位/首帧）
         bg_brightness: float = 0.8,
         output_size: tuple = (1920, 1080),
-        score_layer: np.ndarray = None,     # main: 成绩板 RGBA (H, W, 4)
-        chart_video_pos: tuple = (0, 0),    # main: 谱面视频位置 (x, y)
-        overlay_image: np.ndarray = None,   # info: 静态叠加层 RGBA (H, W, 4)，可选
+        score_layer: Optional[np.ndarray] = None,   # main: 成绩板 RGBA (H, W, 4)
+        chart_video_pos: tuple = (0, 0),            # main: 谱面视频位置 (x, y)
+        overlay_image: Optional[np.ndarray] = None,  # info: 静态叠加层 RGBA，可选
     ):
         if not is_available():
             raise RuntimeError("Quadrants 未初始化")
@@ -607,13 +646,25 @@ class FrameCompositor:
         bg_u8 = self._prepare_bg(bg_frame)
         self._bg_nd.from_numpy(bg_u8)
 
+    def _overlay_bufs(self):
+        """取叠加层的两路设备缓冲；没建立就直接报错。
+
+        main 模式在 __init__ 里必然建好，无叠加层的 info 实例则是 None——这两种情形
+        以前靠"调用方自己保证"，于是 `self._overlay_rgb_nd.from_numpy(...)` 在静态上
+        是"往 None 上调方法"。把它变成一个显式的、有结论的检查：调用方拿到的一定是缓冲。
+        """
+        if self._overlay_rgb_nd is None or self._overlay_mask_nd is None:
+            raise RuntimeError("叠加层设备缓冲未建立（该实例没有叠加层）")
+        return self._overlay_rgb_nd, self._overlay_mask_nd
+
     def update_score_layer(self, score_layer: np.ndarray):
         """更新成绩板（仅 main）。一般整段静态，无需每帧调用。"""
         if self.mode != "main":
             raise RuntimeError("update_score_layer 仅支持 main 模式")
         rgb_u8, mask_f32 = self._prepare_overlay(score_layer)
-        self._overlay_rgb_nd.from_numpy(rgb_u8)
-        self._overlay_mask_nd.from_numpy(mask_f32)
+        ov_rgb, ov_mask = self._overlay_bufs()
+        ov_rgb.from_numpy(rgb_u8)
+        ov_mask.from_numpy(mask_f32)
 
     def update_overlay(self, overlay_image: np.ndarray):
         """更新叠加层（仅 info）。"""
@@ -625,16 +676,20 @@ class FrameCompositor:
             if self._overlay_rgb_nd is None:
                 self._overlay_rgb_nd = _pooled_nd(qd.u8, (self.out_h, self.out_w, 3), "ov_rgb")
                 self._overlay_mask_nd = _pooled_nd(qd.f32, (self.out_h, self.out_w), "ov_mask")
-            self._overlay_rgb_nd.from_numpy(rgb_u8)
-            self._overlay_mask_nd.from_numpy(mask_f32)
+            ov_rgb, ov_mask = self._overlay_bufs()
+            ov_rgb.from_numpy(rgb_u8)
+            ov_mask.from_numpy(mask_f32)
 
     def _ensure_chart_buf(self, chart_u8: np.ndarray):
+        """按当前谱面尺寸取（或换）设备缓冲，并**把它交回去**——调用方要用的就是这个
+        对象，靠 self._chart_nd 再读一次只会让静态分析重新看到 None。"""
         shape = chart_u8.shape
         if self._chart_nd is None or self._chart_shape != shape:
             self._chart_nd = _pooled_nd(qd.u8, shape, "chart")
             self._chart_shape = shape
+        return self._chart_nd
 
-    def composite(self, chart_frame: np.ndarray = None) -> np.ndarray:
+    def composite(self, chart_frame: Optional[np.ndarray] = None) -> np.ndarray:
         """合成一帧，返回 (H, W, 3) uint8 host 数组（独立副本，可安全持有）。"""
         if self.mode == "main":
             return self._composite_main(chart_frame)
@@ -645,14 +700,15 @@ class FrameCompositor:
             raise ValueError("main 模式需要 chart_frame 参数")
         chart_u8 = np.ascontiguousarray(chart_frame[:, :, :3], dtype=np.uint8)
         chart_h, chart_w = chart_u8.shape[:2]
-        self._ensure_chart_buf(chart_u8)
-        self._chart_nd.from_numpy(chart_u8)
+        chart_nd = self._ensure_chart_buf(chart_u8)
+        chart_nd.from_numpy(chart_u8)
 
+        ov_rgb, ov_mask = self._overlay_bufs()
         _three_layer_fast_kernel(
             self._bg_nd,
-            self._overlay_rgb_nd,
-            self._overlay_mask_nd,
-            self._chart_nd,
+            ov_rgb,
+            ov_mask,
+            chart_nd,
             self._out_nd,
             self.bg_brightness,
             self.chart_x, self.chart_y,
@@ -663,10 +719,11 @@ class FrameCompositor:
 
     def _composite_info(self) -> np.ndarray:
         if self.has_overlay:
+            ov_rgb, ov_mask = self._overlay_bufs()
             _two_layer_composite_withoverlay_fast_kernel(
                 self._bg_nd,
-                self._overlay_rgb_nd,
-                self._overlay_mask_nd,
+                ov_rgb,
+                ov_mask,
                 self.bg_brightness,
                 self.out_h, self.out_w,
                 self._out_nd,

@@ -1047,11 +1047,13 @@ def _authorized_request(server, url, method="GET", params=None, json_body=None):
     失败并清掉令牌）。后者继续发只会白耗水鱼那 200 次/日的配额。
     """
     name = "落雪" if server == "lxns" else "水鱼"
+    # 条件与导入合成一次：原来先在 if/else 里各导入一个名字，下一行又用同一个条件
+    # 挑其中一个——运行时没问题，但静态分析不会把两处重复的条件连起来，于是判
+    # "get_lxns_access_token 可能未绑定"。少写一遍条件也少一处两边改不一致的机会。
     if server == "lxns":
-        from utils.OAuthUtils import get_lxns_access_token
+        from utils.OAuthUtils import get_lxns_access_token as get_access_token
     else:
-        from utils.OAuthUtils import get_fish_access_token
-    get_access_token = get_lxns_access_token if server == "lxns" else get_fish_access_token
+        from utils.OAuthUtils import get_fish_access_token as get_access_token
 
     def send(token):
         return requests.request(method, url, params=params, json=json_body,

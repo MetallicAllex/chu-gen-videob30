@@ -6,7 +6,20 @@ from utils.ImageUtils import render_all_images
 from utils.Variables import ACCEL_BRAND, HARD_RENDER_METHOD
 from utils.PageUtils import get_ffmpeg_version
 
-from utils.Quadrants.SafeRender import RENDER_STATUS, submit_render, cancel_render
+from utils.Quadrants.SafeRender import (RENDER_STATUS, submit_render,
+                                        cancel_render, gpu_preflight)
+
+# 后端的展示名。'quadrants_cpu' 是实测出来的状态：本机没有可用 CUDA 设备时
+# （独显休眠/驱动掉线，nvidia-smi 直接 NVML: Not Found）Quadrants 会回退到自己的
+# x64 后端——渲染照样成功，但那不是 GPU，界面不能写「Quadrants GPU」。
+_BACKEND_LABEL = {'': '尚未开始',
+                  'segmentutils': '经典路径（CPU）',
+                  'quadrants': 'Quadrants GPU',
+                  'quadrants_cpu': 'Quadrants（CPU 后端，本机无可用 CUDA 设备）'}
+
+
+def _backend_label(name: str) -> str:
+    return _BACKEND_LABEL.get(name or '', name or _BACKEND_LABEL[''])
 
 st.header("Step 5: 视频渲染")
 
@@ -140,7 +153,11 @@ with st.container(border=True):
         else:
             st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
             st.stop()
-    if not save_id:
+    if not save_id or current_paths is None:
+        # current_paths 只在上面 `if save_id:` 分支里赋值。这里把它一起判：
+        # "save_id 为真 ⇒ current_paths 已赋值"本来只是两处代码的隐式约定，
+        # 静态分析连不上这两个独立变量，于是下面每一处 current_paths['...'] 都判
+        # "None 不可下标"（实测页 6 因此摊出 42 条）。写进代码比让人记住更可靠。
         st.stop()
 ### Savefile Management - End ###
 
@@ -390,19 +407,25 @@ with btn_col1:
             st.rerun()
 
 # ===== 独立的 Quadrants GPU 渲染按钮（实验，不与上面「开始渲染」合并）=====
+# 灰化与否交给 gpu_preflight()，不再无条件写死禁用：它只看发行包里 quadrants 和它的
+# 两个传递依赖在不在、以及上一次渲染的 GPU 探针结果。页面这一侧**绝不做 CUDA 初始化**——
+# Quadrants 上下文有线程亲和性，脚本线程探针会把上下文建错线程（实测就是「渲到 4-5 段死亡」的成因）。
+_gpu_ok, _gpu_reason = gpu_preflight()
 if st.button("Quadrants GPU 渲染（实验）", "quad_render", width='stretch',
-             icon="🧪", disabled=True,
+             icon="🧪", disabled=not _gpu_ok,
              help=f"""
-             （当前未开放此选项）
              走 `utils/Quadrants` 的 Quadrants GPU 合成 + transition-island 低内存拼接。
              - 提交到常驻工作线程执行，刷新/关闭页面不影响渲染
              - 点击后弹出模态进度浮窗（无关闭按钮），浮窗打开期间页面不可交互
              - 若 Quadrants 不可用或渲染失败，会自动回退到 SegmentUtils
              - 共用上方参数（分辨率 / 码率 / 过渡 / 覆盖已存在 / 仅渲染片段）
+             {"" if _gpu_ok else f"当前不可用：{_gpu_reason}"}
              """):
     st.session_state.quad_start_requested = True
     st.rerun()
 
+if not _gpu_ok:
+    st.caption(f"🧪 GPU 渲染暂不可用：{_gpu_reason}")
 
 
 # ===== 渲染请求统一交给常驻工作线程 =====
@@ -471,9 +494,7 @@ def quad_progress_dialog():
     （配置有缓存），每秒重跑无感。
     """
     s = RENDER_STATUS.snapshot()
-    _backend_label = {'segmentutils': '经典路径（CPU）', 'quadrants': 'Quadrants GPU',
-                      '': '尚未开始'}.get(s['backend'], s['backend'])
-    st.caption(f"任务 {s['job_id'][:12] or '…'} · 后端 {_backend_label} · "
+    st.caption(f"任务 {s['job_id'][:12] or '…'} · 后端 {_backend_label(s['backend'])} · "
                "渲染在常驻工作线程执行；本浮窗期间页面已锁定，"
                "刷新不会中断渲染，重新进入会自动接续进度。")
 
@@ -515,7 +536,7 @@ def quad_progress_dialog():
     if _final['phase'] == '完成':
         _elapsed = max(_final['end_ts'] - _final['start_ts'], 0)
         _mins, _secs = divmod(int(_elapsed), 60)
-        st.progress(1.0, text=f"渲染完成（后端 {_final['backend']}），耗时 {_mins} 分 {_secs} 秒")
+        st.progress(1.0, text=f"渲染完成（后端 {_backend_label(_final['backend'])}），耗时 {_mins} 分 {_secs} 秒")
         print(f"[Quad] 渲染完成，后端={_final['backend']}，总耗时 {_mins} 分 {_secs} 秒")
         # 秒级「完成」= 没有片段需要渲染（片段文件都已存在且未勾选强制重渲）。
         # 必须明确说明原因：否则浮窗一闪就关，看起来就像状态窗口坏了。
@@ -528,7 +549,7 @@ def quad_progress_dialog():
         else:
             if _note:
                 st.caption(f"片段结果：{_note}")
-            st.toast(f"渲染完成（后端 {_final['backend']}）！", icon="✅")
+            st.toast(f"渲染完成（后端 {_backend_label(_final['backend'])}）！", icon="✅")
         time.sleep(6 if _nothing else 2)   # 无片段可渲时多停几秒，让原因能看清
     elif _final['phase'] == '已取消':
         st.warning(f"任务已取消：{_final['error'] or '用户请求取消'}。已渲染的片段保留，"

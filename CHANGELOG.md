@@ -5,10 +5,12 @@
 
 ## [1.2.6a] - 2026-10-02 出包，工作树截至 2026-10-13
 
-相对 v1.2.6 的全量改动：20 个已跟踪文件 +800/−524（`git diff --numstat HEAD`，不含本文件：
+相对 v1.2.6 的全量改动：20 个已跟踪文件 +800/−524（`git diff --numstat cd322c3 662c2dc` 排除本文件，实测恰为此数：
 `st_pages/3_Confirm_Videos.py`
 +129/−322、`utils/DataUtils.py` +196/−43、`utils/video_crawler.py` +192/−59、`utils/PathUtils.py` +84/−16、
-`utils/fetch_settings.py` +51/−17）。按环节记录，**行号以本次提交为准**。
+`utils/fetch_settings.py` +51/−17）。按环节记录，**行号以工作树当前状态为准**（本节只覆盖 `662c2dc`；
+其后的渲染链路提交 `8394015` 按要求本轮不写，细节在该 commit message 里——页 6 与 `SegmentUtils.py`
+被它改写过，凡本节引用这两个文件处均已按现状复核）。
 
 - **与用户手上那份包对齐过**：`dist/chu-gen-videob30-v1.2.6a.zip`（2026-10-02 16:35、53,950,830 字节）里
   14 个承重文件逐个 md5 比对，**12 个与当前工作树字节相同**，只有 `utils/DataUtils.py`（包后再 +93/−11）与
@@ -50,7 +52,8 @@
 
 ### 「未生成有效视频文件」剩下的几个来源
 
-v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`os.system` + `FFMPEG_PATH` 裸名已不在 HEAD 里）。本轮在这条
+v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸名与 `os.system` 拼 shell 在 `cd322c3` 里
+已无调用点）。本轮在这条
 判据周围还剩几类会塌成同一句话，逐个堵住：
 
 - **YouTube 那条是静默失败**：`download_video` 原来是 `except Exception: traceback.print_exc(); return None`，
@@ -81,10 +84,11 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`os.system` + `FFMP
   被别的代码改走的 cwd 会自愈。
 - `utils/PathUtils.py` 新增 `:12 APP_ROOT`、`:13 GLOBAL_CONFIG_PATH`、`:18 TEMP_GENERATED_DIR`（绝对）；
   `:24 DOWNLOADS_DIR` **故意保持相对**（同上，测试 I6 验的是"各页不再各写字面量"，并证明与绝对写法
-  normpath 等价）。此前按 cwd 拼 `videos/temp_generated` 的三处改用常量：`utils/SegmentUtils.py:1062`
+  normpath 等价）。此前按 cwd 拼 `videos/temp_generated` 的三处改用常量：`utils/SegmentUtils.py:1349`
   （音频统一临时目录）、`utils/Quadrants/IslandConcat.py:38`（**导入期**的 `abspath('./videos/temp_generated')`，
   把启动时那个 cwd 冻结进模块）、`utils/Quadrants/SafeRender.py:210`（这一步是 **rmtree**，cwd 被带偏
-  就删错目录）。`6_Compostie_Videos.py:194`（建目录）与 `:381-382`（收尾清理）同理。
+  就删错目录）。`6_Compostie_Videos.py:198`（建目录）同理——页 6 里那处收尾清理（原 `:381-382`）在 `8394015`
+  已随渲染搬进工作线程，现即上面 `SafeRender.py:210` 这一段。
 - 同一族的另一半是**工具解析**：`utils/PageUtils.py:85-87` 的 `get_ffmpeg_version` 在拿不到 `RenderIO` 时
   先试 `APP_ROOT/ffmpeg.exe` 再退到 `shutil.which`，不再只信 PATH —— 随包那份 exe 在应用根，而裸 `'ffmpeg'`
   在 Windows 上按当前目录解析，启动方式一变就把明明装了的 ffmpeg 报成"未安装"。
@@ -94,9 +98,10 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`os.system` + `FFMP
 - `get_video_duration`（`:177`）失败返回 **None** 而不是 0。0 会被当真实时长，`max_minutes = 0` ⇒
   页 4 起止选择器塌成 `0..0`，正常视频也填不进区间；`st_pages/4_Edit_Video_Content.py:333-334` 显式回退
   `DEFAULT_VIDEO_MAX_DURATION`（测试 E6/E7）。
-- **唯一判据** `PathUtils.is_artifact_valid`（`:61`，isfile + size>0），19 处调用点：
+- **唯一判据** `PathUtils.is_artifact_valid`（`:65`，isfile + size>0），`662c2dc` 时 19 处调用点
+  （工作树现为 24 处——渲染链路那轮在 `SegmentUtils.py` 里又加了 5 处）：
   `DataUtils.py:234/:239/:856/:928/:1486/:1856/:1889/:2193`、`ImageUtils.py:858`、
-  `QuadRenderer.py:692/:708/:724`、`SegmentUtils.py:908`、`3_Confirm_Videos.py:467/:532`、
+  `QuadRenderer.py:692/:708/:724`、`SegmentUtils.py:1095`、`3_Confirm_Videos.py:467/:532`、
   `4_Edit_Video_Content.py:333/:542/:545`、`Generate_Pic_Resources.py:26`。裸 `os.path.exists` 把 0 字节
   失败产物当"已生成"，链路是：跳过重渲 → 直接拼进成片 → 界面显示成功。
 - **失败要留在页面上**：`ImageUtils.py:912` 生成评论图失败写 `st.session_state.render_error`（页 5 生成完就
@@ -156,8 +161,11 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`os.system` + `FFMP
   直跑时在 GBK 控制台抛 UnicodeEncodeError，**整轮测试跑到 F6 就断**（现场是 traceback，而不是某条 FAIL）。
   修法是 `tests/support.py` 里对 stdout/stderr `reconfigure(errors='replace')`（与 `st_app.py:18-24` 同一处置）
   并把那个 emoji 从断言名去掉。同型问题在比对脚本上又复现一次（打印含 ✅ 的 diff 行），已用 UTF-8 输出绕过。
-- `6_Compostie_Videos.py:383-386` `cleanup_after_render` 的 `except: pass` 改成打印原因后继续收尾；
-  `video_crawler.py` 的裸 `except:` 由 HEAD 的 `:93`/`:162`/`:177`/`:1345` 四处收成为
+- 页 6 原 `cleanup_after_render`（`662c2dc` 的 `:383-386`）的 `except: pass` 改成打印原因后继续收尾；
+  `8394015` 把渲染搬进工作线程时该函数整体删除，清理逻辑落进 `SafeRender.py:210-224`，并一度以
+  `shutil.rmtree(..., ignore_errors=True)` + `except Exception: pass` 退回"清没清掉没人知道"的老状态
+  （页 6 的"不再有裸 except"断言只盯页 6，看不见搬走的那份），本轮改回失败即打印异常类型与目录；
+  `video_crawler.py` 的裸 `except:` 由 `cd322c3` 的 `:93`/`:162`/`:177`/`:1345` 四处收成为
   `:148`（`ValueError/TypeError/AttributeError`）、`:243`、`:259-269`、`:1477` —— 裸 except 会连
   `KeyboardInterrupt` 一起吞掉，控制台的取消操作因此没反馈。
 
@@ -191,10 +199,11 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`os.system` + `FFMP
   到 `合计 N 项，失败 0 项`（GBK 控制台直跑也不中断，即上一节那条）。分组：A 判据 / B 存档识别 /
   C 原子写并发（含"并发读写期间任何时刻都是完整文档"）/ D 页 1 空白存档 / E 判据唯一性 /
   F 渲染与临时目录不变量 / G 控制台编码 / H 迁移 / I 页 3 不变量。
-- 源码级断言一律用 AST 或"必须出现的调用形状"，并在 `git show HEAD:<file>` 上做过**反向验证**（改前必红）：
-  F6（`toast("渲染完成！")` 的行号必须落在 `_failed` 分支区间内）、I1–I6；否则就是恒真断言。
+- 源码级断言一律用 AST 或"必须出现的调用形状"，并在**改前基线 `cd322c3`（v1.2.6）**上做过反向验证
+  （改前必红）：`git show cd322c3:<file>`。原先写作 "HEAD" 会随新提交过期，这里钉死 SHA。
+  F6（`toast("渲染完成！")` 的行号必须落在 `_failed` 分支区间内）、I1–I6 都这样做过；否则就是恒真断言。
 - 页 3 用 `streamlit.testing.v1.AppTest` 在沙盒里真跑起来并出过截图（`output/visual/page3_render.png`）；
-  同一沙盒对 HEAD 版本能复现原崩溃：`p3_head.py:956 → update_editor:503 → IndexError`。
+  同一沙盒喂 `cd322c3`（v1.2.6）的页 3 能复现原崩溃：`cd322c3:st_pages/3_Confirm_Videos.py:956 → update_editor:503 → IndexError`。
 - 选流与合并链路（E/D 组 + A/B/C 组）在无网络、无用户素材的条件下验；真实下载与真实凭证改写各跑过一次，
   数字见「未生成有效视频文件」与「B 站登录态」两节。
 

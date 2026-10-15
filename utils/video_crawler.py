@@ -691,9 +691,14 @@ class PurePytubefixDownloader(Downloader):
                 
             except requests.exceptions.HTTPError as e:
                 error_msg = str(e)
-                if response.status_code == 403:
+                # 状态码取异常自带的 e.response，不取闭包里的 response：那个名字要到
+                # `response = requests.get(...)` 那行才绑定，异常若来自它之前（或来自
+                # requests 自己抛的 HTTPError），这里读它就是 UnboundLocalError，
+                # 把真正的失败原因整个盖掉。无响应时 e.response 是 None，用 getattr 兜。
+                status = getattr(e.response, 'status_code', None)
+                if status == 403:
                     raise Exception(f"YouTube API 搜索失败 (403错误): API Key 可能无效或配额已用完。请检查 API Key 配置。")
-                elif response.status_code == 400:
+                elif status == 400:
                     if attempt < max_retries - 1:
                         print(f"API搜索失败 (尝试 {attempt + 1}/{max_retries}): {error_msg}")
                         print(f"等待 {retry_delay} 秒后重试...")

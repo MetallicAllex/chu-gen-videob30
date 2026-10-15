@@ -95,7 +95,7 @@ with col2:
 
     <div style="text-align: center;">
         <div class="rt-text">chu-gen-videob30</div>
-        <h2 class="ruby-container">中二节奏 Best30 生成器 v1.2.6</h2>
+        <h2 class="ruby-container">中二节奏 Best30 生成器 v1.2.6a</h2>
     </div>
     
     <div style="text-align: left; margin-top: 15px;">

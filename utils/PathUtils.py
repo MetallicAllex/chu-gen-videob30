@@ -151,15 +151,27 @@ def save_config(config_file, config_data):
         if os.path.exists(tmp_file):
             os.remove(tmp_file)
 
-def read_global_config():
+def read_global_config() -> dict:
+    """读全局配置。**返回类型必须标出来**：随包的便携 Python 里 PyYAML 没有 py.typed、
+    `yaml.load` 也没有注解，pyright 只能从库源码里猜它的返回（实测猜成 `list | None`），
+    于是每个页面里 `G_config['VIDEO_RES']` 这样的下标都摊成 3 条静态错误——
+    实测这一处缺标注在全库 standard 档下摊出 70 条。
+    """
     if os.path.exists(GLOBAL_CONFIG_PATH):
         with open(GLOBAL_CONFIG_PATH, "r", encoding='utf-8') as f:
-            return yaml.load(f, Loader=yaml.FullLoader)
+            data = yaml.load(f, Loader=yaml.FullLoader)
+        if not isinstance(data, dict):
+            # 不静默兜成 {}：那会让页面在几十行之后拿一个 KeyError，
+            # 看不出是配置文件本身坏了。
+            raise ValueError(
+                f"global_config.yaml 的内容不是一个映射（读到 {type(data).__name__}）："
+                f"{GLOBAL_CONFIG_PATH}")
+        return data
     raise FileNotFoundError(
         f"未找到 global_config.yaml（查找位置：{GLOBAL_CONFIG_PATH}）。"
         f"请确认应用是否完整解压，且该文件位于应用根目录")
 
-def write_global_config(config):
+def write_global_config(config) -> None:
     """写回全局配置。失败必须让调用方知道：旧实现只 print 后返回 None，
     页 6 紧接着就 toast「配置已保存！」，磁盘没写进去也报成功。
     """

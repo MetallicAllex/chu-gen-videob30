@@ -25,14 +25,18 @@ import time
 import traceback
 import threading
 import queue as _queue
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
-from utils.PathUtils import is_artifact_valid
 from utils.Variables import REVERSE_LEVEL_LABELS, bgclips_path, audios_path
+# 素材判据与"缺素材"异常类型都取自标准路，两条路共用同一份（SegmentUtils 顶层不 import
+# Quadrants，所以这里在模块级导入不会成环）。响度对齐增益同理共用一份：以前 GPU 路自己
+# 算了一遍（info，夹在 ±9.5）并且对 main 干脆写死 0，两条路对同一段素材的音量不一致。
+from utils.SegmentUtils import (MissingClipInputError, resolve_clip_board_image,
+                                resolve_clip_video_path, measure_audio_gain_db)
 
 from . import QuadAccel
 from .QuadAccel import (
@@ -43,8 +47,32 @@ from .RenderIO import render_checkpoint
 from .RenderIO import (
     VideoFrameReader, FFmpegWriter,
     detect_hw_encoder, is_transient_lock_error,
-    _measure_audio_rms, _load_image_rgba,
+    ImageDecodeError, _load_image_rgba,
 )
+
+
+def _load_layer_or_missing(path: str, resolution):
+    """底板/成绩板加载：读不出来就按「这一段缺输入」处置，与经典路同一个结局。
+
+    旧写法由 RenderIO 塞一张**全透明占位图**继续渲：产物是一段没有成绩板的画面，
+    而上层的成功判据是"没抛异常"，于是照常写指纹、照常拼进成片、界面显示「渲染完成」，
+    降级只留在控制台里。经典路对同一个文件是让 ffmpeg 打不开输入、这一段带着原因失败，
+    其余照跑——这里把两条路对齐（MissingClipInputError 不进重试、不触发 CPU 全量回退）。
+    """
+    try:
+        return _load_image_rgba(path, resolution)
+    except ImageDecodeError as e:
+        raise MissingClipInputError(
+            f"{e} —— 到【生成 Best50 图 / 查看数据】页重新生成这张图片，"
+            "或关闭正在占用它的程序后重新渲染") from e
+
+
+def _failed_entry(output_file: str, err: BaseException) -> str:
+    """失败清单项，格式与标准路一致：`编号_片段ID（原因）`，方便页 6 直接点名是哪一段。"""
+    name = os.path.basename(output_file)
+    label = name[:-4] if name.endswith('.mp4') else name
+    why = str(err)
+    return f"{label}（{why}）" if why else label
 
 
 @dataclass
@@ -53,28 +81,26 @@ class RenderContext:
     resolution: Tuple[int, int]
     fps: int = 60
     bitrate: str = "5000k"
-    codec: str = None
-    style_config: dict = None
+    # codec / style_config 允许不传（None 时 __post_init__ 里补默认值），标注必须是
+    # Optional——写成 `codec: str = None` 时静态上"None 不是 str"，而调用方恰恰全都在
+    # 传 None（render_all_clips 只给分辨率/码率/帧率）。
+    codec: Optional[str] = None
+    style_config: Optional[dict] = None
+    # 日志去重的游标不是构造参数，用 field(init=False) 声明成真正的字段：
+    # 只在 __post_init__ 里首次赋值的话，静态上它不算这个类的成员。
+    _last_geom_print: Optional[tuple] = field(default=None, init=False)
 
     def __post_init__(self):
         if self.codec is None:
             self.codec, _ = detect_hw_encoder()
         # 分辨率统一为 (w, h) 整数元组
         self.resolution = (int(self.resolution[0]), int(self.resolution[1]))
-        # 日志去重：同批次里位置/尺寸未变化时不重复打印（它们随分辨率/素材而定）
-        self._last_geom_print = None
 
 
-class SegmentRenderError(RuntimeError):
-    """单个片段渲染失败（重试穷尽后抛出）。
-
-    io=True 表示由文件占用类瞬时错误引起（杀软扫描 / 播放器预览 / 同步盘持锁）。
-    SafeRender 据此跳过 CPU 全量回退——回退路径会撞同一把锁，只会白烧时间。
-    """
-
-    def __init__(self, message: str, io: bool = False):
-        super().__init__(message)
-        self.io = io
+# SegmentRenderError 的家在 RenderIO（零依赖的 I/O 层）：SafeRender 要在 except 子句里
+# 引用它，若那个类是"在同一个 try 内部才导入进来的"，导入本身一失败，评估 except 子句
+# 就会抛 NameError 把原始错误盖掉。这里保留这个名字，历史调用方照旧能 import。
+from .RenderIO import SegmentRenderError  # noqa: E402,F401
 
 
 # ============================================================================
@@ -269,13 +295,13 @@ def render_info_segment(
         print(f"[QuadRenderer] 信息片段 {clip_id}: 无底图，纯背景渲染")
     elif bg_page:
         if full_image_path and os.path.exists(full_image_path):
-            overlay_image = _load_image_rgba(full_image_path, ctx.resolution)
+            overlay_image = _load_layer_or_missing(full_image_path, ctx.resolution)
             print(f"[QuadRenderer] 信息片段 {clip_id}: 使用默认底板图")
         else:
             print(f"[QuadRenderer] 信息片段 {clip_id}: 默认底板图不存在，跳过")
     else:  # 普通文本页
         if full_image_path and os.path.exists(full_image_path):
-            overlay_image = _load_image_rgba(full_image_path, ctx.resolution)
+            overlay_image = _load_layer_or_missing(full_image_path, ctx.resolution)
             print(f"[QuadRenderer] 信息片段 {clip_id}: 使用含文字底板")
         else:
             print(f"[QuadRenderer] 信息片段 {clip_id}: 含文字底板不存在，跳过")
@@ -307,13 +333,11 @@ def render_info_segment(
                 print(f"[QuadRenderer] 警告: BGM 文件不存在: {audio_path}")
                 audio_path = None
 
-        # 3. 音频响度均衡
-        volume_adjust_db = 0
-        if audio_path:
-            measured_rms = _measure_audio_rms(audio_path, 0, duration)
-            volume_adjust_db = max(-20.0, min(9.5, -20.0 - measured_rms))
-            if abs(volume_adjust_db) > 0.5:
-                print(f"[QuadRenderer] 音频均衡: {clip_id} 调整={volume_adjust_db:+.1f}dB")
+        # 3. 音频响度均衡：与经典路共用 measure_audio_gain_db（同一个目标电平 -20 dBFS、
+        # 同一对夹取边界 ±20/+9.542 dB），不再自己抄一份 9.5
+        volume_adjust_db = measure_audio_gain_db(audio_path, 0, duration) or 0.0
+        if abs(volume_adjust_db) > 0.01:
+            print(f"[QuadRenderer] 音频均衡: {clip_id} 调整={volume_adjust_db:+.2f}dB")
 
         placeholder_bg = np.zeros((ctx.resolution[1], ctx.resolution[0], 3), dtype=np.uint8)
 
@@ -367,14 +391,20 @@ def render_info_segment(
         print(f"[QuadRenderer] 信息片段渲染完成: {clip_id}")
         return {"status": "success", "info": f"渲染 {clip_id} 完成", "path": output_path}
 
+    except MissingClipInputError as e:
+        # 缺素材不是编码器故障：带着原因返回，由上层按"这一段失败"记账（与标准路一致），
+        # 不进重试、也不让整场中止
+        return {"status": "error", "info": str(e), "missing": True}
     except Exception as e:
         print(f"[QuadRenderer] Error: {traceback.format_exc()}")
         return {"status": "error", "info": f"渲染失败: {str(e)}",
                 "io": is_transient_lock_error(e)}
     finally:
         try:
-            if writer is not None:
-                writer.close()
+            if writer is not None and not writer.finalized:
+                # 成功路径已经在 try 里 close() 过了；走到这里说明是异常/取消在展开，
+                # 那就丢弃暂存——半截产物不该顶用成品名（对齐经典路的 .part 语义）
+                writer.discard()
         except Exception:
             pass
         try:
@@ -405,18 +435,15 @@ def render_video_segment(
     start_time = clip_config['start']
     darkness = ctx.style_config['darkness']
 
-    # 图像选择：优先 full_image（已含文字），否则 main_image（纯成绩图）
-    full_image_path = clip_config.get('full_image') or ''
-    main_image_path = clip_config.get('main_image') or ''
-    if full_image_path and os.path.exists(full_image_path):
-        overlay_image = _load_image_rgba(full_image_path, ctx.resolution)
-        print(f"[QuadRenderer] 视频片段 {song_name}: 使用 full_image（已含文字）")
-    elif main_image_path and os.path.exists(main_image_path):
-        overlay_image = _load_image_rgba(main_image_path, ctx.resolution)
-        print(f"[QuadRenderer] 视频片段 {song_name}: 使用 main_image（纯成绩图）")
-    else:
-        print(f"[QuadRenderer] 视频片段 {song_name}: 无有效图像，使用透明底板")
-        overlay_image = np.zeros((ctx.resolution[1], ctx.resolution[0], 4), dtype=np.uint8)
+    # 图像选择：优先 full_image（已含文字），否则 main_image（纯成绩图）。
+    # 判据与标准路共用 resolve_clip_board_image：两边都缺时那一段带着原因失败，
+    # 而不是静默用透明底板出一段"没有成绩板"的画面（旧写法两条路行为不同）。
+    overlay_image_path = resolve_clip_board_image(clip_config)
+    _full = (clip_config.get('full_image') or '').strip()
+    _is_full = bool(_full) and overlay_image_path == os.path.abspath(_full).replace('\\', '/')
+    print(f"[QuadRenderer] 视频片段 {song_name}: "
+          f"使用 {'full_image（已含文字）' if _is_full else 'main_image（纯成绩图）'}")
+    overlay_image = _load_layer_or_missing(overlay_image_path, ctx.resolution)
 
     print(f"[QuadRenderer] 正在渲染视频片段: {song_name} - {level_label} (时长: {duration}s)")
 
@@ -436,9 +463,8 @@ def render_video_segment(
         bg_reader = VideoFrameReader(bg_video_path)
 
         # 2. 谱面视频
-        video_path = clip_config.get('video') or ''
-        if not video_path or not os.path.exists(video_path):
-            raise ValueError(f"视频文件不存在: {video_path}")
+        # 谱面视频判据与标准路共用一份（缺素材时带着可操作原因失败，而不是 ValueError 触发重试）
+        video_path = resolve_clip_video_path(clip_config)
         video_reader = VideoFrameReader(video_path)
 
         # 3. 谱面视频位置与缩放（与 SegmentUtils 一致）
@@ -459,7 +485,13 @@ def render_video_segment(
         # 4. 音频（取自谱面视频，按 start 截取）
         audio_path = video_path
         audio_start = start_time
-        volume_adjust_db = 0
+        # 响度对齐：main 片段以前在这里写死 0 dB，而经典路对同一段算的是
+        # measure_audio_gain_db（实测真实存档 15 段里差 -10.1 ~ +1.1 dB，中位 -8.7）。
+        # 后果不止"GPU 片子偏响"：GPU 渲大部分 + 回退补渲几段时，同一支片子里
+        # 两种口径并存，电平在补渲边界上跳。两条路现在共用同一份判据。
+        volume_adjust_db = measure_audio_gain_db(audio_path, audio_start, duration) or 0.0
+        if abs(volume_adjust_db) > 0.01:
+            print(f"[QuadRenderer] 音频均衡: {song_name} 调整={volume_adjust_db:+.2f}dB")
 
         placeholder_bg = np.zeros((ctx.resolution[1], ctx.resolution[0], 3), dtype=np.uint8)
 
@@ -541,14 +573,20 @@ def render_video_segment(
         print(f"[QuadRenderer] 视频片段渲染完成: {song_name} - {level_label}")
         return {"status": "success", "info": f"渲染 {song_name} 完成", "path": output_path}
 
+    except MissingClipInputError as e:
+        # 缺素材不是编码器故障：带着原因返回，由上层按"这一段失败"记账（与标准路一致），
+        # 不进重试、也不让整场中止
+        return {"status": "error", "info": str(e), "missing": True}
     except Exception as e:
         print(f"[QuadRenderer] Error: {traceback.format_exc()}")
         return {"status": "error", "info": f"渲染失败: {str(e)}",
                 "io": is_transient_lock_error(e)}
     finally:
         try:
-            if writer is not None:
-                writer.close()
+            if writer is not None and not writer.finalized:
+                # 成功路径已经在 try 里 close() 过了；走到这里说明是异常/取消在展开，
+                # 那就丢弃暂存——半截产物不该顶用成品名（对齐经典路的 .part 语义）
+                writer.discard()
         except Exception:
             pass
         for rd in (bg_reader, video_reader):
@@ -601,16 +639,20 @@ def render_all_clips(
         video_fps = 60
         for cfg in (video_configs.get('main', []) or []):
             vpath = cfg.get('video') or ''
-            if vpath and os.path.exists(vpath):
-                try:
-                    cap = cv2.VideoCapture(vpath)
-                    probed = cap.get(cv2.CAP_PROP_FPS)
-                    cap.release()
-                    if probed and 1 < probed <= 120:
-                        video_fps = max(1, min(60, round(probed)))
-                        print(f"[QuadRenderer] 输出帧率跟随源视频: {video_fps}fps（{os.path.basename(vpath)}）")
-                except Exception as e:
-                    print(f"[QuadRenderer] 源帧率探测失败，回退 60fps: {e}")
+            # 旧写法这里少一个 continue：break 挂在 for 的层级上，于是整批只看 main[0]。
+            # 第一条恰好是页 4「缺失项留空」那种配置时，探测根本不执行，整批按 60fps 渲
+            # ——30fps 源的翻倍成本，而"跟随源帧率"这条优化一声不响地没生效。
+            if not (vpath and os.path.exists(vpath)):
+                continue
+            try:
+                cap = cv2.VideoCapture(vpath)
+                probed = cap.get(cv2.CAP_PROP_FPS)
+                cap.release()
+                if probed and 1 < probed <= 120:
+                    video_fps = max(1, min(60, round(probed)))
+                    print(f"[QuadRenderer] 输出帧率跟随源视频: {video_fps}fps（{os.path.basename(vpath)}）")
+            except Exception as e:
+                print(f"[QuadRenderer] 源帧率探测失败，回退 60fps: {e}")
             break
 
     # 写回探测结果：SafeRender 的 CPU 回退路径要用同一个 fps 拼接（片段与
@@ -643,6 +685,37 @@ def render_all_clips(
                 pass
     clip_idx = 0
     skipped = 0   # 因「文件已存在且未勾选强制重渲」而跳过的片段数
+    # 缺素材的段：带着原因失败、其余照跑（判据与文案都来自标准路的 resolve_*）
+    failed: list = []
+
+    # 指纹与清单：判据走 utils.SegmentUtils.clip_is_fresh，与经典路**同一份**。
+    # 以前这里只有 `is_artifact_valid and not force_render`（文件在就算渲过），
+    # 于是换过分辨率/码率/素材之后 GPU 路照旧沿用上一轮的片段，而经典路会重渲——
+    # 两条路对同一片段的取舍分叉，成片里混进旧内容。GPU 路不烘焙转场，故 bake_fades=False。
+    from utils.SegmentUtils import (global_render_signature, clip_render_signature,
+                                    read_render_manifest, write_render_manifest,
+                                    clip_is_fresh, LEGACY_SIGNATURE)
+    global_sig = global_render_signature(encoder_param, style_configs, trans_param,
+                                         bake_fades=False)
+    _manifest = read_render_manifest(video_output_path)
+    clip_sigs: dict = {}
+    _ci = 0
+    for _cfgs in (intro_configs, main_configs, ending_configs):
+        for _c in _cfgs:
+            clip_sigs[f"{_ci}_{_c['id']}.mp4"] = clip_render_signature(_c)
+            _ci += 1
+    kept_signatures: dict = {}
+
+    def _keep_and_flush(output_file: str, reused: bool):
+        """记下这段的指纹并落盘。逐段写而不等整场结束：取消或中途失败时，
+        已经渲好的那些片段如果没有指纹，下一轮会连它们一起重渲（几十段白编）。"""
+        name = os.path.basename(output_file)
+        if reused:
+            kept_signatures[name] = ((_manifest or {}).get('clips') or {}).get(
+                name, LEGACY_SIGNATURE)
+        else:
+            kept_signatures[name] = clip_sigs.get(name, LEGACY_SIGNATURE)
+        write_render_manifest(video_output_path, global_sig, dict(kept_signatures))
 
     def make_cb(clip_name):
         if progress_callback is None:
@@ -662,6 +735,15 @@ def render_all_clips(
                                bg_start_offset=bg_start_offset)
             if result.get('status') == 'success':
                 return
+            # 缺素材不重试：重试一百次它也还是缺。带着标准路那段可操作文案抛出去，
+            # 由 render_all_clips 按"这一段失败"记账、其余照跑（与经典路同构）。
+            if result.get('missing'):
+                raise MissingClipInputError(str(result.get('info')))
+            # 取消先过检查点：终止登记的 ffmpeg 子进程会让写帧那边先撞上
+            # BrokenPipeError，它的形状和"编码器失败"一模一样。不在这里判一下，
+            # 就会烧掉 3 次重试、再抛 SegmentRenderError 让 SafeRender 回退 CPU
+            # 全量重渲——实测就是这个现象：用户点了取消，任务却在 CPU 上继续跑完。
+            render_checkpoint()
             last = result
             info = str(result.get('info', ''))
             # CUDA 上下文一旦死亡，重试只会原地失败：先重建运行时再谈重试。
@@ -689,14 +771,23 @@ def render_all_clips(
         # 进度展示用可读名（标签页标题/任务浮窗），ID 只用于落盘命名
         display_name = f"开头第 {page_no} 页"
         output_file = os.path.join(video_output_path, f"{clip_idx}_{clip_name}.mp4")
-        if is_artifact_valid(output_file) and not force_render:
+        if clip_is_fresh(output_file, force_render=force_render, global_sig=global_sig,
+                         manifest=_manifest, clip_sigs=clip_sigs):
             print(f"[QuadRenderer] 跳过已存在: {display_name}")
+            _keep_and_flush(output_file, reused=True)
             bg_elapsed += float(config.get('duration', 0))
             clip_idx += 1
             skipped += 1
             continue
-        _render_with_retry(render_info_segment, config, output_file, display_name, "开场",
-                           bg_start_offset=bg_elapsed)
+        try:
+            _render_with_retry(render_info_segment, config, output_file, display_name, "开场",
+                               bg_start_offset=bg_elapsed)
+        except MissingClipInputError as e:
+            failed.append(_failed_entry(output_file, e))
+            bg_elapsed += float(config.get('duration', 0))
+            clip_idx += 1
+            continue
+        _keep_and_flush(output_file, reused=False)
         bg_elapsed += float(config.get('duration', 0))
         clip_idx += 1
 
@@ -705,14 +796,23 @@ def render_all_clips(
         clip_name = config['id']
         display_name = f"{config.get('song_name', clip_name)} [{REVERSE_LEVEL_LABELS[config['level_index']]}]"
         output_file = os.path.join(video_output_path, f"{clip_idx}_{clip_name}.mp4")
-        if is_artifact_valid(output_file) and not force_render:
+        if clip_is_fresh(output_file, force_render=force_render, global_sig=global_sig,
+                         manifest=_manifest, clip_sigs=clip_sigs):
             print(f"[QuadRenderer] 跳过已存在: {display_name}")
+            _keep_and_flush(output_file, reused=True)
             bg_elapsed += float(config.get('duration', 0))
             clip_idx += 1
             skipped += 1
             continue
-        _render_with_retry(render_video_segment, config, output_file, display_name, "主",
-                           bg_start_offset=bg_elapsed)
+        try:
+            _render_with_retry(render_video_segment, config, output_file, display_name, "主",
+                               bg_start_offset=bg_elapsed)
+        except MissingClipInputError as e:
+            failed.append(_failed_entry(output_file, e))
+            bg_elapsed += float(config.get('duration', 0))
+            clip_idx += 1
+            continue
+        _keep_and_flush(output_file, reused=False)
         bg_elapsed += float(config.get('duration', 0))
         clip_idx += 1
 
@@ -721,20 +821,47 @@ def render_all_clips(
         clip_name = config['id']
         display_name = f"结尾第 {page_no} 页"
         output_file = os.path.join(video_output_path, f"{clip_idx}_{clip_name}.mp4")
-        if is_artifact_valid(output_file) and not force_render:
+        if clip_is_fresh(output_file, force_render=force_render, global_sig=global_sig,
+                         manifest=_manifest, clip_sigs=clip_sigs):
             print(f"[QuadRenderer] 跳过已存在: {display_name}")
+            _keep_and_flush(output_file, reused=True)
             bg_elapsed += float(config.get('duration', 0))
             clip_idx += 1
             skipped += 1
             continue
-        _render_with_retry(render_info_segment, config, output_file, display_name, "结尾",
-                           bg_start_offset=bg_elapsed)
+        try:
+            _render_with_retry(render_info_segment, config, output_file, display_name, "结尾",
+                               bg_start_offset=bg_elapsed)
+        except MissingClipInputError as e:
+            failed.append(_failed_entry(output_file, e))
+            bg_elapsed += float(config.get('duration', 0))
+            clip_idx += 1
+            continue
+        _keep_and_flush(output_file, reused=False)
         bg_elapsed += float(config.get('duration', 0))
         clip_idx += 1
 
     # 区分「真渲染」与「全部跳过」：后者会让整个任务在 1 秒内返回（没有任何
     # 逐帧进度），页面侧看起来就像"渲染状态窗口坏了"。如实上报，便于排查。
-    rendered = clip_idx - skipped
+    rendered = clip_idx - skipped - len(failed)
+
+    # 缺素材的段：其余照跑（与标准路同构），但整场结果必须带着失败清单返回。
+    # 以前一段空 video 会抛 ValueError → 白烧 3 次重试 → 整场中止，已渲好的全浪费。
+    if failed:
+        print(f"[QuadRenderer] 警告：{len(failed)} 个片段因输入素材不可用没有产出，"
+              f"拼接出的完整视频会缺这些段落：")
+        for _one in failed[:12]:
+            print(f"    - {_one}")
+        if len(failed) > 12:
+            print(f"    … 其余 {len(failed) - 12} 段从略")
+        return {
+            "status": "error",
+            "info": (f"{len(failed)} 个片段缺输入素材（已渲好 {rendered} 段、"
+                     f"沿用 {skipped} 段）：" + "；".join(failed[:3])
+                     + ("…（完整清单见上方输出）" if len(failed) > 3 else "")),
+            "failed": failed, "rendered": rendered, "skipped": skipped,
+        }
+
     if rendered == 0:
         print(f"[QuadRenderer] 全部 {clip_idx} 个片段均已存在，未重新渲染"
               f"（如需重渲请勾选「强制重新渲染」）")

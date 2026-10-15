@@ -16,7 +16,6 @@ render_full_video_safe(...)。
 
 import os
 import queue as _queue
-import subprocess
 import threading
 import time
 import traceback
@@ -27,7 +26,8 @@ from typing import Optional, Set
 from utils.PathUtils import TEMP_GENERATED_DIR
 
 from .RenderIO import (get_ffmpeg_binary, detect_hw_encoder, retry_on_lock,
-                       is_transient_lock_error)
+                       is_transient_lock_error, run_owned_complete,
+                       get_active_render_job, SegmentRenderError)
 
 
 def _normalize_video_audio(input_path: str, output_path: str):
@@ -36,6 +36,11 @@ def _normalize_video_audio(input_path: str, output_path: str):
     节选自 utils/VideoUtils-mgv.py 的 _normalize_video_audio。
     成品名被其他程序占用（常见：旧成片还在播放器里开着）时退让重试；
     重试穷尽后抛出占用类异常，由调用方判定「不回退 CPU、直接报可操作错误」。
+
+    子进程必须登记给当前 job：这一步是整场渲染的最后一段，而它以前用的是裸
+    `subprocess.run`——Popen 归 run() 私有，cancel_render 手里没有句柄，
+    用户在「音频处理」阶段点取消只能等整片 loudnorm 自己跑完。这条线路其他地方
+    早就为取消改用了登记通道（见 IslandConcat._run_subprocess_checked）。
     """
     if os.path.exists(output_path):
         retry_on_lock(lambda: os.remove(output_path),
@@ -50,8 +55,18 @@ def _normalize_video_audio(input_path: str, output_path: str):
             '-ar', '48000',
             output_path
         ]
-        subprocess.run(cmd, check=True)
+        rc, _out, err = run_owned_complete(cmd)
+        job = get_active_render_job()
+        if job is not None:
+            # 被取消终止的 loudnorm 返回码非零，形状和"均衡失败"一模一样：
+            # 不先过这道检查点，取消会把下面那个 os.replace 执行掉——把半成品
+            # 直接挂上成品名，还报"已跳过音频均衡"。
+            job.check_cancelled()
+        if rc != 0:
+            raise RuntimeError(f"ffmpeg 返回码 {rc}：{(err or '').strip()[-300:]}")
         print(f"[SafeRender] 音频均衡化完成: {output_path}")
+    except RenderCancelled:
+        raise
     except Exception as e:
         print(f"[SafeRender] Warning: 音频均衡化失败 ({e})，尝试直接使用拼接结果")
         # 均衡失败也要把拼接结果落到成品名上；目标被占用时重试后仍失败则上抛，
@@ -161,6 +176,27 @@ class RenderStatus:
 RENDER_STATUS = RenderStatus()
 
 
+# GPU 可用性对页面暴露的只读视图。**这里绝不做 CUDA 初始化**：Quadrants 的上下文有线程
+# 亲和性（在哪个线程 init 就在哪个线程用），页面脚本线程每次刷新都是新线程，在这里探针
+# 会把上下文建在错误的线程上——实测就是「渲染 4-5 个片段后死亡」那条事故的成因。
+# 所以页面只看两件便宜的事：发行包里装没装齐（find_spec 不执行 import，微秒级），
+# 以及工作线程上一次渲染的探针结果。
+_gpu_probe_state = {'ok': None, 'reason': ''}
+
+
+def gpu_preflight() -> tuple:
+    """返回 (能不能走 GPU 路, 不能走的原因)。用于决定实验按钮灰化与提示文案。"""
+    import importlib.util
+    missing = [name for name in ('quadrants', 'pydantic', 'cffi')
+               if importlib.util.find_spec(name) is None]
+    if missing:
+        return False, (f"发行包缺少 {'、'.join(missing)}（quadrants 的传递依赖），"
+                       "GPU 路起不来；现在点渲染会直接走 CPU 路径")
+    if _gpu_probe_state['ok'] is False:
+        return False, _gpu_probe_state['reason'] or "上次渲染的 GPU 探针失败，已回退 CPU"
+    return True, ""
+
+
 # ============================================================================
 # 常驻渲染工作线程
 # ============================================================================
@@ -175,6 +211,8 @@ RENDER_STATUS = RenderStatus()
 _render_queue: "_queue.Queue" = _queue.Queue()
 _render_worker_started = False
 _worker_lock = threading.Lock()
+# 提交侧互斥：保证「查 running → 置 running → 入队」是原子的（见 submit_render 文档）
+_submit_lock = threading.Lock()
 
 
 def _ensure_render_worker():
@@ -190,13 +228,22 @@ def _ensure_render_worker():
                 if job is None:
                     return
                 try:
-                    render_full_video_safe(**job)
+                    _res = render_full_video_safe(**job)
                 except RenderCancelled as e:
                     RENDER_STATUS.phase = "已取消"
                     RENDER_STATUS.error = str(e)
-                except Exception:
+                except Exception as e:
                     # render_full_video_safe 内部已兜底，这里只防线程级意外
                     traceback.print_exc()
+                    RENDER_STATUS.phase = "失败"
+                    RENDER_STATUS.error = RENDER_STATUS.error or f"{type(e).__name__}: {e}"
+                else:
+                    # 返回值以前整个丢掉：像「已有渲染在进行中」这类"函数正常返回、
+                    # 但没成交片"的结论只有控制台看得到，浮窗那边停在初始化状态就被掐掉。
+                    if isinstance(_res, dict) and _res.get('status') == 'error':
+                        RENDER_STATUS.phase = "失败"
+                        if _res.get('info'):
+                            RENDER_STATUS.error = str(_res['info'])
                 finally:
                     RENDER_STATUS.running = False
                     RENDER_STATUS.end_ts = time.time()
@@ -211,39 +258,56 @@ def _ensure_render_worker():
                         _vo = os.path.abspath(job.get('video_output_path', '') or '')
                         if not (_vo and (_vo == _tg or _vo.startswith(_tg + os.sep))):
                             import shutil
-                            shutil.rmtree(_tg, ignore_errors=True)
+                            # 刻意不用 ignore_errors=True：ffmpeg 还握着句柄时它会把失败
+                            # 抹平成"清掉了"，audio_unify 的旧副本留下次渲染去撞，而控制台
+                            # 一声不响——正是页 6 那版 cleanup_after_render 已修过的静默事实。
+                            try:
+                                # 目录本来就不存在是正常情况（这批渲染没产生临时产物），
+                                # 不该报"清理失败"——只报真的清不掉。
+                                if os.path.isdir(_tg):
+                                    shutil.rmtree(_tg)
+                            except Exception as e:
+                                print(f"[SafeRender] 清理临时渲染目录失败（不阻断收尾）："
+                                      f"{type(e).__name__}: {e}｜目录：{_tg}")
                             os.makedirs(_tg, exist_ok=True)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[SafeRender] 收尾清理没执行（不阻断）：{type(e).__name__}: {e}")
 
         threading.Thread(target=_worker_loop, name="quad-render-worker", daemon=True).start()
         _render_worker_started = True
 
 
 def submit_render(**kwargs) -> bool:
-    """提交渲染任务到常驻工作线程（非阻塞）。"""
-    if RENDER_STATUS.running:
-        return False
-    _ensure_render_worker()
-    job = RenderJob(uuid.uuid4().hex)
-    kwargs['_render_job'] = job
-    RENDER_STATUS.running = True
-    RENDER_STATUS.phase = "初始化"
-    RENDER_STATUS.backend = ""
-    RENDER_STATUS.error = ""
-    RENDER_STATUS.note = ""
-    RENDER_STATUS.cancel_requested = False
-    RENDER_STATUS.job_id = job.job_id
-    RENDER_STATUS.job = job
-    RENDER_STATUS.clip_idx = 0
-    RENDER_STATUS.total_clips = 0
-    RENDER_STATUS.frame = 0
-    RENDER_STATUS.total_frames = 0
-    RENDER_STATUS.clip_name = ""  # 清掉上一任务的残留名，避免新任务初始化窗口显示旧片段
-    RENDER_STATUS.start_ts = time.time()
-    RENDER_STATUS.end_ts = 0.0
-    _render_queue.put(dict(kwargs))
-    return True
+    """提交渲染任务到常驻工作线程（非阻塞）。
+
+    check-then-set 必须整个放进锁里。以前 `if RENDER_STATUS.running: return False`
+    和后面的置 True 之间没有互斥，两个页签几乎同时点会双双通过检查：第二个任务
+    排进队列，而第一个任务收尾的 finally 把 running 复位成 False——于是第二个任务
+    在"界面认为没在跑"的状态下继续渲染，进度浮窗和「取消当前任务」都看不见它。
+    """
+    with _submit_lock:
+        if RENDER_STATUS.running:
+            return False
+        _ensure_render_worker()
+        job = RenderJob(uuid.uuid4().hex)
+        kwargs['_render_job'] = job
+        RENDER_STATUS.running = True
+        RENDER_STATUS.phase = "初始化"
+        RENDER_STATUS.backend = ""
+        RENDER_STATUS.error = ""
+        RENDER_STATUS.note = ""
+        RENDER_STATUS.cancel_requested = False
+        RENDER_STATUS.job_id = job.job_id
+        RENDER_STATUS.job = job
+        RENDER_STATUS.clip_idx = 0
+        RENDER_STATUS.total_clips = 0
+        RENDER_STATUS.frame = 0
+        RENDER_STATUS.total_frames = 0
+        RENDER_STATUS.clip_name = ""  # 清掉上一任务的残留名，避免新任务初始化窗口显示旧片段
+        RENDER_STATUS.start_ts = time.time()
+        RENDER_STATUS.end_ts = 0.0
+        _render_queue.put(dict(kwargs))
+        return True
 
 
 def cancel_render(job_id: str) -> bool:
@@ -424,23 +488,38 @@ def _render_full_video_safe_impl(
 
     # ========== 1) 优先尝试 Quadrants GPU 加速 ==========
     try:
-        from .QuadAccel import ensure_healthy_context, reinit_quad
-        from .QuadRenderer import render_all_clips, SegmentRenderError
+        from .QuadAccel import ensure_healthy_context, reinit_quad, quad_backend
+        # SegmentRenderError 走模块级导入（在 RenderIO 里）：它被下面的 except 子句引用，
+        # 若在这个 try 内部才导入，导入本身失败时评估 except 子句会抛 NameError 盖掉原错误
+        from .QuadRenderer import render_all_clips
         from .IslandConcat import combine_full_video_xfade_islands
 
         # 渲染开始前先做健康探针：上一轮渲染结束后上下文可能在空闲窗口死亡
         # （实测：第一次渲染正常，第二次渲染 init 即 INVALID_CONTEXT）。探针
         # 失败时在仍在回复期的上下文上尝试重建；重建也失败才回退 CPU。
         if ensure_healthy_context():
+            _gpu_probe_state['ok'] = True
+            _gpu_probe_state['reason'] = ''
+            # 探针通过 ≠ 在 GPU 上跑：本机没有可用 CUDA 设备时 init_quad 会回退 qd.cpu
+            # （实测独显休眠后就是这个状态，qd.init(qd.gpu) 报 CUDA_ERROR_NO_DEVICE）。
+            # 状态与返回值都说真后端，别让进度条写着「渲染片段（GPU）」而全场在 CPU 上编。
+            _on_gpu = quad_backend() == 'gpu'
+            _q_label = 'Quadrants GPU' if _on_gpu else 'Quadrants（CPU 后端）'
             print("=" * 60)
-            print("[SafeRender] 使用 Quadrants GPU 加速渲染")
+            print(f"[SafeRender] 使用 {_q_label} 加速渲染")
             print("=" * 60)
-            RENDER_STATUS.phase = "渲染片段（GPU）"
+            RENDER_STATUS.phase = f"渲染片段（{'GPU' if _on_gpu else 'Quadrants·CPU 后端'}）"
             res = render_all_clips(
                 video_configs, video_output_path, encoder_param,
                 trans_param, style_config, force_render, _status_cb,
             )
             if res.get('status') == 'error':
+                if res.get('failed'):
+                    # 缺输入素材：回退 CPU 也只是把同一段再缺一次（两条路判据与文案同源）。
+                    # 已渲好的其余片段都带着指纹留在盘上，补齐素材后重跑会自动续上。
+                    # 走 missing 通道而不是 io——两者都"不回退 CPU"，但给用户的结论不同。
+                    raise SegmentRenderError(str(res.get('info') or '片段缺输入素材'),
+                                             missing=True)
                 raise RuntimeError(res.get('info'))
 
             # 如实记录片段渲染结果：全部已存在时会 0 秒返回「未渲染任何片段」，
@@ -467,7 +546,7 @@ def _render_full_video_safe_impl(
                 print(f"[SafeRender] Quadrants 成片完成: {final_path}")
 
             RENDER_STATUS.phase = "完成"
-            RENDER_STATUS.backend = "quadrants"
+            RENDER_STATUS.backend = "quadrants" if _on_gpu else "quadrants_cpu"
             if progress_callback:
                 progress_callback(RENDER_STATUS.total_clips, RENDER_STATUS.total_clips,
                                   RENDER_STATUS.total_frames, RENDER_STATUS.total_frames,
@@ -481,15 +560,33 @@ def _render_full_video_safe_impl(
                 reinit_quad()
             except Exception as e:
                 print(f"[SafeRender] Warning: 渲染后重建运行时失败（不影响本次成片）: {e}")
-            return {"status": "success", "info": "Quadrants GPU 加速合成成功", "backend": "quadrants"}
+            return {"status": "success",
+                    "info": f"{_q_label} 加速合成成功",
+                    "backend": "quadrants" if _on_gpu else "quadrants_cpu"}
         else:
             print("[SafeRender] Quadrants 不可用，回退 SegmentUtils")
+            _gpu_probe_state['ok'] = False
+            _gpu_probe_state['reason'] = (
+                "本次渲染的 GPU 健康探针失败（CUDA 上下文起不来或已失效），已回退 CPU 路径；"
+                "再试一次通常会在渲染前重建上下文")
     except RenderCancelled as e:
         RENDER_STATUS.phase = "已取消"
         RENDER_STATUS.error = str(e)
         RENDER_STATUS.cancel_requested = True
         raise
     except SegmentRenderError as e:
+        if e.missing:
+            # 缺素材与"文件被占用"要的是两种动作：一个回页面补素材，一个关掉占用程序。
+            # 以前两者共用 io 通道，给用户的那句是「关闭占用该文件的程序（播放器/同步盘/
+            # 杀毒扫描）」——对缺谱面视频的人完全指错方向。
+            RENDER_STATUS.phase = "失败"
+            RENDER_STATUS.error = str(e)
+            print(f"[SafeRender] 片段缺输入素材，跳过 CPU 回退（回退也只是把同一段再缺一次）: {e}")
+            return {
+                "status": "error", "backend": "none",
+                "info": f"{e} —— 已跳过 CPU 回退（同一段在经典路里也照样缺）。"
+                        f"按上面点名的页面补齐素材后重新渲染即可，已完成片段会保留。",
+            }
         if e.io:
             # 文件占用类错误回退 CPU 也会撞同一把锁，全量重渲只是白烧几分钟：
             # 直接报可操作错误。已成功渲染的片段保留（下次运行按存在性跳过）。

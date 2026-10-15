@@ -25,6 +25,27 @@ import cv2
 import numpy as np
 
 
+class SegmentRenderError(RuntimeError):
+    """单个片段渲染失败（重试穷尽后抛出）。
+
+    放在 RenderIO 而不是 QuadRenderer：**SafeRender 在 `except` 子句里要用它**，
+    而它原先是在那个 try 块内部才 `from .QuadRenderer import` 进来的——万一那次导入
+    本身失败，Python 去评估 `except SegmentRenderError` 时会抛 NameError，把原始错误
+    整个盖掉。异常类型属于"两条路之间的协议"，家该安在零依赖的 I/O 层。
+
+    io=True 表示由文件占用类瞬时错误引起（杀软扫描 / 播放器预览 / 同步盘持锁）。
+    missing=True 表示配置本身带缺口（谱面视频/成绩板缺文件或解不出来）。
+    两者都让 SafeRender 跳过 CPU 全量回退——回退路径要么撞同一把锁，要么把同一段
+    再缺一次，只会白烧时间。但**结论文案必须分开**：给缺素材的人报"关闭占用该文件的
+    程序"是误导，那一段真正要做的是回【搜索、检查和下载视频】/【生成 Best50 图】页。
+    """
+
+    def __init__(self, message: str, io: bool = False, missing: bool = False):
+        super().__init__(message)
+        self.io = io
+        self.missing = missing
+
+
 # 当前渲染任务的轻量协议钩子（由 SafeRender 注入，避免 RenderIO 反向导入它）。
 _ACTIVE_RENDER_JOB = None
 
@@ -258,8 +279,12 @@ def run_owned_command(cmd: list, **kwargs):
             job.unregister_child(process)
 
 
-def run_owned_complete(cmd: list, encoding: str = 'utf-8'):
+def run_owned_complete(cmd: list, encoding: Optional[str] = 'utf-8'):
     """run_owned_command 的"要返回码 + 两条流"版本，供 SegmentUtils 编码用。
+
+    encoding 必须允许 None：IslandConcat 三处调用**刻意**传 None 走本机 locale，
+    否则 Windows 那条"另一个程序正在使用此文件"的中文提示会变乱码而漏掉
+    `_is_lockish_text`（标注成 str 时 Pylance 直接报"None 不可分配给 str"）。
 
     那边原来写的是 `subprocess.run(check=True, capture_output=True)`：Popen 是 run() 内部
     私有的，`cancel_render` 手里没有进程对象，只能等这条 ffmpeg 自己编完——**取消点了没反应**
@@ -519,7 +544,10 @@ class FFmpegWriter:
                 af_filters.append(f"atrim=start={audio_start}{dur_part}")
                 af_filters.append("asetpts=PTS-STARTPTS")
 
-            if abs(volume_adjust_db) > 0.5:
+            # 施加门限与经典路 _build_effects 对齐（>0.01 dB）。旧的 >0.5 会让两路
+            # 在 0.01~0.5 dB 这段区间里给出不同产物——量级虽小，但正是"两条路对同一段
+            # 素材取舍分叉"那一类，混用时无声累积。
+            if abs(volume_adjust_db) > 0.01:
                 af_filters.append(f"volume={volume_adjust_db}dB")
 
             if audio_fade_in > 0:
@@ -528,13 +556,25 @@ class FFmpegWriter:
                 fade_out_start = max(0, audio_duration - audio_fade_out)
                 af_filters.append(f"afade=t=out:st={fade_out_start:.3f}:d={audio_fade_out}")
 
+            # 音频源比这段要的时长短时（谱面视频被拉成更长片段、或下载到的段落不够长），
+            # `-shortest` 会在音频到尾的那一刻就把容器收尾：stdin 随即关闭，还在喂帧的写侧
+            # 撞 BrokenPipeError。实测 1 秒源配 8 秒请求 → 第 49 帧（≈1.63s）炸，上层报成
+            # "编码器失败"，重试 3 次再回退 CPU。所以有明确 audio_duration 时把音频补到那个
+            # 长度，收尾条件交给管道（视频喂完）而不是两个输入各自的长度。
+            pad_to = float(audio_duration) if audio_duration else 0.0
+            if pad_to > 0:
+                af_filters.append(f"apad=whole_dur={pad_to:.3f}")
+
             if af_filters:
                 cmd += ['-filter_complex', f'[1:a]{",".join(af_filters)}[a]']
                 cmd += ['-map', '0:v', '-map', '[a]']
             else:
                 cmd += ['-map', '0:v', '-map', '1:a']
 
-            cmd += ['-shortest']
+            if pad_to <= 0:
+                # 没有明确时长可补齐时保持旧行为（anullsrc 那条分支同理：无限音轨必须靠
+                # -shortest 收尾，去掉它会写不停）
+                cmd += ['-shortest']
         else:
             # 无音频源时生成静音音轨，确保输出始终含音频流（xfade 拼接需要）
             cmd += ['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000']
@@ -578,7 +618,56 @@ class FFmpegWriter:
             frame = np.ascontiguousarray(frame, dtype=np.uint8)
             self.process.stdin.write(frame.reshape(-1).data)
 
+    def discard(self):
+        """异常/取消展开时用：终止编码器并删掉暂存文件，**不**把半成品挂上成品名。
+
+        原先两条渲染路的收尾语义不一致：经典路是 `.part` + `os.replace`（取消就丢暂存），
+        而这里的 `finally: writer.close()` 会关掉 stdin，让 ffmpeg **正常收尾并返回 0**，
+        于是把一段被截断的产物挂上成品名留下（实测：请求 8 秒，产物 1.04 秒、非零字节）。
+        """
+        if self._finalized:
+            return
+        self._finalized = True
+        try:
+            if self.process.stdin:
+                try:
+                    self.process.stdin.close()
+                except Exception:
+                    pass
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=2)
+                except Exception:
+                    self.process.kill()
+        except Exception as e:
+            print(f"[FFmpegWriter] 终止编码器失败（不影响丢弃暂存）: {e}")
+        try:
+            if os.path.exists(self._tmp_output_path):
+                # 刚 terminate 掉的 ffmpeg 句柄可能还要几十毫秒才释放（实测 WinError 32），
+                # 退让几次；真删不掉也只是留一个 .quadtmp（不带 .mp4，拼接扫描收不到它，
+                # 且 30 分钟以上的旧 tmp 会被 render_all_clips 的清理顺带收掉）。
+                retry_on_lock(lambda: os.remove(self._tmp_output_path),
+                              what=f"删除暂存 {os.path.basename(self._tmp_output_path)}",
+                              attempts=4, base_delay=0.1)
+        except OSError as e:
+            print(f"[FFmpegWriter] 暂存文件没删掉（不阻断收尾）：{e}"
+                  f"｜{self._tmp_output_path}")
+
+    @property
+    def finalized(self) -> bool:
+        return self._finalized
+
     def close(self):
+        """收尾并原子替换成品名。**任何一步没成都必须抛**，不能只 print。
+
+        旧写法在 `returncode != 0` 时打印三行然后 return：调用方（render_info_segment /
+        render_video_segment）的成功判据就是"close() 没抛异常"，于是一段编码失败的片段
+        被记成 success，`_keep_and_flush` 还把指纹写进清单。两个实测后果：清单里出现
+        磁盘上没有的文件，拼接阶段才报"渲染清单里有 N 个片段不在磁盘上"（错误定位到拼接
+        而不是真凶那一段）；勾了「覆盖已存在的视频」时旧文件还躺在原位，陈旧内容被当成
+        新渲静默进成片。经典路一直是两道判据（返回码非零即抛 + 产物非零字节），这里补齐。
+        """
         if self._finalized:
             return
         self._finalized = True
@@ -587,11 +676,14 @@ class FFmpegWriter:
         self.process.wait()
         if self.process.returncode != 0:
             stderr = "\n".join(self._stderr_tail)
-            print(f"[FFmpegWriter] Warning: FFmpeg 返回码 {self.process.returncode}")
+            print(f"[FFmpegWriter] FFmpeg 返回码 {self.process.returncode}")
             if stderr:
                 print(f"[FFmpegWriter] stderr: {stderr[:800]}")
             print(f"[FFmpegWriter] 失败输出保留在: {self._tmp_output_path}")
-            return
+            raise RuntimeError(
+                "FFmpeg 编码失败（返回码 "
+                f"{self.process.returncode}）：{(stderr[-400:] if stderr else '无 stderr 输出')}"
+                f"｜暂存保留在 {os.path.basename(self._tmp_output_path)}")
         # 编码成功：临时产物原子替换为成品名；成品被占用时退让重试
         try:
             retry_on_lock(
@@ -601,6 +693,14 @@ class FFmpegWriter:
             print(f"[FFmpegWriter] 成品替换失败（目标可能正被其他程序占用），"
                   f"完整输出保留在: {self._tmp_output_path}")
             raise
+        # 返回码 0 不等于产物可用：0 字节的壳子会被"文件在就算渲过"的判据收进清单
+        try:
+            produced = os.path.getsize(self._final_output_path)
+        except OSError:
+            produced = 0
+        if produced <= 0:
+            raise RuntimeError(f"FFmpeg 返回码 0 但产物是 0 字节/不存在："
+                               f"{self._final_output_path}")
 
     def __del__(self):
         try:
@@ -613,8 +713,22 @@ class FFmpegWriter:
 # 图像加载辅助
 # ============================================================================
 
+class ImageDecodeError(RuntimeError):
+    """图片在磁盘上（或压根不在），但 cv2 解不出来。
+
+    单独一个类型是为了让调用方把它归到"这一段的输入不可用"那条通道里，
+    而不是"编码器失败"——经典路遇到同样的文件是让 ffmpeg 打不开输入、
+    这一段带着原因失败，其余照跑。
+    """
+
+
 def _load_image_rgba(path: str, target_size: tuple = None) -> np.ndarray:
-    """加载图片为 RGBA numpy 数组（target_size=(w,h)）。失败返回占位透明图。"""
+    """加载图片为 RGBA numpy 数组（target_size=(w,h)）。读不出来就抛 ImageDecodeError。
+
+    旧写法失败时返回一张**全透明占位图**继续渲：产物是一段没有成绩板的画面，
+    而上层判据是"没抛异常就是成功"，于是照常写指纹、照常拼进成片、界面显示
+    「渲染完成」——降级只留在控制台里（而 start.bat 之外启动的用户常常没有控制台）。
+    """
     img = None
     for attempt in range(4):
         img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
@@ -625,10 +739,8 @@ def _load_image_rgba(path: str, target_size: tuple = None) -> np.ndarray:
         # 文件存在却读不出：多半被扫描/同步短暂持锁，退让后重试
         time.sleep(0.2 * (attempt + 1))
     if img is None:
-        print(f"[RenderIO] 图片读取失败，返回占位数据: {path}")
-        if target_size:
-            return np.zeros((target_size[1], target_size[0], 4), dtype=np.uint8)
-        return np.zeros((1080, 1920, 4), dtype=np.uint8)
+        why = "文件不存在" if not os.path.exists(path) else "存在但解码失败（被占用或不是有效图片）"
+        raise ImageDecodeError(f"图片不可用（{why}：{path}）")
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
     elif img.shape[2] == 3:

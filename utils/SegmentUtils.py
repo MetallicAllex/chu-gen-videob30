@@ -59,6 +59,36 @@ class MissingClipInputError(ValueError):
     """
 
 
+def resolve_clip_video_path(clip_config: dict) -> str:
+    """谱面视频路径的唯一判据，**两条渲染路共用**。
+
+    以前 Quadrants 自己判了一遍，缺素材时抛 `ValueError("视频文件不存在: ")`——文案没有指引、
+    还会重试 3 次，最后 `SegmentRenderError` 让整场中止；而标准路只让那一段带着原因失败，其余照跑。
+    现在两边都走这里：同一个异常类型、同一段可操作文案。
+    """
+    video = (clip_config.get('video') or '').strip()
+    if video and os.path.exists(video):
+        return os.path.abspath(video).replace('\\', '/')
+    raise MissingClipInputError(
+        f"谱面视频不可用（video 字段是空路径或文件不存在：{video or '（空）'}）"
+        "—— 到【搜索、检查和下载视频】页补齐，或把视频按 曲ID-难度.mp4 放进 "
+        "videos/downloads 后重新生成配置")
+
+
+def resolve_clip_board_image(clip_config: dict) -> str:
+    """成绩板图（full_image 优先，否则 main_image）的唯一判据，两条路共用。
+    缺失就报缺失，别拼一条打不开的命令、也别静默用透明底板出一段没有成绩板的画面。"""
+    full_image = (clip_config.get('full_image') or '').strip()
+    main_image = (clip_config.get('main_image') or '').strip()
+    for cand in (full_image, main_image):
+        if cand and os.path.exists(cand):
+            return os.path.abspath(cand).replace('\\', '/')
+    raise MissingClipInputError(
+        "成绩板图片不可用（main_image 与 full_image 都指向不存在的文件："
+        f"{main_image or '（空）'} ｜ {full_image or '（空）'}）"
+        "—— 到【生成 Best50 图 / 查看数据】页重新生成图片，再重新生成配置")
+
+
 def _digest(payload: Any) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str)
                         .encode('utf-8')).hexdigest()[:16]
@@ -80,8 +110,8 @@ def global_render_signature(encoder_param: dict, style_config: dict,
                             bake_fades: bool = True) -> str:
     """影响"整批片段怎么渲"的参数指纹：换它就必须整批重渲。
 
-    只收真正进画面的量：分辨率、码率、编码器、背景亮度、谱面叠加位置与高度、
-    转场方式。不含输出目录与用户名——那两个改了不该触发重渲。
+    只收真正进成片的量：分辨率、码率、编码器、背景亮度、谱面叠加位置与高度、
+    转场方式、响度口径。不含输出目录与用户名——那两个改了不该触发重渲。
     """
     position = ((style_config or {}).get('position') or {}).get('video') or {}
     trans = trans_param or {}
@@ -95,6 +125,12 @@ def global_render_signature(encoder_param: dict, style_config: dict,
         'transition': 'bake' if bake_fades else 'xfade',
         'trans_enabled': trans.get('enabled'),
         'trans_duration': trans.get('duration'),
+        # 响度口径的版本号。修复前 Quadrants 路的 main 片段不施加逐段增益
+        # （QuadRenderer 里 volume_adjust_db 写死 0），修复后两路共用
+        # measure_audio_gain_db。这个键必须进指纹：否则升级前渲好的 GPU 片段会被
+        # 判"新鲜"继续用，跟修复后补渲的那几段差 5~10 dB 拼在同一片子里，
+        # 而界面上看不出来。代价是升级后第一次渲染会整批重编（两条路各一次）。
+        'loudness': 'per-clip-v2',
     })
 
 
@@ -876,33 +912,14 @@ class VideoSegmentGenerator(VideoGenerator):
         return input_args, ''.join(filter_parts), audio_stream
     
     def _get_main_image_path(self, clip_config: dict) -> str:
-        """获取主图片路径（成绩板图）。缺失就报缺失，别拼一条打不开的命令蒙过去。"""
-        full_image = (clip_config.get('full_image') or '').strip()
-        main_image = (clip_config.get('main_image') or '').strip()
-        for cand in (full_image, main_image):
-            if cand and os.path.exists(cand):
-                return os.path.abspath(cand).replace('\\', '/')
-        raise MissingClipInputError(
-            "成绩板图片不可用（main_image 与 full_image 都指向不存在的文件："
-            f"{main_image or '（空）'} ｜ {full_image or '（空）'}）"
-            "—— 到【生成 Best50 图 / 查看数据】页重新生成图片，再重新生成配置")
+        """成绩板图：判据已抽到模块级 `resolve_clip_board_image`（两条渲染路共用一份）。"""
+        return resolve_clip_board_image(clip_config)
 
     def _get_video_path(self, clip_config: dict) -> str:
-        """获取谱面视频路径。
-
-        旧写法文件不存在时 `return None`，而调用处把它直接拼进 `['-i', video_path]`：
-        subprocess 收到 None 抛 **TypeError**，它不是 CalledProcessError，generate() 的
-        except 接不住 → **一段缺素材能让 50 段全停**，已渲好的白做（实测：
-        TypeError: expected str, bytes or os.PathLike object, not NoneType）。
-        而配置里的空路径是页 4「仍要生成（缺失项留空）」刻意允许的产物，这条路真能走到。
-        """
-        video = (clip_config.get('video') or '').strip()
-        if video and os.path.exists(video):
-            return os.path.abspath(video).replace('\\', '/')
-        raise MissingClipInputError(
-            f"谱面视频不可用（video 字段是空路径或文件不存在：{video or '（空）'}）"
-            "—— 到【搜索、检查和下载视频】页补齐，或把视频按 曲ID-难度.mp4 放进 "
-            "videos/downloads 后重新生成配置")
+        """谱面视频：判据已抽到模块级 `resolve_clip_video_path`（两条渲染路共用一份）。
+        历史教训（`return None` 拼进命令行 → TypeError 接不住 → 一段缺素材让 50 段全停）
+        记在那个字段的函数文档里。"""
+        return resolve_clip_video_path(clip_config)
     
     # def _process_background(self, filter_parts: List[str], input_args: List[str],
     #                     main_image_path: Optional[str], duration: float, darkness: float) -> str:
@@ -1038,6 +1055,30 @@ def gen_black_video(duration: float, resolution: tuple[int, int]):
     clip.write_videofile(f"{bgclips_path}/black_bg.mp4", fps=DEFAULT_FPS)
 
 
+def clip_is_fresh(output_file: str, *, force_render: bool, global_sig: Optional[str],
+                  manifest: Optional[dict], clip_sigs: Optional[Dict[str, str]]) -> bool:
+    """这段产物能不能直接复用。**SegmentUtils 与 Quadrants 两条渲染路共用这一份判据**，
+    否则两条路对"同一个片段算不算已渲染"会分叉：换过参数后一边重渲、另一边照旧沿用。
+
+    底线是非零字节（0 字节的失败产物算"已渲染"会被拼进成片，画面缺一段而界面显示成功）；
+    在此之上还要求全局参数没变、且该片段的参数指纹与清单里的记录一致。
+    目录里还没有清单（升级前的旧产物）时按原样沿用，本次收尾再把它们记成 legacy。
+    """
+    if force_render or not is_artifact_valid(output_file):
+        return False
+    if not global_sig or not manifest:
+        return True         # 不参与指纹判定 / 无指纹时代：旧行为
+    if manifest.get('global') != global_sig:
+        return False        # 全局参数换过：这批产物不是本次参数的结果
+    if not clip_sigs:
+        return True
+    name = os.path.basename(output_file)
+    recorded = (manifest.get('clips') or {}).get(name)
+    if recorded == LEGACY_SIGNATURE:
+        return True         # 没有可比对的指纹，参数没变就照旧沿用
+    return recorded == clip_sigs.get(name)
+
+
 def check_rendered_clips_multithreaded(
     video_configs: Dict[str, List[Dict[str, Any]]],
     final_clips_dir: str,
@@ -1090,17 +1131,11 @@ def check_rendered_clips_multithreaded(
             
             output_file = os.path.join(final_clips_dir, f"{prefix}_{config['id']}.mp4")
             name = os.path.basename(output_file)
-            # 判据只有一条：非零字节才算已渲染。0 字节的失败产物如果算"已渲染"，会被
-            # 直接拼进成片（画面缺一段，界面上却显示成功）。
-            fresh = is_artifact_valid(output_file) and not force_render
-            if fresh and manifest is not None and params_changed:
-                fresh = False        # 全局参数换过：这批产物不是本次参数的结果
-            if fresh and manifest is not None and clip_sigs:
-                recorded = manifest_clips.get(name)
-                if recorded == LEGACY_SIGNATURE:
-                    pass              # 无指纹可对照，参数没变就照旧沿用
-                else:
-                    fresh = recorded == clip_sigs.get(name)
+            # 判据只有 clip_is_fresh 这一份（Quadrants 路也走它）：非零字节是底线，
+            # 再往下要求全局参数与逐片段指纹都对得上。
+            fresh = clip_is_fresh(output_file, force_render=force_render,
+                                  global_sig=global_sig, manifest=manifest,
+                                  clip_sigs=clip_sigs)
             result_queue.put((prefix, config, fresh))
             task_queue.task_done()
     
