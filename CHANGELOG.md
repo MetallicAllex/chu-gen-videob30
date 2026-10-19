@@ -3,19 +3,21 @@
 > 仓库内只维护这一份全量更新日志（相对上一个发布版本的全部改动），含实测数字、成因、完整已知问题、发行包注意事项。
 > 面向自己人与反馈排查；对外简略说明在出包时另行摘录，仓库内不留第二份。
 
-## [1.2.6a] - 2026-10-02 出包，工作树截至 2026-10-13
+## [1.2.6a] - 2026-10-02 出包，工作树截至 2026-10-18
 
 相对 v1.2.6 的全量改动：20 个已跟踪文件 +800/−524（`git diff --numstat cd322c3 662c2dc` 排除本文件，实测恰为此数：
 `st_pages/3_Confirm_Videos.py`
 +129/−322、`utils/DataUtils.py` +196/−43、`utils/video_crawler.py` +192/−59、`utils/PathUtils.py` +84/−16、
-`utils/fetch_settings.py` +51/−17）。按环节记录，**行号以工作树当前状态为准**（本节只覆盖 `662c2dc`；
-其后的渲染链路提交 `8394015` 按要求本轮不写，细节在该 commit message 里——页 6 与 `SegmentUtils.py`
-被它改写过，凡本节引用这两个文件处均已按现状复核）。
+`utils/fetch_settings.py` +51/−17）。按环节记录，**行号以工作树当前状态为准**。本节主体只覆盖 `662c2dc`；
+其后的渲染链路提交 `8394015`、`98216a0` 细节在各自 commit message 里，2026-10-18 的 quadrant 收口
+见「视频合成 · quadrant 线路收口（2026-10-18，未随包发出）」。
 
-- **与用户手上那份包对齐过**：`dist/chu-gen-videob30-v1.2.6a.zip`（2026-10-02 16:35、53,950,830 字节）里
-  14 个承重文件逐个 md5 比对，**12 个与当前工作树字节相同**，只有 `utils/DataUtils.py`（包后再 +93/−11）与
-  `st_app.py`（+33/−28，导入顺序与续行缩进 + `callable(reconfigure)` 硬化）是出包之后再改的。
-  也就是说本节描述的绝大部分**已经随 v1.2.6a 发出去了**，包后新增只有「曲库镜像对账」那一节。
+- **与用户手上那份包对齐过（比对时点 2026-10-13）**：`dist/chu-gen-videob30-v1.2.6a.zip`
+  （2026-10-02 16:35、53,950,830 字节）里 14 个承重文件逐个 md5 比对，**当时 12 个与工作树字节相同**，
+  只有 `utils/DataUtils.py`（包后再 +93/−11）与 `st_app.py`（+33/−28，导入顺序与续行缩进 +
+  `callable(reconfigure)` 硬化）是出包之后再改的。也就是说本节描述的绝大部分**已经随 v1.2.6a 发出去了**。
+  包后新增的是「曲库镜像对账」与「quadrant 线路收口」两节，后者**尚未进任何发行包**，且已使
+  `utils/Quadrants/*`、`utils/SegmentUtils.py`、`requirements.txt` 不再与包内文件逐字节相同。
   版本号 `st_pages/0_homepage.py:98` 现在仍写 **v1.2.6**，出包前要改。
 
 ### 传输层：B 站请求从 aiohttp 换到 httpx
@@ -193,12 +195,93 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
   这种留给调用期解析的相对串），所以**当时并无实害**；但假规矩会误导后人，已把这条 import 挪回 chdir 之后
   （`:10` → `:12`，`DU` 的首个使用点远在 `:37`）。同批 `callable(reconfigure)` 硬化与 `st.Page` 续行缩进对齐保留。
 
+### 视频合成 · quadrant 线路收口（2026-10-18，未随包发出）
+
+`98216a0` 之后逐项复盘 GPU 路剩下的缺陷，修在 `utils/Quadrants/`、`utils/SegmentUtils.py`
+与页 6 的接线。共同前提是旧写法只在"单源、单帧率、素材完好"时成立，而真实存档三者都不保证。
+离线回归 `tests/test_render_freshness.py` 跑到 **合计 215 项，失败 0 项**（新增 DD 组逐条覆盖可测项；
+`tests/` 按惯例仍不入库）。
+
+- **混合帧率不再改变片段时长/速度**：帧读取原来是"每个输出帧读一个源帧"。30fps 谱面配 60fps 输出时
+  1 秒的源只用 0.5 秒就被读空（随后停在尾帧），60fps 源配 30fps 输出则丢掉一半帧。现在由
+  `RenderIO.py:588` 的 `FramePump` 按时间基换算源位置：需要重复时复用上一帧，需要跳帧时只
+  `grab()` 不解码（`RenderIO.py:561`）；循环背景到 EOF 回绕，非循环谱面保持尾帧；`seek_to` 对
+  `frame_count == 0` 也做了夹取（`RenderIO.py:552`）。离线实测：30fps → 60fps 连续 30 次输出正好
+  覆盖 1 秒、每源帧用两次；25fps → 60fps 最长连续重复 3 帧；60fps → 30fps 消费 60 个源帧。
+- **输出帧率取本批全部 main 源的最高值**（`QuadRenderer.py:655-676`，上限 60）：旧写法只看第一条源，
+  30/60fps 混批时后半批会被按错误帧率重采样。一条都探测不到才回退 60fps。
+- **island 拼接把裁剪点挪到输入侧**（`IslandConcat.py:222`、`:254`）：主体段与转场段原来都是 `-i` 之后
+  `trim=start=...`，为了取每段尾部 1 秒要从第 0 帧解码整段；现改为 `-ss` 在 `-i` 之前、滤镜只做
+  `trim=duration`。重编码下 `-ss` 仍是帧级精确，产物不变，只是不再白解前导。
+- **libx264 回退带上目标码率**（`IslandConcat.py:126`）：旧兜底写死 `-crf 18`，硬编失败换软编后，
+  产物码率与页面显示、指纹记录的不是一回事。现按 `-b:v/-maxrate/-bufsize`（2×）跟随目标码率。
+- **编码器判据只留一份**：`RenderIO.resolve_encoder`（`:263`）把本批实际要用的 codec 写回
+  `encoder_param['codec']`，指纹、每段 `-vcodec`、island 拼接与 CPU 回退读同一个值；硬编失败
+  退回 libx264 时把结论写回（`SegmentUtils.py:547`、`:799`），清单改记软编，下一轮按真实编码器判废。
+- **编码器下拉加入软件档（H.264/AVC 与 H.265/HEVC）**：`Variables.py:274` 的软编清单与
+  `:288` 的 libx265 行；`RenderIO.probe_software_encoders`（`:219`）实探后与硬件档一起进页 6 的
+  「编码器方案」，两类分别标【硬件】/【软件】——硬件实探通过不等于运行期一定编得动，软件档
+  始终在列，随时能明确点名 CPU 渲染。AVC 就是 H.264，原来的兜底 `libx264` 一直就是它，只是以前
+  不能主动点名；现在点名软编也会走 `resolve_encoder` 的显式分支（否则 `hwaccel=False` 会被自动
+  探测覆盖）。libx265 产物打 `hvc1` 标签；island 直拼按编码器选 `hevc_mp4toannexb`
+  （`IslandConcat.py:102`），流拷贝到 mp4 时补回 hvc1（`:112`）。实测两条出片链路与 island
+  直拼/xfade 均为 `hevc/hvc1`，时长与帧数不变。
+- **AV1 解码后端自动探测（2026-10-18）**：Windows 上 AV1 源默认走
+  MSMF（实测 28.1→11.9ms/帧），H.264 留在 FFMPEG（16.6 vs 11.7ms）。但 MSMF 对解不了的流
+  **不是返回失败，而是 open 成功、`read()` 挂住**（4:4:4 AV1 实测 >60s），低端 GPU 没有 AV1
+  硬解时不能盲切。页 6（仅 Quadrants 路）在每进程首次遇到 AV1 源时用 ffmpeg debug 探针判
+  本机/本流能否硬解——只认 `AV1 decode get format: d3d11`，返回码不可靠
+  （强制 libdav1d、4:4:4 都是 rc=0），单次约 0.2s、按文件缓存；能硬解才用 MSMF，否则 FFMPEG。
+  不给用户选项，页面上只留「重新探测」清除缓存（换驱动/显卡后重试）。经
+  `RenderContext` → `VideoFrameReader` 落地。
+  实测矩阵：1080p 4:2:0 AV1 自动→MSMF、强制 FFMPEG→FFMPEG、4:4:4 自动→FFMPEG 且正常出帧；
+  H.264 不受影响，始终 FFMPEG。
+- **编码失败只允许同族回退**：`Variables.fallback_encoder_on_failure` 只让 H.264 硬编失败退回
+  `libx264`；H.265 失败不再静默换 H.264——同批片段会跨编码族，最终 `concat -c copy` 接不起来
+  （逐段都能播，整支坏片）。`SegmentUtils.py` 两处逐段兜底与 `IslandConcat.py:148` 各阶段共用这一条
+  判据；没有同族兜底时该段/该阶段明确失败并上报，不再产出混合编码的成片。
+- **输出帧率进入全局指纹**（`SegmentUtils.py:127`）：GPU 路把探测值写回 `encoder_param['fps']`，
+  经典路默认 `DEFAULT_FPS`；两条路共用片段目录，指纹不含 fps 时 30fps 片段会被 60fps 那批判"新鲜"
+  直接复用，成片出现每帧复制的顿挫。代价是升级后第一次整轮重编一次（预期）。
+- **缺 main 必须走失败通道**：GPU 路与经典路各有一道守卫（`QuadRenderer.py:702`、`SegmentUtils.py:1237`），
+  GPU 守卫在 `makedirs` 之前，不会留下空目录/清单冒充渲过。
+- **指纹补上 `bg_offset`**（`SegmentUtils.py:148-166`）：背景按前序片段累计时长取模起播，前序时长一变，
+  本段背景起点就变；旧指纹不含它，会复用起点错误的旧片段。经典/GPU 两条路现在用同一个累计口径
+  （`SegmentUtils.py:1260-1263`、`QuadRenderer.py:738-746`）。
+- **转场时长只在启用时进全局指纹**（`SegmentUtils.py:108-146`）：禁用转场时改时长不再无谓判废；
+  启用时（含 GPU 路 xfade 的 `trans_time`）必须进，否则改时长会沿用旧片段。
+- **无音轨谱面不再把 GPU 路编死**：`RenderIO.py:701` 先用 `ffprobe -select_streams a:0` 探音频流，
+  没有就切 `anullsrc` 静音轨（`:767-771`），不再出现 `[1:a]atrim` 绑不到流 → `BrokenPipeError` →
+  三次重试 → CPU 全量重渲。实测 1 秒无音轨素材照常出片，产物含与视频同长的静音轨。
+  同批把音频补白改成 `apad` 后 `atrim` + `asetpts` 精确收回：2 秒音频配 1 秒片段，产物音频是 1.0 秒。
+- **worker 收尾不再抹掉新任务**（`SafeRender.py:257-291`）：先清理 `temp_generated`，**再**在
+  `_submit_lock` 内按 job 身份复位；旧顺序里清理耗时可能跨过下一次提交，迟到的 finally 会把新任务
+  的状态清成空闲。
+- **GPU 按钮由探针决定**（`SafeRender.py:187`）：页面线程只做 `find_spec` 查依赖（缺 pydantic/cffi 时
+  点名），CUDA 初始化只发生在常驻渲染线程；上一次渲染落在 CPU 后端的直接判不可用并说明原因。
+  页 6 的实验按钮改为 `disabled=not _gpu_ok`，不可用时给出一行可见说明
+  （`st_pages/6_Compostie_Videos.py:451-469`）。
+- **版本与文档收口**：`check_ffmpeg_version()` 原来只有定义没有调用点，现在 `FFmpegWriter`
+  （`RenderIO.py:752`）与两个拼接入口（`IslandConcat.py:324`、`:455`）都会先查；Quadrants 的
+  "编译必须在主线程"旧说法改为"编译与执行在同一常驻线程"；`requirements.txt:34` 的
+  `quadrants==1.3.0` 改为 `==1.3.3`，与随包 runtime 实测版本对齐（旧文写的"本机 1.0.2"已过期），
+  `pydantic`/`cffi` 显式入列。
+
 ### 测试与验证口径
 
-- `tests/test_paths_io.py` **47 项**、`tests/test_ffmpeg_merge.py` **26 项**，都在**还原后的半装 `runtime/`** 上跑
-  到 `合计 N 项，失败 0 项`（GBK 控制台直跑也不中断，即上一节那条）。分组：A 判据 / B 存档识别 /
+- `tests/test_paths_io.py` **52 项**（2026-10-18 复跑）、`tests/test_ffmpeg_merge.py` **26 项**，都在**还原后的半装 `runtime/`** 上跑
+  到 `失败 0 项`（GBK 控制台直跑也不中断，即上一节那条）。分组：A 判据 / B 存档识别 /
   C 原子写并发（含"并发读写期间任何时刻都是完整文档"）/ D 页 1 空白存档 / E 判据唯一性 /
   F 渲染与临时目录不变量 / G 控制台编码 / H 迁移 / I 页 3 不变量。
+- `tests/test_render_freshness.py` **215 项**（2026-10-18，`runtime/python.exe` 直跑）到
+  `合计 215 项，失败 0 项`：渲染指纹、缺素材分段失败、frame-pump 时间基重采样、最大源帧率、
+  island 输入侧裁剪、无音轨静音轨、音频精确收回、worker 收尾顺序、GPU 预检与编码器软编档都在内；
+  音频两例走真实 ffmpeg 出片后用 ffprobe 复量，不是纯源码断言。另跑过一次真实主片段渲染
+  （30fps 谱面源、60fps 输出、160×120、Quadrants CPU 后端）：成片 **1.000s / 60 帧 / 60fps**，
+  音频 1.023s（AAC 帧长补齐），确认帧率换算没有改变片段时长。
+- libx265 另做了一次真实出片验证（2026-10-18）：写帧器直出 30 帧 / 1.0s、经典路片段与成片、
+  island 直拼 2 段与 xfade 2 段、最后的 loudnorm 拷贝，ffprobe 全部为 `hevc` + `hvc1`，
+  帧数与时长与输入一致；island 直拼在补 `hevc_mp4toannexb` 前后各跑过一次。
 - 源码级断言一律用 AST 或"必须出现的调用形状"，并在**改前基线 `cd322c3`（v1.2.6）**上做过反向验证
   （改前必红）：`git show cd322c3:<file>`。原先写作 "HEAD" 会随新提交过期，这里钉死 SHA。
   F6（`toast("渲染完成！")` 的行号必须落在 `_failed` 分支区间内）、I1–I6 都这样做过；否则就是恒真断言。
@@ -264,8 +347,10 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
   版式问题，没动（改它会连带影响面板里其它行的对齐，按一次只改一个变量单独处理）。
 - 挂着的两处一致性：`check_matched_songs`（`3_Confirm_Videos.py:286`）第三个返回值仍无人使用；缓存索引跨存档
   来回切换会互相顶掉条目（`videos/downloads` 是同一目录、两存档共用）。
-- `quadrants` 缺 `cffi` / `pydantic`，且 `requirements.txt:34` 钉 `==1.3.0` 而本机实测 1.0.2（v1.2.6 那节写的
-  `:24` 已被本轮新增的三行下限顶下去）；GPU import 包在 try 里，缺它不挡下载与渲染主路。
+- ~~`quadrants` 缺 `cffi` / `pydantic`，且 `requirements.txt` 钉 `==1.3.0` 而本机实测 1.0.2~~
+  —— **已收口（2026-10-18）**：随包 runtime 实测 `quadrants 1.3.3`（llvm 22.1.0 / commit 00423caa），
+  `requirements.txt:34` 已对齐 `==1.3.3`，并把 `pydantic>=2,<3`、`cffi>=1.16` 显式写进依赖（`:38-39`）。
+  GPU import 仍包在 try 里，缺它不挡下载与渲染主路。
 - ~~**`httpx` 是裸名没钉版本**~~ —— **本轮已钉**：`requirements.txt:29` 改为 `httpx>=0.24,<1.0`，与
   `video_crawler.py:18` 提示语里承诺的下限对上。随包那份实测 0.26.0，在区间内；`anyio` 实测 4.11.0。
 
@@ -492,8 +577,9 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
 - 「片段过渡」开关滞后一次渲染：勾选框写 `trans_params["enable"]`，渲染侧读 `['enabled']`。已统一为 `enabled`。
 - 渲染失败此前只显示 10 秒随即 `st.rerun()` 抹掉，片段级失败既不报错也不阻止拼接。现在 `render_all_video_clips` 返回失败列表，
   页面写 `session_state.render_error` 持久展示并跳过拼接。
-  注：这条还没覆盖全 —— 主视频配置缺失时 `SegmentUtils.py:975-978` 裸 `return`（None），页 6 的
-  `_render_result or []` 会把它当成零失败照常拼接；`SafeRender.py:464` 也丢弃了回退补渲返回的失败列表。
+  注：~~这条还没覆盖全~~ —— **2026-10-18 已补齐**：主视频配置缺失时经典路 `SegmentUtils.py:1237`
+  与 GPU 路 `QuadRenderer.py:702` 都改走失败通道（不再裸 `return`/渲染出没有正片的成片）；
+  `SafeRender` 也把回退补渲返回的失败列表转为 `RuntimeError`，不再带着缺段继续拼接。
 - 曲名含 `・`(U+30FB) 时在非 UTF-8 控制台抛 `UnicodeEncodeError` 中断整条渲染。`start.bat` 有 `chcp 65001` 故发行包无恙，
   按 README 手敲 `streamlit run st_app.py` 的源码用户会挂（该存档 50 首中 16 首含此类字符）。现 `st_app.py` 给 stdout/stderr 设 `errors='replace'`。
 - 「使用 GPU 硬件加速」复选框此前完全无效（唯一读 `hwaccel`/`codec` 的函数无调用点）。`_build_encoding_args` 已改为在 `hwaccel` 为真时采纳
@@ -525,8 +611,9 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
   SafeRender / IslandConcat 连带 cv2、numpy 一起拉起来，只为拿一个路径解析器偏贵；GPU import 本身包在 try 里
   （`QuadAccel.py:32-35` 置 `QUAD_AVAILABLE`），缺 `quadrants` 不会炸，但下载与版本探测两处仍留了
   `shutil.which` 兜底。
-- **本机 `quadrants` 实测是 1.0.2，而 `requirements.txt:24` 钉 `==1.3.0`**：GPU 路那批性能数字全是在 1.0.2 上跑的。
-  要么把钉法放宽（并对齐 `runtime/` 里那份），要么升到 1.3.0 重跑 GPU 侧数据。
+- ~~**本机 `quadrants` 实测是 1.0.2，而 `requirements.txt` 钉 `==1.3.0`**~~ —— **已对齐（2026-10-18）**：
+  随包 runtime 实测 1.3.3，`requirements.txt:34` 改为 `==1.3.3`。**注意**：下文「视频合成 · 性能」里
+  那批 GPU/经典对比数字仍是在 1.0.2 上测的，未在 1.3.3 重跑，不能当作当前版本的结论。
 - `generate()` 标了 `-> bool`（`utils/SegmentUtils.py:297`、`:539`），失败路径实际 `return None`（`:382`、`:612`）；
   另外 `_get_full_image_path` 在 `bg_page=True` 且不检查文件是否存在就返回绝对路径（`:417`），与"渲染失败不落盘"的约定相反。
 
@@ -537,15 +624,24 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
   对外说明里的"背景黑帧已知问题"已随之删除。
   注意所有以"bg 长 60.4s"为前提的旧数字现在对应 50.47s（取模逻辑不变，回绕点变密）。
 - **两后端成片时长与过渡形态不一致**：经典路淡入黑场 + `-c copy` 不缩时长；GPU 路 `xfade` 交叉淡化，每个边界吃掉 `trans_time`
-  （同素材实测成片 12.049s vs 10.578s）。
-- GPU 路取消任务会落到没有取消检查点的 CPU 全量重渲（`RenderCancelled` 被 `QuadRenderer.py` 的 `except BaseException` 重包成普通 `RuntimeError`）。
-- 无音轨的谱面素材会让 GPU 路崩：`[1:a]atrim` 绑不到流 → `BrokenPipeError` → 重试 3 次 → 触发 CPU 全量重渲。
-- 经典路整条渲染仍阻塞 Streamlit 主线程（GPU 路已改常驻工作线程）。
-- 随包 `ffmpeg.exe` 与 `ffprobe.exe` 是 nightly git 构建且来自**不同日期/不同 commit**（2026-04-16 与 2026-04-25），建议换成套 release 构建。
-- `requirements.txt` 已声明 `quadrants==1.3.0`（GPU 后端唯一依赖，`requirements.txt:24`）与 `qrcode>=8.2`（B 站扫码登录）。
+  （同素材实测成片 12.049s vs 10.578s）。页 6 的注意事项现在把这条差异直接写给用户（两种按钮的过渡方式，
+  以及它们会互相作废对方渲好的片段）。
+- ~~GPU 路取消任务会落到没有取消检查点的 CPU 全量重渲~~ —— **已修（2026-10-18）**：`RenderCancelled`
+  被管线 `except BaseException` 重包成普通 `RuntimeError` 后，`SafeRender` 认不出它是取消。现在片段重试前
+  先过 `render_checkpoint()`（`QuadRenderer.py:787`），island 的重编码回退也先 `_reraise_if_cancelled`
+  （`IslandConcat.py:70`、`:157/:284/:418`）；实测取消抛 `RenderCancelled`，不再回退软编或 CPU 全量重渲。
+- ~~无音轨的谱面素材会让 GPU 路崩~~ —— **已修（2026-10-18）**：`RenderIO.has_audio_stream`（`:676`）先探测，
+  缺失则切 `anullsrc` 静音轨（`:742-746`）；实测 1 秒无音轨素材照常出片。
+- ~~经典路整条渲染仍阻塞 Streamlit 主线程~~ —— **已修（2026-10-18）**：页 6 的「开始渲染」改为提交
+  `SafeRender` 常驻工作线程（`prefer="classic"`），脚本线程立即返回；经典/GPU 两路共用进度浮窗与取消。
+- ~~随包 `ffmpeg.exe` 与 `ffprobe.exe` 是 nightly git 构建且日期不同~~ —— **已换**：当前随包是同一套
+  `7.1-full_build-www.gyan.dev` release，`ffmpeg -version` / `ffprobe -version` 首行一致。
+- `requirements.txt` 已声明 `quadrants==1.3.3`（GPU 后端唯一依赖，`:34`）、`pydantic>=2,<3` / `cffi>=1.16`
+  （`:38-39`，Quadrants 的传递依赖）与 `qrcode>=8.2`（B 站扫码登录）。
   Taichi 后端已于 2026-09-20 移除（长期不更新、与 Quadrants 功能区重叠，且 Quadrants 已把它的能力复制完），
   所以 `taichi` 不再需要；此前它也从不在 `runtime/` 内，本机那次 `import taichi` 成功是用户级 site-packages 泄漏。
-- GPU 路在两种源上都比修后经典路慢（1080p/10s 单片段：H.264 源 7.90s vs 14.50s；AV1 源 9.89s vs 28.67s）。
+- GPU 路在两种源上都比修后经典路慢（**以下数字全部测于 quadrants 1.0.2；随包已升到 1.3.3，未重测，
+  不能当作当前版本的结论**。1080p/10s 单片段：H.264 源 7.90s vs 14.50s；AV1 源 9.89s vs 28.67s）。
   阶段消融显示合成阶段一开，两路解码各 +11ms、编码 +7.3ms，连带损失远大于它自己的 18ms；已排除 GIL 抢占、CPU 掉频、NVENC 队列争用。
   ~~出路是别让帧离开 GPU（NVDEC→GPU 合成→NVENC），或试 pinned memory~~ —— 两条都被否掉：**NVDEC 直连**与"qd 要全设备可用"冲突
   （且 Ampere 的 NVDEC 不解 AV1，正是最慢那批素材）；**pinned/零拷贝**拿不到（`qd.ndarray` 不接受外部指针，
@@ -555,13 +651,30 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
 
 ### 与其他工作线的交界
 
-- 页 6 的「使用 GPU 硬件加速」复选框 `disabled=True` 且 `value=False`（`st_pages/6_Compostie_Videos.py:223`）、
-  「加速方案」下拉 `disabled=... or not hwaccel`（:235）⇒ 两个控件当前都点不动。**这是作者主动灰置的，不是 bug**：
-  Quadrants 路性能还没超过经典路，先不让用户选到慢的那条；等性能问题解决了再把「加速方案」提为唯一入口。
-  对外发布说明里因此不写"修复 GPU 加速复选框"。
-  顺带：`if hwaccel:` 分支（:338）恒不成立，`encoder_param['codec']` 恒为 `libx264`，但渲染侧只在 `hwaccel` 为真时才采纳它，
-  已跑真码验证：`{'hwaccel': False, 'codec': 'libx264'}` → 实际下发 `-vcodec h264_nvenc`（走自动探测），**硬编没有被这个灰置打掉**。
-- 页 6 的「Quadrants GPU 渲染（实验）」按钮 `disabled=True`、help 明写"当前未开放"⇒ 上面 GPU 路那串已知问题对普通用户不可达。
+- 页 6 的硬件加速选择已合并（工作树 2026-10-18）：原「使用 GPU 硬件加速」复选框（`disabled=True`、
+  恒 `False`）与挂在它身上的「加速方案」下拉都已删除，改为一个「编码器方案」下拉；选项来自
+  `probe_hw_encoders()` 真编一帧后的实探结果，「自动」档就是渲染侧 `detect_hw_encoder()` 会用的那一个，
+  不再在页面上写死 `libx264`。下拉里另有软件 H.264/AVC（libx264）与 H.265/HEVC（libx265）两档，
+  后者同样先实探再列出；两类分别标【硬件】/【软件】，软件档始终在列，硬编运行期失败时用户仍可
+  明确改回 CPU。点名任一项都会走 `resolve_encoder` 的显式分支。此前 `if hwaccel:` 分支恒
+  不成立、`encoder_param['codec']` 恒为 `libx264` 的问题随之消失。对外发布说明仍不写"修复 GPU 加速
+  复选框"——这不是修好一个旧开关，而是把两个控件合并成一个按实探结果工作的选择，再把软件档补齐。
+- 页 6 的「Quadrants GPU 渲染（实验）」按钮**不再写死禁用**（2026-10-18）：改由 `gpu_preflight()` 决定，
+  缺 pydantic/cffi 或上次渲染落在 CPU 后端时灰化，并在页面上给一行可见原因；依赖齐且探针未否定时可用。
+  页面线程不做 GPU 初始化（CUDA/Vulkan，上下文有线程亲和性），探针只在常驻渲染线程跑。
+  后端选择保持自动（CUDA → Vulkan → CPU，见下一条），与【编码器方案】的软/硬编无关；
+  页面 caption 与按钮帮助文案都写明这一点，不把两个维度塞进同一个下拉。
+- Quadrants 后端回退链补上 Vulkan（2026-10-18）：`init_quad()` 现在按 CUDA → Vulkan → CPU
+  依次尝试（`qd.gpu` 在无 CUDA 设备时不会自动改选 Vulkan，实测直接抛 CUDA_ERROR_NO_DEVICE，
+  必须显式 `qd.init(qd.vulkan)`）；`quad_backend()` 从 `'gpu'/'cpu'` 改为 `'cuda'/'vulkan'/'cpu'`，
+  状态条与 `gpu_preflight()` 按真实后端说话；上下文故障判定同时识别 CUDA 的
+  INVALID_CONTEXT 与 Vulkan 的 VK_ERROR_DEVICE_LOST。Intel Iris Xe 实测 init、5 个 kernel
+  预热、main/info 合成与 20 片段 soak 通过，输出与 CUDA 最大差 1/255。Vulkan 只替换
+  合成后端，编码器选择不变。
+  另修一处记账错误：Vulkan loader/ICD 不可用时 `qd.init(qd.vulkan)` **不抛异常**，只打印
+  `falling back to CPU` 并把运行时建在 x64 上；旧实现按入参记账，会把 CPU 误报成 Vulkan。
+  现在 init 后用 `qd.cfg.arch` 复核实际后端，链中间的 GPU 候选若静默降级 CPU 就 reset
+  并继续试后续候选（无 CUDA + Vulkan ICD 无效时实测正确落到 `cpu`）。
 
 ### 发行包注意
 

@@ -59,6 +59,10 @@ def create_blank_image(width, height, color=(0, 0, 0, 0)):
     return np.array(Image.new('RGBA', (width, height), color))
     # return np.array(image)
 
+# 文字允许的最大宽度：TextDraw 的默认值，也是存档里没配 maxWidth 时的取值。
+DEFAULT_TEXT_MAX_WIDTH = 2000
+
+
 def FrameLoader(level_index: int = 0):
     with Image.open(f"{image_root_path}/Frames/{level_index}.png") as _frame:
         return _frame.copy()
@@ -68,14 +72,16 @@ def LevelLoader(level: float, level_next: float = 0.0):
     # print(f"DEBUG: level_next={level_next}, type={type(level_next)}")
     lv = level if level > 1.0 else level_next
     __lv = str(lv)
+    # 不再复写形参 level：它声明是 float，被改成字符串后既自相矛盾（78 行把它当
+    # 文本传给 TextDraw），也丢掉了"传进来的等级"这个原始值。
     if '.' in __lv:
-        level, decimai = __lv.split('.')
+        level_str, decimai = __lv.split('.')
     else:
-        level, decimai = __lv, '0'
+        level_str, decimai = __lv, '0'
     level_number_img = Image.new('RGBA', (108, 88), (0, 0, 0, 0))
     
     # 绘制数字
-    level_number_img = TextDraw(level_number_img, level, (54, 46), 
+    level_number_img = TextDraw(level_number_img, level_str, (54, 46),
                                 font_path=level_font_path,
                                 font_size=60, font_color=(255, 255, 255))
 
@@ -225,7 +231,8 @@ def ChainStatusLoader(chain_status: str = ""):
         return _chainStatus.copy()
 
 
-def TextDraw(image, text: str = "", pos: tuple = (0, 0), offset: tuple = (0, 0), max_width: int = 2000,
+def TextDraw(image, text: str = "", pos: tuple = (0, 0), offset: tuple = (0, 0),
+             max_width: int = DEFAULT_TEXT_MAX_WIDTH,
                  font_path=None, font_size=32, font_color=(255, 255, 255), h_align: str = "center"):
         """
         绘制文本，若超出最大宽度则缩小字体直至适配
@@ -311,7 +318,10 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
     position = style_config['position']['image']
     size = style_config['size']
     color = style_config['color']
-    max_width = style_config['maxWidth'] if 'maxWidth' in style_config else None
+    # 缺 maxWidth 的存档是真的存在（早期 customization.json 没这个键）。旧写法留 None，
+    # 下面三处 max_width['title'] 直接 TypeError；改成空盒子 + .get()，取不到就是
+    # None，与 TextDraw 的"不限宽"默认语义一致。
+    max_width = style_config.get('maxWidth') or {}
     align = style_config['align']
     # 只允许一个下划线分隔符（对应 Best_xx 格式）
     prefix, index = record_detail['clip_id'].split('_', 1)
@@ -415,7 +425,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 title_color = color['title']
                 title_size = size['title']
                 title_align = align['title']
-                title_width = max_width['title']
+                title_width = max_width.get('title') or DEFAULT_TEXT_MAX_WIDTH
                 temp_img = TextDraw(temp_img, record_detail['song_name'], title_pos, max_width=title_width,
                                     font_path=title_font_path, font_size=title_size,
                                     font_color=title_color, h_align=title_align)
@@ -426,7 +436,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 artist_color = color['artist']
                 artist_size = size['artist']
                 artist_align = align['artist']
-                artist_width = max_width['artist']
+                artist_width = max_width.get('artist') or DEFAULT_TEXT_MAX_WIDTH
                 temp_img = TextDraw(temp_img, record_detail['artist'], artist_pos, max_width=artist_width,
                                     font_path=title_font_path, font_size=artist_size,
                                     font_color=artist_color, h_align=artist_align)
@@ -437,7 +447,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 best_color = color['bestNum']
                 best_size = size['bestNum']
                 best_align = align['bestNum']
-                best_width = max_width['bestNum']
+                best_width = max_width.get('bestNum') or DEFAULT_TEXT_MAX_WIDTH
                 temp_img = TextDraw(temp_img, f"{prefix} #{index}", best_pos, max_width=best_width,
                                     font_path=title_font_path, font_size=best_size,
                                     font_color=best_color, h_align=best_align)
@@ -484,12 +494,15 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 }
                 
                 fonts = {}
-                for key, (suffix, size) in config.items():
+                # 循环变量改名：原先也叫 size，一进循环就把上面那个"各档字号字典"的参数
+                # 顶替成了单个数字 —— 同一份 config 里 size['title'] 是数字、下一行的
+                # size 又成了另一个数字，读的人要来回对齐才能确定拿到的是哪个。
+                for key, (suffix, pt) in config.items():
                     font_path = f"{base_font}{suffix}.ttc"
                     fonts[key] = {
                         'path': font_path,
-                        'size': size,
-                        'font': ImageFont.truetype(font_path, size)
+                        'size': pt,
+                        'font': ImageFont.truetype(font_path, pt)
                     }
                 
                 return fonts
@@ -654,6 +667,13 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 
                 for layer, position in layers:
                     background.paste(layer, position, layer)
+
+        else:
+            # themes 认不出来时原来会一路走到下面 background.save 才炸 UnboundLocalError
+            # （"local variable 'background' referenced before assignment"），看不出是配置里
+            # 那个模板名写错了。就地报错，口径同上面"未知的等级索引""底图尺寸不对"。
+            raise ValueError(f"未知的主题模板【{template}】"
+                             f"（可选：default / custom_default / init / custom_init）")
 
         background.save(os.path.join(output_path, f"{prefix}_{index}.png"))
     except Exception as e:
@@ -862,11 +882,14 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                     continue
                 
                 # 生成文字图
-                _, saved_text_path = render_text_to_image(
+                rendered = render_text_to_image(
                     text=text.strip(),
                     output_path=text_path,
                     **params
                 )
+                # 给了 output_path 才回 (图, 路径)，没给就只回图（见 render_text_to_image 末尾
+                # 那两个 return）。这里恒定传了路径，但"哪一格是路径"按签名说不清，就按形状判一次。
+                saved_text_path = rendered[1] if isinstance(rendered, tuple) else text_path
                 text_files.append(saved_text_path)
                 
                 # 合并背景图

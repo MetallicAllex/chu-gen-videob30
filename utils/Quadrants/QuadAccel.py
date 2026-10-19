@@ -5,11 +5,15 @@ QuadAccel.py - Quadrants GPU 合成计算核心
 提供逐像素并行的图像合成 kernel 与 FrameCompositor，供 QuadRenderer 调用。
 
 与 Taichi 版的关键差异：
-1. 后端初始化用 qd.init（gpu 自动选首个 GPU，失败回退 cpu），不再有 Taichi 的
-   CUDA 上下文亲和性问题，因此**丢弃 _TaichiWorkerThread / _submit_to_worker**。
-2. Quadrants 强制 **kernel 编译必须在主线程**（参见 quad-docs/user_guide/quirks.md
-   与参考实现 utils/Quadrants/score_material_generator-quad.py），故 init_quad()
-   内做 _warmup_kernels() 预编译；后台线程只执行已编译 kernel。
+1. 后端初始化按 qd.gpu → Vulkan → CPU 自动回退（QUAD_DEVICE 可覆盖），不再有 Taichi 的
+   _TaichiWorkerThread / _submit_to_worker；但 GPU 上下文仍有线程亲和性，由 SafeRender
+   的常驻渲染线程统一承载（见下一条）。Windows 构建实测 qd.gpu 只会选 CUDA，无 CUDA
+   设备时直接抛 CUDA_ERROR_NO_DEVICE，不会自动改选 Vulkan，所以 Vulkan 必须显式 init；
+   macOS/Linux 上 qd.gpu 可能落到 Metal/AMDGPU（未实测）。
+2. Quadrants 要求 **kernel 编译与执行在同一个线程**（参见 quad-docs/user_guide/quirks.md
+   与参考实现 utils/Quadrants/score_material_generator-quad.py）。实际承载它的是
+   SafeRender 的**常驻渲染线程**（不是进程主线程）：init_quad() 就在该线程里执行，并在
+   其中做 _warmup_kernels() 预编译；之后解码/编码子线程只碰 cv2 与管道，不碰 kernel。
 3. kernel 图像参数统一用 qd.types.NDArray[dtype, ndim] + qd.ndarray 设备缓冲
    （对应 Taichi 的 ti.types.ndarray），而非 qd.field。原因：ndarray 仅按
    dtype+ndim 绑定 kernel，**更换/新建缓冲（如每片段不同尺寸的谱面帧）不会触发
@@ -47,7 +51,7 @@ except ImportError:
 
 _quad_initialized = False
 _quad_available = False
-_quad_backend = ''   # 'gpu' | 'cpu' | ''：init_quad 实际把运行时建在哪个后端上
+_quad_backend = ''   # 'cuda' | 'metal' | 'vulkan' | 'amdgpu' | 'cpu' | ''：init_quad 实际后端
 
 
 if QUAD_AVAILABLE:
@@ -84,12 +88,105 @@ if QUAD_AVAILABLE:
 # 初始化与可用性
 # ============================================================================
 
+def _backend_name(arch) -> str:
+    """把 qd.init 的后端选择映射成可展示、可判断的名字。
+
+    Windows 构建实测 qd.gpu 只会落到 CUDA：没有 CUDA 设备时它直接抛
+    CUDA_ERROR_NO_DEVICE，不会自动改选 Vulkan。所以回退链里每个候选
+    后端都必须显式调用，后端名也要分别记账——界面不能把 Metal/AMDGPU/
+    Vulkan/CPU 统称 CUDA 或 GPU。qd.gpu 是包含 Metal/AMDGPU 的自适应列表，
+    这两个平台后端也必须能单独识别。
+    """
+    if arch is qd.cpu:
+        return 'cpu'
+    if arch is qd.vulkan:
+        return 'vulkan'
+    if arch is qd.metal:
+        return 'metal'
+    if arch is qd.amdgpu:
+        return 'amdgpu'
+    return 'cuda'   # qd.gpu / qd.cuda
+
+
+def _safe_reset():
+    """丢弃当前半初始化的运行时；失败只记录，不打断回退链。"""
+    global _quad_backend
+    _quad_backend = ''
+    try:
+        qd.reset()
+    except Exception as e:
+        print(f"[QuadAccel] qd.reset() 异常（忽略，继续回退）: {e}")
+
+
+def _actual_backend_name(fallback: str) -> str:
+    """以 qd.cfg.arch 为准返回实际后端名；读不到时用 fallback。
+
+    qd.init 带 adaptive arch select：请求的后端不可用时它会**静默回退 CPU**
+    （实测 Vulkan loader 不可用时会打印 "falling back to CPU" 而不抛异常）。
+    只看入参会把 CPU 记账成 vulkan，页面又会把按钮亮成 GPU。
+    """
+    try:
+        cfg = qd.cfg
+        if cfg is None:
+            return fallback
+        actual = str(cfg.arch).lower()
+    except Exception:
+        return fallback
+    if 'vulkan' in actual:
+        return 'vulkan'
+    if 'cuda' in actual:
+        return 'cuda'
+    if 'metal' in actual:
+        return 'metal'
+    if 'amdgpu' in actual:
+        return 'amdgpu'
+    if 'x64' in actual or 'arm64' in actual or 'cpu' in actual:
+        return 'cpu'
+    return fallback
+
+
+def _try_init_backend(arch) -> str:
+    """在指定后端上完成 init + kernel 预热；返回实际后端名，失败返回 ''。
+
+    必须由调用线程完成 init 与 warmup（Quadrants 要求编译与执行同线程），
+    所以本函数只由 init_quad 在常驻渲染线程里调用。失败时复位运行时，便于
+    换下一个后端。
+    """
+    global _quad_backend
+    name = _backend_name(arch)
+    try:
+        qd.init(arch=arch)
+    except Exception as e:
+        print(f"[QuadAccel] {name} 后端初始化失败：{e}")
+        _safe_reset()
+        return ''
+    try:
+        _warmup_kernels()
+    except Exception as e:
+        print(f"[QuadAccel] {name} 后端 kernel 预编译失败：{e}")
+        _safe_reset()
+        return ''
+    _quad_backend = _actual_backend_name(name)
+    return _quad_backend
+
+
 def init_quad(arch=None) -> bool:
-    """惰性初始化 Quadrants（必须在主线程调用，会触发 kernel 预编译）。
+    """惰性初始化 Quadrants（必须在**实际使用它的那个线程**调用，会触发 kernel 预编译）。
+
+    SafeRender 把它放在常驻渲染线程里，所以这里的"调用线程"是渲染线程而非进程主线程；
+    Streamlit 脚本线程绝不能调用（上下文会建在错误的线程上）。
 
     Args:
-        arch: 显式指定后端（qd.gpu / qd.cuda / qd.vulkan / qd.cpu ...）。
-              为 None 时按环境变量 QUAD_DEVICE 选择：默认 gpu，失败回退 cpu。
+        arch: 显式指定后端（qd.gpu / qd.cuda / qd.metal / qd.vulkan / qd.amdgpu / qd.cpu ...）。
+              显式指定时只尝试该后端，失败即返回 False（探针/测试用）。
+              为 None 时按环境变量 QUAD_DEVICE 选择：
+                auto / gpu（默认）→ qd.gpu → Vulkan → CPU
+                vulkan            → Vulkan → CPU
+                cuda              → 只尝试 CUDA
+                cpu               → 只尝试 CPU
+              qd.gpu 是 [CUDA, Metal, Vulkan, AMDGPU] 自适应列表；Windows 构建实测
+              它不会自动回退到 Vulkan（无 CUDA 设备时 CUDA_ERROR_NO_DEVICE 直接抛错），
+              所以链里仍显式列 Vulkan。macOS/Linux 上能否落到 Metal/AMDGPU 未实测。
 
     Returns:
         bool: 初始化是否成功（成功后 is_available() 为 True）。
@@ -102,45 +199,43 @@ def init_quad(arch=None) -> bool:
         _quad_available = False
         return False
 
-    try:
-        if arch is not None:
-            qd.init(arch=arch)
-            _quad_backend = 'cpu' if arch is qd.cpu else 'gpu'
+    if arch is not None:
+        candidates = [arch]
+    else:
+        device = (os.environ.get("QUAD_DEVICE") or "auto").strip().lower()
+        if device == "cpu":
+            candidates = [qd.cpu]
+        elif device in ("vulkan", "vk"):
+            candidates = [qd.vulkan, qd.cpu]
+        elif device == "cuda":
+            candidates = [qd.cuda]
+        elif device in ("auto", "gpu", ""):
+            candidates = [qd.gpu, qd.vulkan, qd.cpu]
         else:
-            device = os.environ.get("QUAD_DEVICE", "gpu").lower()
-            if device == "cpu":
-                qd.init(qd.cpu)
-                _quad_backend = 'cpu'
-                print("[QuadAccel] 初始化 CPU 模式")
-            else:
-                try:
-                    qd.init(qd.gpu)
-                    _quad_backend = 'gpu'
-                    print("[QuadAccel] 初始化 GPU 模式")
-                except Exception as gpu_err:
-                    print(f"[QuadAccel] qd.gpu 初始化失败（{gpu_err}），回退 qd.cpu")
-                    try:
-                        qd.reset()
-                    except Exception:
-                        pass
-                    qd.init(qd.cpu)
-                    _quad_backend = 'cpu'
-        _quad_initialized = True
-        _quad_available = True
-    except Exception as e:
-        print(f"[QuadAccel] Quadrants 初始化失败: {e}")
-        _quad_available = False
-        return False
+            print(f"[QuadAccel] 未知的 QUAD_DEVICE={device!r}，按 auto（qd.gpu → Vulkan → CPU）处理")
+            candidates = [qd.gpu, qd.vulkan, qd.cpu]
 
-    # 主线程预编译所有 kernel（Quadrants 要求编译在主线程）
-    try:
-        _warmup_kernels()
-    except Exception as e:
-        print(f"[QuadAccel] kernel 预编译失败: {e}")
-        _quad_available = False
-        return False
+    for index, candidate in enumerate(candidates):
+        requested = _backend_name(candidate)
+        actual = _try_init_backend(candidate)
+        if actual and actual == 'cpu' and requested != 'cpu':
+            # qd.init 的 adaptive arch select 会把不可用的 GPU 后端静默降级到 CPU。
+            # 链中间出现这种降级时不能停：继续试后面的候选，CPU 只由链尾的
+            # qd.cpu 显式接手（否则 auto 链会错过实际可用的 Vulkan）。
+            print(f"[QuadAccel] 请求的 {requested} 实际落在 CPU 后端，继续尝试后续候选")
+            _safe_reset()
+            actual = ''
+        if actual:
+            _quad_initialized = True
+            _quad_available = True
+            print(f"[QuadAccel] 初始化完成，当前后端：{_quad_backend}")
+            return True
+        if index + 1 < len(candidates):
+            print(f"[QuadAccel] 回退到下一个后端：{_backend_name(candidates[index + 1])}")
 
-    return True
+    _quad_backend = ''
+    _quad_available = False
+    return False
 
 
 def is_available() -> bool:
@@ -148,33 +243,39 @@ def is_available() -> bool:
 
 
 def quad_backend() -> str:
-    """Quadrants 运行时实际落在哪个后端：'gpu' / 'cpu' / ''（还没初始化）。
+    """Quadrants 运行时实际落在哪个后端：'cuda' / 'metal' / 'vulkan' / 'amdgpu' / 'cpu' / ''。
 
-    没有可用 CUDA 设备的机器上 `qd.init(qd.gpu)` 会抛 CUDA_ERROR_NO_DEVICE，init_quad 随即
-    回退 `qd.cpu`——此时运行时"可用"，但那**不是 GPU**。界面必须按这个值说话，否则状态条
-    会写着「渲染片段（GPU）」而全场在 CPU 上跑（实测：独显休眠后就是这个状态）。
+    qd.gpu 不可用时 init_quad 会先尝试 Vulkan，再回退 `qd.cpu`——GPU 后端和 CPU
+    必须按真实值分开说，否则状态条会写着「渲染片段（GPU）」而全场在 CPU 上跑
+    （实测：独显休眠后就是这个状态）。
     """
     return _quad_backend
 
 
-def is_cuda_context_error(text: str) -> bool:
-    """判断错误文本是否属于 CUDA 上下文级故障。
+def is_context_error(text: str) -> bool:
+    """判断错误文本是否属于 GPU 上下文级故障（CUDA / Vulkan）。
 
     这类故障（驱动重置 / TDR / 运行时内部错误）的特征是：上下文一旦死亡，
-    后续所有 CUDA 调用都会原地失败到进程结束——原地重试毫无意义，必须重建运行时。
+    后续所有 GPU 调用都会原地失败到进程结束——原地重试毫无意义，必须重建运行时。
+    CUDA 侧是 sticky 的 INVALID_CONTEXT；Vulkan 侧对应 VK_ERROR_DEVICE_LOST。
     """
+    lowered = text.lower()
     return ('CUDA_ERROR_INVALID_CONTEXT' in text
-            or 'invalid device context' in text.lower()
+            or 'invalid device context' in lowered
             or 'CUDA_ERROR_NOT_INITIALIZED' in text
-            or 'CUDA_ERROR_ILLEGAL_ADDRESS' in text)
+            or 'CUDA_ERROR_ILLEGAL_ADDRESS' in text
+            or 'VK_ERROR_DEVICE_LOST' in text
+            or 'device lost' in lowered
+            or 'devicelost' in lowered)
 
 
 def ensure_healthy_context() -> bool:
     """确保当前运行时可用：惰性初始化 → 轻量探针验证上下文健康 → 失效时重建。
 
-    探针 = 真实的小块显存分配 + 同步。CUDA 上下文一旦死亡（sticky 的
-    INVALID_CONTEXT），探针必然失败——此时尝试整体重建；重建成功则 GPU
-    路径继续，失败则返回 False（调用方回退 CPU 路径）。
+    探针 = 真实的小块显存分配 + 同步。GPU 上下文一旦死亡（CUDA 的 sticky
+    INVALID_CONTEXT / Vulkan 的 VK_ERROR_DEVICE_LOST），探针必然失败——此时
+    尝试整体重建（重建会重新走 qd.gpu → Vulkan → CPU 链）；重建成功则 GPU 路径
+    继续，失败则返回 False（调用方回退 CPU 路径）。
     """
     if not init_quad():
         return False
@@ -186,32 +287,33 @@ def ensure_healthy_context() -> bool:
         qd.sync()
         return True
     except Exception as e:
-        print(f"[QuadAccel] CUDA 上下文探针失败（{e}），尝试重建运行时")
+        print(f"[QuadAccel] GPU 上下文探针失败（{e}），尝试重建运行时")
         return reinit_quad()
 
 
 def reinit_quad() -> bool:
-    """CUDA 上下文失效后的恢复入口：销毁旧运行时并完整重初始化。
+    """GPU 上下文失效后的恢复入口：销毁旧运行时并完整重初始化。
 
     kernel 重新编译走离线缓存，通常秒级。与 init_quad 一样，只能在原初始化
-    线程（Streamlit 脚本线程）调用。旧上下文分配的设备缓冲全部作废，
+    线程（常驻渲染线程）调用。旧上下文分配的设备缓冲全部作废，
     缓存必须一并丢弃。
     """
-    global _quad_initialized, _quad_available
-    print("[QuadAccel] 正在重建 CUDA 运行时（reset + init + 预编译）...")
+    global _quad_initialized, _quad_available, _quad_backend
+    print("[QuadAccel] 正在重建 GPU 运行时（reset + init + 预编译）...")
     try:
         qd.reset()
     except Exception as e:
         print(f"[QuadAccel] qd.reset() 异常（忽略，继续重建）: {e}")
     _quad_initialized = False
     _quad_available = False
+    _quad_backend = ''   # 旧后端的记账随上下文一起作废，重建失败时不能留着旧名字
     # 旧上下文分配的设备缓冲全部作废：池连同 resize 缓存一并丢弃
     _BUF_POOL.clear()
     _resize_buf_cache.clear()
     try:
         return init_quad()
     except Exception as e:
-        print(f"[QuadAccel] CUDA 运行时重建失败: {e}")
+        print(f"[QuadAccel] GPU 运行时重建失败: {e}")
         _quad_available = False
         return False
 
@@ -601,14 +703,19 @@ class FrameCompositor:
 
         if mode == "main":
             self.chart_x, self.chart_y = int(chart_video_pos[0]), int(chart_video_pos[1])
+            # 这里再判一次不是冗余：上面那次校验在**另一个** `if mode == "main"` 块里，
+            # 静态窄化跨不过块边界（运行时确实到不了 None，因为上面已经 raise 过）。
+            if score_layer is None:
+                raise ValueError("main 模式需要 score_layer 参数")
             rgb_u8, mask_f32 = self._prepare_overlay(score_layer)
             self._overlay_rgb_nd = _pooled_nd(qd.u8, (self.out_h, self.out_w, 3), "ov_rgb")
             self._overlay_mask_nd = _pooled_nd(qd.f32, (self.out_h, self.out_w), "ov_mask")
             self._overlay_rgb_nd.from_numpy(rgb_u8)
             self._overlay_mask_nd.from_numpy(mask_f32)
         else:  # info
+            # 判变量本身而不是判 self.has_overlay：后者是另一个名字，窄化传不过去
             self.has_overlay = overlay_image is not None
-            if self.has_overlay:
+            if overlay_image is not None:
                 rgb_u8, mask_f32 = self._prepare_overlay(overlay_image)
                 self._overlay_rgb_nd = _pooled_nd(qd.u8, (self.out_h, self.out_w, 3), "ov_rgb")
                 self._overlay_mask_nd = _pooled_nd(qd.f32, (self.out_h, self.out_w), "ov_mask")
@@ -695,7 +802,7 @@ class FrameCompositor:
             return self._composite_main(chart_frame)
         return self._composite_info()
 
-    def _composite_main(self, chart_frame: np.ndarray) -> np.ndarray:
+    def _composite_main(self, chart_frame: Optional[np.ndarray]) -> np.ndarray:
         if chart_frame is None:
             raise ValueError("main 模式需要 chart_frame 参数")
         chart_u8 = np.ascontiguousarray(chart_frame[:, :, :3], dtype=np.uint8)
@@ -739,13 +846,13 @@ class FrameCompositor:
 
 
 # ============================================================================
-# Kernel 预编译（主线程）
+# Kernel 预编译（调用 init_quad 的线程）
 # ============================================================================
 
 def _warmup_kernels():
-    """用极小 dummy 数据触发所有 kernel 编译（必须在主线程）。
+    """用极小 dummy 数据触发所有 kernel 编译（必须在调用 init_quad 的线程）。
 
-    Quadrants 的 kernel 编译只能在主线程进行；预编译后后台线程只执行。
+    Quadrants 的 kernel 编译与执行必须同线程；预编译后同一线程只执行。
     参考 utils/Quadrants/score_material_generator-quad.py 的 _warmup_kernels。
     """
     print("[QuadAccel] 预编译 kernels...")

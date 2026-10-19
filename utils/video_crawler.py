@@ -1,5 +1,5 @@
 # import tkinter as tk
-from typing import Tuple
+from typing import Tuple, Optional, Callable, cast
 # from PIL import Image, ImageTk
 from abc import ABC, abstractmethod
 from pytubefix import YouTube, Search
@@ -87,7 +87,8 @@ def custom_po_token_verifier() -> Tuple[str, str]:
 
     return config["CUSTOMER_PO_TOKEN"]["visitor_data"], config["CUSTOMER_PO_TOKEN"]["po_token"]
         
-def autogen_po_token_verifier() -> Tuple[str, str]:
+# 两条失败路径都 `return None, None`（= 没有可用 token），返回类型必须如实写 Optional
+def autogen_po_token_verifier() -> Tuple[Optional[str], Optional[str]]:
     # 自动生成 PO Token
     script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "external_scripts", "po_token_generator.js")
     result = subprocess.run(["node", script_path], capture_output=True, text=True)
@@ -115,6 +116,19 @@ def autogen_po_token_verifier() -> Tuple[str, str]:
     #       f"po_token: {output['po_token']}")
     
     return output["visitorData"], output["poToken"]
+
+
+def _po_token_verifier(verify):
+    """把取 PO Token 的函数交给 pytubefix 前，只在**签名**上对齐库要的形状。
+
+    autogen 那一路在 node 脚本没输出、JSON 读不动、或缺 visitorData/poToken 时回
+    (None, None)。pytubefix 把参数标成 `Callable[[None], Tuple[str, str]]`，可它的实现
+    不是这个形状：innertube.py:734 **不带参数**调用它，access_po_token 的初始值就是 None
+    （:583），用到时写的是 `self.access_po_token or po_token`（:726）和
+    `if self.access_po_token:`（:777）—— 失败回 (None, None) 是它认的输入，那个
+    [[None]] 是把"无参"误写进了参数表。cast 只对齐它的字面标注，不改任何值。
+    """
+    return cast(Callable[[None], Tuple[str, str]], verify)
 
 # 获取关键字
 def get_keyword(downloader_type, title_name, level_index):
@@ -498,7 +512,10 @@ def _detect_bili_streams(detecter, high_res):
     """获取最佳媒体流: 返回列表中0是视频流，1是音频流"""
     # 只做 stream copy 封进 mp4，杜比视界/杜比音频这类流 muxer 不收 —— 两种画质档都得排除。
     # 旧代码只在低画质档排除，勾了高分辨率就会选到必然合并失败的流。
-    quality_args = dict(no_dolby_video=True, no_dolby_audio=True)
+    # 这个盒子最后要 ** 展开成 detect_best_streams 的关键字参数，里面混着 bool 和
+    # VideoQuality 枚举：不标注时被推成 dict[str, bool]，update(video_max_quality=枚举)
+    # 就成了"枚举不是 bool"。
+    quality_args: dict = dict(no_dolby_video=True, no_dolby_audio=True)
     if not high_res:
         quality_args.update(video_max_quality=video.VideoQuality._480P, no_hdr=True)
     try:
@@ -516,9 +533,16 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
 
     streams = _detect_bili_streams(detecter, high_res)
     is_flv_mp4 = detecter.check_flv_mp4_stream()
-    if streams[0] is None or (not is_flv_mp4 and streams[1] is None):
-        raise UserFacingDownloadError(
-            f"{bvid} 第 {p_index + 1} 分P 没有可下载的媒体流（可能需要大会员权限，或该分P 尚未转码完成）")
+    # 取流结果先落到两个名字上再判空：判据本来就有三处要读 streams[0]/[1]，而下标表达式
+    # 的判空结论传不进后面的分支（原来写成 `streams[0] is None or (not is_flv_mp4 and
+    # streams[1] is None)`，静态检查在非 FLV 分支里认不出 streams[1] 已判过，一直报
+    # "None 上没有 url"）。拆成局部变量后判据集合与文案都不变。
+    video_stream, audio_stream = streams[0], streams[1]
+    no_stream = f"{bvid} 第 {p_index + 1} 分P 没有可下载的媒体流（可能需要大会员权限，或该分P 尚未转码完成）"
+    if video_stream is None:
+        raise UserFacingDownloadError(no_stream)
+    if not is_flv_mp4 and audio_stream is None:
+        raise UserFacingDownloadError(no_stream)
 
     # 这里以前会 os.chdir 到 videos/downloads 好让临时文件用裸文件名。cwd 是整个进程共享的，
     # 下载几十秒里后台曲库线程按 './music_datasets/...' 这类相对路径落盘，数据就写进了
@@ -531,7 +555,7 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
 
     if is_flv_mp4:
         # FLV 流下载（增加重试次数）
-        await download_url_from_bili(streams[0].url, flv_temp, "FLV 音视频", max_retries=5, proxy=proxy)
+        await download_url_from_bili(video_stream.url, flv_temp, "FLV 音视频", max_retries=5, proxy=proxy)
         error = merge_streams([flv_temp], output_file)
         if error:
             kept = stash_failed_streams([flv_temp], output_name)
@@ -540,8 +564,13 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
         print(f"下载完成，存储为: {output_name}.mp4")
     else:
         # MP4 流下载（增加重试次数）
-        await download_url_from_bili(streams[0].url, video_temp, "视频流", max_retries=5, proxy=proxy)
-        await download_url_from_bili(streams[1].url, audio_temp, "音频流", max_retries=5, proxy=proxy)
+        # 这句判空在使用点重复一遍：上面那句是 `not is_flv_mp4 and audio_stream is None`
+        # 的合成式，"判过非空"这个结论在静态检查里带不进这个分支（运行时真到不了——
+        # 上面已经拦过了）。放在下载之前，万一将来有人挪动守卫，也不会先落一半临时文件。
+        if audio_stream is None:
+            raise UserFacingDownloadError(no_stream)
+        await download_url_from_bili(video_stream.url, video_temp, "视频流", max_retries=5, proxy=proxy)
+        await download_url_from_bili(audio_stream.url, audio_temp, "音频流", max_retries=5, proxy=proxy)
 
         print(f"下载完成，正在合并视频和音频")
         error = merge_streams([video_temp, audio_temp], output_file)
@@ -554,8 +583,14 @@ async def bilibili_download(bvid, credential, output_name, output_path, high_res
         print(f"合并完成，存储为: {output_name}.mp4")
 
 class Downloader(ABC):
+    """下载器契约。抽象方法的方法体只是 pass，不写返回类型时静态检查会把契约读成
+    "-> None"：于是每个重写都报"与基类不兼容"，每个调用点都把拿到的列表当成 Optional
+    （DataUtils 里那句 len(videos) 就是这么响的）。返回值写在签名上，契约才算说清楚。
+    """
+
     @abstractmethod
-    def search_video(self, keyword):
+    def search_video(self, keyword) -> list:
+        """[{id, aid, title, duration, url}, ...]；没有命中返回空列表"""
         pass
 
     @abstractmethod
@@ -563,12 +598,12 @@ class Downloader(ABC):
         pass
     
     @abstractmethod
-    def get_video_info(self, video_id):
+    def get_video_info(self, video_id) -> dict:
         """通过视频ID直接获取视频信息"""
         pass
     
     @abstractmethod
-    def get_video_pages(self, video_id):
+    def get_video_pages(self, video_id) -> list:
         """获取视频的分P信息（如果有）"""
         pass
 
@@ -587,9 +622,9 @@ class PurePytubefixDownloader(Downloader):
         else:
             self.use_oauth = use_oauth
         if auto_get_potoken:
-            self.po_token_verifier = autogen_po_token_verifier
+            self.po_token_verifier = _po_token_verifier(autogen_po_token_verifier)
         else:
-            self.po_token_verifier = custom_po_token_verifier
+            self.po_token_verifier = _po_token_verifier(custom_po_token_verifier)
 
         self.search_max_results = search_max_results
         self.search_scan_pages = max(1, int(search_scan_pages or 1))
@@ -849,6 +884,11 @@ class PurePytubefixDownloader(Downloader):
                         raise Exception(f"YouTube搜索失败 (400错误): {error_msg}。系统将自动尝试其他搜索策略。")
                     else:
                         raise
+        # 收尾必须有个返回值。最后一次重试是"要么 continue 要么 raise"，所以现在到不了
+        # 这一行；但函数没有 terminal return 时，静态检查只能把它判成可能返回 None
+        # （DataUtils.search_one_video 里那句 len(videos) 就是这么响的），而 max_retries
+        # 被改成 0 之类就真能返回 None 了。与 _search_video_with_api 同口径：没搜到就是空列表。
+        return []
     
     def get_video_info(self, video_id):
         """
@@ -1006,8 +1046,12 @@ class PurePytubefixDownloader(Downloader):
                 if error:
                     # 失败时不动临时文件：留在原地才能手工复现这条命令
                     raise UserFacingDownloadError(f"合并音视频失败: {error}")
-                os.remove(down_video)
-                os.remove(down_audio)
+                # download() 的返回标注是 str | None：拿到 None 时 os.remove 会抛
+                # TypeError 盖掉"合并成功"这个事实，所以先判再删
+                if down_video:
+                    os.remove(down_video)
+                if down_audio:
+                    os.remove(down_audio)
                 print(f"合并完成，存储为: {output_name}.mp4")
             else:
                 progressive = yt.streams.filter(progressive=True, file_extension='mp4').\
@@ -1018,6 +1062,11 @@ class PurePytubefixDownloader(Downloader):
                         f"这类视频通常只提供 webm，或需要合并下载；"
                         f"请勾选「下载高分辨率视频」走合并档，或换一条候选视频")
                 downloaded_file = progressive.download(output_path)
+                if not downloaded_file:
+                    # pytubefix 的 download() 标成 Optional[str]：拿空就等于"它说下载完了，
+                    # 却没给路径"。旧写法直接把它喂进 os.rename，用户看到的是一句 TypeError。
+                    raise UserFacingDownloadError(
+                        f"{video_id} 下载没有返回文件路径，请重试；反复出现就换一条候选视频或改走合并档")
                 # 重命名下载到的视频文件
                 new_filename = f"{output_name}.mp4"
                 output_file = os.path.join(output_path, new_filename)
@@ -1186,6 +1235,13 @@ def streamlit_login_bilibili(credential_path="cred_datas/bilibili_cred.pkl"):
         if state == 'success':
             # 登录成功
             credential = session.get_credential()
+            if credential is None:
+                # 状态说成功、手上却没有凭证对象（bilibili-api 的 get_credential 允许返回
+                # None）：下面每一句都要用它，按"凭证验证失败"那同一套收拾这一轮。
+                del st.session_state.bilibili_login_session
+                if 'bilibili_qr_image' in st.session_state:
+                    del st.session_state.bilibili_qr_image
+                return (False, None, "登录已确认，但没能取到凭证对象，请重新扫码", None)
             
             # 验证凭证
             try:

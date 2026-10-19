@@ -103,15 +103,28 @@ def _in_range(value, bounds):
     number = _num(value)
     if number is None:
         return None
-    if lo is not None and number < _num(lo):
+    # _num() 对读不出的值返回 None。旧写法直接 number < _num(lo)：边界表达式
+    # 写成非数值时是 float 与 None 比较 → TypeError，整页筛不掉而是崩。
+    # 与上面 value 读不出时一样返回 None（= 这条判不了），而不是猜一个 True/False。
+    lo_num, hi_num = _num(lo), _num(hi)
+    if lo is not None and lo_num is None:
+        return None
+    if hi is not None and hi_num is None:
+        return None
+    # 比较时判的是 lo_num/hi_num 而不是 lo/hi：上面两道守卫已经保证"边界给了但读不出"
+    # 早就返回 None，这里再按"算出来的数存在不存在"分支，取值与判据是同一个对象。
+    if lo_num is not None and number < lo_num:
         return False
-    if hi is not None and number > _num(hi):
+    if hi_num is not None and number > hi_num:
         return False
     return True
 
 
 def canon(**values):
-    record = {key: None for key in CANON_KEYS}
+    # 标注成 dict[str, Any]：这个记录盒子里混着 None、字符串、列表（_aliases/_part
+    # 是派生字段），不写的话它被推导成 dict[str, None]，后面每塞一个非 None 值都报
+    # "类型不可分配"（实测一处标注摊出 5 条）。
+    record: dict = {key: None for key in CANON_KEYS}
     record["_aliases"] = []
     record.update({k: v for k, v in values.items() if k in CANON_KEYS})
     return record
@@ -403,7 +416,10 @@ def to_fish_params(spec):
         if any(v is None or v != int(v) for v in values):
             give_up("level_index", "取值非整数")
         else:
-            params["level_index"] = ",".join(str(int(v)) for v in values)
+            # 上面的 any() 已经保证每项都是整数值，但窄化进不了生成器表达式；
+            # 先收敛成 int 列表再 join，语义与原来逐字相同。
+            ints = [int(v) for v in values if v is not None]
+            params["level_index"] = ",".join(str(v) for v in ints)
 
     for key, name in (("ds_range", "ds"), ("score_range", "score"),
                       ("rating_range", "ra"), ("bpm_range", "bpm")):

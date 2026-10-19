@@ -92,8 +92,13 @@ EXPIRY_MARGIN = 30
 # 放模块全局，监听与结果才能跨过这次重载继续对接（锁与监听列表取别名安全，因为只原地
 # 改；pending / result 会被重新赋值，必须经盒子读写）。
 _RUNTIME_KEY = "_chugen_oauth_runtime"
-_rt = getattr(sys, _RUNTIME_KEY, None)
-if _rt is None:
+# 标注成 dict：_rt 是模块级变量，函数里读到的是它的**声明类型**而不是"守卫之后
+# 必然非 None"这个事实——不标注的话下面 14 处 _rt["..."] 全判"None 不可下标"。
+# 兜一层 or {}：getattr 拿不到时给个空盒子，紧接着的非空守卫就会重建并挂回 sys。
+# （原来那句 `if _rt is None` 只挡 None：万一 sys 上挂着一个空 dict，旧代码会带着
+# 它往下走，第一处 _rt["refresh_lock"] 就 KeyError。）
+_rt: dict = getattr(sys, _RUNTIME_KEY, None) or {}
+if not _rt:
     _rt = {"refresh_lock": threading.Lock(), "auth_lock": threading.Lock(),
            "servers": [], "pending": None, "result": None}
     setattr(sys, _RUNTIME_KEY, _rt)
@@ -457,8 +462,11 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, *args):
-        pass  # 默认日志会把整条 URL 打出来，里面就带着授权码
+    # 参数名照基类写（http.server 里就叫 format，位置传参）：写成 *args 会被判成
+    # "重写与基类签名不兼容"。这里收到什么都是丢弃 —— 默认日志会把整条回调 URL
+    # 打出来，里面就带着授权码。
+    def log_message(self, format, *args):
+        pass
 
 
 class _IPv4CallbackServer(ThreadingHTTPServer):

@@ -75,6 +75,12 @@ def bilibili_login_dialog(proxy=None):
 
     if state == 'success':
         credential = session.get_credential()
+        if credential is None:
+            # 状态说成功、手上却没有凭证对象（bilibili-api 的 get_credential 允许返回
+            # None）：下面每一句都要用它。先说实话、把这轮作废，别拿 None 去调方法。
+            st.error("登录已确认，但没能取到凭证对象，请重新扫码", icon="❌")
+            reset_session()
+            return
         missing = [name for name, ok in (('SESSDATA', credential.has_sessdata()),
                                         ('bili_jct', credential.has_bili_jct())) if not ok]
         if missing:

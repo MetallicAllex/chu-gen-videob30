@@ -269,10 +269,14 @@ def _cn_range_control(spec_key, label, disabled=False, help=None):
 
 def _cn_choice(label, options, key, mapping=None, disabled=False, help=None, default=None, fmt=None):
     """多选：mapping 是「界面文案 -> spec 取值」，没给就原样返回；fmt 只管显示。"""
-    format_func = fmt or ((lambda x: mapping.get(x, x)) if mapping else None)
+    # format_func 直接传：streamlit 那一头的默认值就是 str（selectbox.py:91 起那串重载都
+    # 写 `format_func: Callable[[Any], str] = str`，不收 None），所以"没有格式化函数"
+    # 就显式给 str，效果与原来用 **{...} 条件展开省略参数完全一致——而那个 ** 展开
+    # 在 Pylance 自带的引擎上会让 multiselect 的 8 条重载全部匹配失败（9 条红）。
+    format_func = fmt or ((lambda x: mapping.get(x, x)) if mapping else str)
     picked = st.multiselect(label, list(options), default=default, key=key,
                             disabled=disabled or not options, help=help,
-                            **({"format_func": format_func} if format_func else {}))
+                            format_func=format_func)
     if disabled or not picked:
         return None
     return [_cn_reverse(mapping)[x] for x in picked] if mapping else picked
@@ -536,7 +540,7 @@ def _cn_render_stats(pool, server):
                    + "（曲库未覆盖该曲，或该数据源不返回这个字段。前者会随曲库自动补齐）", icon="⚠️")
     if stats["ignored"]:
         st.info("以下条件该数据源不支持，已忽略："
-                + "　".join(FIELD_LABELS.get(k, k) for k, _ in stats["ignored"]), icon="ℹ️")
+                + "　".join(f"{FIELD_LABELS.get(k, k)}" for k, _ in stats["ignored"]), icon="ℹ️")
 
     if pool["params"]:
         st.caption("本次发给服务端的粗筛参数：" + "　".join(f"{k}={v}" for k, v in pool["params"].items()))

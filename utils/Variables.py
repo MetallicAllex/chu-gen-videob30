@@ -264,15 +264,100 @@ XFADE_TRANSITIONS_SUFFIX = [
     "custom"          # 57 自定义（高级） 
 ]
 
-HARD_RENDER_METHOD = {
-    "NVIDIA": { "codec": "nvenc" },
-    "AMD": { "codec": "amf" },
-    "Intel": { "codec": "qsv" },
-    "d3d12va": { "codec": "d3d12va" }
-}
+# ===== 编码器总表：关于编码器的事，只这一份 =====
+# 以前散在四处：实探优先序（RenderIO._HW_ENCODERS）、可点名的品牌（ACCEL_BRAND）、
+# 品牌→编码器后缀（HARD_RENDER_METHOD）、逐编码器调参（SegmentUtils 与
+# get_ffmpeg_encoder_args 各一份内容相同的表）。加一个编码器要改两三处，漏一处就是
+# "两条路参数不一样"或"下拉框里能点到一个探测根本不认的名字"。
+# 列表顺序就是实探优先序：第一个"列里有且真编得通"的算最优。
+SOFTWARE_ENCODER = 'libx264'      # 兜底那行：不参与实探（探它没意义），永远最后被选
+SOFTWARE_ENCODERS = ['libx264', 'libx265']   # 可在页面上点名的软件档；后者随构建可选
+HW_ENCODERS = [
+    {'codec': 'h264_videotoolbox', 'name': 'macOS VideoToolbox', 'brand': None,
+     'tuning': ['-allow_sw', '1']},
+    {'codec': 'h264_nvenc', 'name': 'NVIDIA NVENC', 'brand': 'NVIDIA',
+     'tuning': ['-preset', 'p4', '-tune', 'hq']},
+    {'codec': 'h264_amf', 'name': 'AMD AMF', 'brand': 'AMD',
+     'tuning': ['-quality', 'balanced']},
+    {'codec': 'h264_qsv', 'name': 'Intel QuickSync', 'brand': 'Intel',
+     'tuning': ['-preset', 'medium']},
+    {'codec': SOFTWARE_ENCODER, 'name': 'CPU H.264 / AVC (libx264)', 'brand': None,
+     'software': True, 'tuning': ['-preset', 'medium']},
+    # AVC 与 H.264 是同一个东西，x264 就是它的软件编码器；H.265/HEVC 单独一档。
+    # hvc1 标签让 mp4 在 QuickTime/苹果系播放器里可识别（ffmpeg 默认写 hev1）。
+    {'codec': 'libx265', 'name': 'CPU H.265 / HEVC (libx265)', 'brand': None,
+     'software': True, 'tuning': ['-preset', 'medium', '-tag:v', 'hvc1']},
+]
+ENCODER_BY_CODEC = {row['codec']: row for row in HW_ENCODERS}
 
-ACCEL_BRAND = ["NVIDIA", "AMD", "Intel"]
-# ACCEL_BRAND_CAPTIONS = ["NVENCoder(NVENC)", "AMFramework(含集显)", "QSyncVideo(含集显)"]
+
+def encoder_tuning(codec):
+    """该编码器的 ffmpeg 调参（返回副本，调用方会就地 extend）。认不出的名字按软编
+    兜底——宁可不给参数，也不把一个未知名字配上陌生参数送进 ffmpeg。"""
+    return list((ENCODER_BY_CODEC.get(codec) or ENCODER_BY_CODEC[SOFTWARE_ENCODER])['tuning'])
+
+
+def encoder_probe_order():
+    """实探的候选与优先序 [(编码器名, 显示名)]；软编档不在候选里。"""
+    return [(row['codec'], row['name']) for row in HW_ENCODERS
+            if not row.get('software')]
+
+
+def is_hevc_codec(codec):
+    """编码器名是否属于 HEVC/H.265 家族（libx265、hevc_nvenc 等）。"""
+    name = (codec or '').lower()
+    return 'hevc' in name or 'x265' in name or '265' in name
+
+
+def fallback_encoder_on_failure(codec):
+    """编码失败后允许改用的同族兜底编码器；没有可安全替换的返回 None。
+
+    H.265 失败不能退回 H.264：同一批片段会跨编码族，最终 `concat -c copy`
+    接不起来（逐段单独能播，拼成一整支就是坏片）。这种时候宁可让这一段
+    带着错误失败，也不静默产出混合编码的成片。H.264 硬编失败退回 libx264
+    仍是同族，可以照旧兜底。
+    """
+    if not codec or codec == SOFTWARE_ENCODER:
+        return None
+    if is_hevc_codec(codec):
+        return None
+    return SOFTWARE_ENCODER
+
+
+def codec_for_brand(brand):
+    """页面上点名的品牌 -> 编码器名；品牌不认识时返回 None（调用方据此退回自动）。"""
+    if not brand:
+        return None
+    for row in HW_ENCODERS:
+        if row['brand'] == brand:
+            return row['codec']
+    return None
+
+
+def encoder_choices(available, software_available=()):
+    """把"本机实探可用的编码器"排成页 6【编码器方案】的选项 [(标签, 编码器名或 None)]。
+
+    单独成函数是为了能被测：这段逻辑原来写在页面里，而页面一 import 就执行整段 UI，
+    测不到——我第一版就是在这里把 st.selectbox 的返回值当成下标用了（它回的是标签
+    字符串），那是要到用户点开那一页才炸的错。
+    第一项恒为"自动"（编码器名 None）；标签必须互不相同，页面按标签查回编码器名。
+    硬件档里 brand=None 的候选（videotoolbox）只体现在"自动"那一项的显示名里，不单独
+    列选项；软件档由调用方传入实探结果（libx265 不是每个 ffmpeg 构建都带），没有品牌，
+    直接按编码器名点名。
+    两类都带【硬件】/【软件】标记：硬件档只列实探可用的，软件档始终在列（libx264 是
+    兜底）——实探通过不等于运行期一定编得动，用户要能明确点名 CPU 档。
+    """
+    auto_name = available[0][1] if available else f"无可用硬件编码，将回退 {SOFTWARE_ENCODER}"
+    # 标注成 list：不写就被推成 list[tuple[str, None]]（第一项恒为 None），
+    # 后面 append 带编码器名的元组时类型对不上。
+    opts: list = [(f"自动（本机探测：{auto_name}）", None)]
+    for codec, name in available:
+        brand = (ENCODER_BY_CODEC.get(codec) or {}).get('brand')
+        if brand:
+            opts.append((f"【硬件】{name}（{brand}）", codec))
+    for codec, name in software_available:
+        opts.append((f"【软件】{name}", codec))
+    return opts
 
 # 预设视频列表/合集源
 # 格式: {平台: {作者: [(ID, 标题), ...]}}

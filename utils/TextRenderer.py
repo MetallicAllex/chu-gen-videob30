@@ -7,7 +7,7 @@ Date: 2026-03-02
 """
 
 from dataclasses import dataclass, field
-from typing import Tuple, Optional, List, Union
+from typing import Tuple, Optional, List, Union, cast
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from urllib.request import urlopen, Request
@@ -291,7 +291,10 @@ class TextStyle:
 class LayoutConfig:
     """布局配置"""
     width: int = 800
-    height: int = 600
+    # 收 Optional：页 5 的『高度』是 st.number_input，用户把框清空就是 None，它会跟着
+    # 样式配置一路写进来。写成 int 时静态检查在构造点就报"int|None 不给 int"，
+    # 而运行时真正炸的地方是下面的 Image.new —— 所以判空放在用它的地方。
+    height: Optional[int] = 600
     auto_height: bool = True
     padding: Tuple[int, int, int, int] = (20, 20, 20, 20)
     line_spacing: int = 8
@@ -330,6 +333,14 @@ class TextRenderer:
             TextRenderer._tokenizer = TextTokenizer()
     
     @classmethod
+    def tokenizer(cls) -> "TextTokenizer":
+        """取分词器。__init__ 里保证过它非 None，但那是另一处赋值的隐式约定，
+        静态上 _tokenizer 仍是 Optional——两处 tokenize 调用各报一条，这里把约定落成返回类型。"""
+        if TextRenderer._tokenizer is None:
+            TextRenderer._tokenizer = TextTokenizer()
+        return TextRenderer._tokenizer
+
+    @classmethod
     def set_custom_dict(cls, dict_path: str) -> None:
         cls._tokenizer = TextTokenizer(dict_path)
     
@@ -337,6 +348,10 @@ class TextRenderer:
     def font(self) -> ImageFont.FreeTypeFont:
         if self._font is None:
             self._load_font()
+        if self._font is None:
+            # 声明的是 FreeTypeFont，就不能把 None 交出去——否则调用方拿着 None
+            # 继续画字，崩在离原因很远的地方
+            raise RuntimeError(f"字体未能加载（检查 {getattr(self, 'font_path', '?')}）")
         return self._font
     
     def _load_font(self, size: Optional[int] = None) -> None:
@@ -388,7 +403,7 @@ class TextRenderer:
                     continue
                 
                 # 使用分词器进行分词
-                tokens = self._tokenizer.tokenize(para)
+                tokens = self.tokenizer().tokenize(para)
                 
                 current_line = ""
                 
@@ -440,7 +455,7 @@ class TextRenderer:
                 lines.append('')
                 continue
             
-            tokens = self._tokenizer.tokenize(para)
+            tokens = self.tokenizer().tokenize(para)
             current_line = ""
             
             for token in tokens:
@@ -588,6 +603,8 @@ class TextRenderer:
         base_line_height = ascent + descent
         
         if use_pilmoji:
+            from pilmoji import Pilmoji   # 就地导入：原来那个在别的方法的 try 里，
+                                          # 走到这条路径时名字可能根本没绑定
             temp_img = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
             for line in lines:
                 if line:
@@ -626,6 +643,9 @@ class TextRenderer:
             image_height = total_text_height + self.layout.padding[0] + self.layout.padding[2] + safe_margin
         else:
             image_height = self.layout.height
+            if image_height is None:
+                # 走到这里 Image.new 只会甩一句 "argument 2 must be int"，看不出是谁没填。
+                raise ValueError("关掉了「自动计算高度」却没填画面高度：勾回自动高度，或给「高度」填一个数")
         
         # 创建透明图片
         image = Image.new("RGBA", (self.layout.width, image_height), (0, 0, 0, 0))
@@ -685,10 +705,15 @@ class TextRenderer:
                         for angle in range(0, 360, 45):
                             dx = self.style.stroke_width * math.cos(math.radians(angle))
                             dy = self.style.stroke_width * math.sin(math.radians(angle))
-                            pilmoji.text((x + dx, y + dy), line, fill=stroke_color, font=self.font)
+                            # dx/dy 是带小数的八向偏移（45° 那四个是 0.707 倍）。pilmoji 把
+                            # xy 标成 Tuple[int, int]，比 Pillow 自己窄（ImageDraw.text 收
+                            # tuple[float, float]）；在这里取整会动描边形状，所以值原样传，
+                            # 只在签名上把这条"标注窄于实现"说破。
+                            pilmoji.text(cast(Tuple[int, int], (x + dx, y + dy)), line,
+                                         fill=stroke_color, font=self.font)
                     
                     # 绘制文字
-                    pilmoji.text((x, y), line, fill=color, font=self.font)
+                    pilmoji.text(cast(Tuple[int, int], (x, y)), line, fill=color, font=self.font)
                     
                     current_y += line_height + self.layout.line_spacing
                     
@@ -751,11 +776,12 @@ class TextRenderer:
         
         try:
             parsed = ImageColor.getcolor(color, "RGBA")
-            if parsed is None:
+            # 模式固定为 RGBA → 返回必然是 4 元组。旧写法的 len==3 分支是死代码，
+            # 却把 parsed 的推导类型搅成 int | tuple[int, ...]，于是 len()/解包/返回
+            # 三处一起报错。这里按 4 元组取值，形状不对就退回白色。
+            if not isinstance(parsed, tuple) or len(parsed) != 4:
                 return (255, 255, 255, 255)
-            if len(parsed) == 3:
-                return (*parsed, 255)
-            return parsed
+            return (parsed[0], parsed[1], parsed[2], parsed[3])
         except ValueError:
             return (255, 255, 255, 255)
     

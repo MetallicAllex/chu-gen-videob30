@@ -23,9 +23,11 @@ from typing import Optional
 
 from utils.DataUtils import sort_video_files
 from utils.PathUtils import TEMP_GENERATED_DIR
+from utils.Variables import (SOFTWARE_ENCODER, fallback_encoder_on_failure,
+                             is_hevc_codec)
 
 from .RenderIO import (get_ffmpeg_binary, get_ffmpeg_encoder_args, get_active_render_job,
-                       run_owned_complete)
+                       run_owned_complete, check_ffmpeg_version)
 
 
 # ============================================================================
@@ -99,26 +101,66 @@ def _run_subprocess_checked(cmd: list, stage: str):
     return returncode, out, err
 
 
-def _get_libx264_encoder_args():
-    return ['-c:v', 'libx264', '-preset', 'fast', '-crf', '18']
+def _annexb_bsf(codec: Optional[str]) -> str:
+    """MPEG-TS remux 用的 Annex B 转换滤镜：H.264 与 HEVC 的 bsf 名字不同。
+
+    旧写法写死 h264_mp4toannexb：选 H.265 时每段 remux 都在第一步失败，而且错误
+    只报滤镜名，看起来像素材坏了。
+    """
+    return 'hevc_mp4toannexb' if is_hevc_codec(codec) else 'h264_mp4toannexb'
+
+
+def _mp4_codec_tag_args(codec: Optional[str]) -> list:
+    """流拷贝到 mp4 时把 HEVC 标成 hvc1（TS remux 会把源片段的 hvc1 丢掉，
+    mp4 muxer 默认写 hev1；苹果系播放器认 hvc1）。"""
+    return ['-tag:v', 'hvc1'] if is_hevc_codec(codec) else []
+
+
+def _double_bitrate(bitrate: str) -> str:
+    """'2500k' → '5000k'，用作 bufsize；解析不了就原样返回（至少不会更小）。"""
+    match = re.match(r'^\s*(\d+(?:\.\d+)?)\s*([kKmM]?)\s*$', str(bitrate or ''))
+    if not match:
+        return str(bitrate or '5000k')
+    return f"{float(match.group(1)) * 2:g}{match.group(2) or ''}"
+
+
+def _get_libx264_encoder_args(bitrate: str = "5000k") -> list:
+    """软编兜底参数：目标码率跟随用户选择。
+
+    旧写法写死 `-crf 18`，完全无视 bitrate：用户选 8 Mbps、硬件编码器失败后，
+    回退出来的主体/转场段是另一档画质与体积，而指纹与进度条仍写着 8 Mbps。
+    用 ABR + maxrate 让回退产物与目标码率同一个量级。
+    """
+    return ['-c:v', 'libx264', '-preset', 'fast',
+            '-b:v', bitrate, '-maxrate', bitrate,
+            '-bufsize', _double_bitrate(bitrate)]
 
 
 def _get_encoder_args_with_fallback(codec: Optional[str], bitrate: str, force_software: bool = False) -> list:
     if force_software or not codec or codec == 'libx264':
-        return _get_libx264_encoder_args()
+        return _get_libx264_encoder_args(bitrate)
     try:
         return get_ffmpeg_encoder_args(codec, bitrate)
     except Exception:
-        return _get_libx264_encoder_args()
+        return _get_libx264_encoder_args(bitrate)
 
 
 def _run_ffmpeg_encode_with_fallback(cmd_prefix: list, output_path: str,
                                      codec: Optional[str], bitrate: str, stage: str):
-    """先尝试硬件编码器，失败回退 libx264。"""
+    """先尝试本批选定的编码器；仅同族时才回退 libx264。
+
+    H.265 失败不能退回 H.264：这些阶段产物最后按 `-c copy` concat，跨编码族
+    直接接不起来（逐段都能播，拼完整支坏）。没有同族兜底就让这一阶段失败，
+    由上层明确报错，而不是静默交出混合编码的成片。
+    """
     attempts = []
-    if codec and codec != 'libx264':
+    if codec and codec != SOFTWARE_ENCODER:
         attempts.append((codec, _get_encoder_args_with_fallback(codec, bitrate)))
-    attempts.append(('libx264', _get_libx264_encoder_args()))
+        fallback = fallback_encoder_on_failure(codec)
+        if fallback:
+            attempts.append((fallback, _get_libx264_encoder_args(bitrate)))
+    else:
+        attempts.append((SOFTWARE_ENCODER, _get_libx264_encoder_args(bitrate)))
 
     last_error = None
     used_codecs = set()
@@ -134,14 +176,14 @@ def _run_ffmpeg_encode_with_fallback(cmd_prefix: list, output_path: str,
         ]
         try:
             _run_subprocess_checked(cmd, f"{stage} ({codec_name})")
-            if codec_name != codec and codec and codec != 'libx264':
-                print(f"[Info] {stage}: 硬件编码失败后已回退 libx264")
+            if codec_name != codec and codec and codec != SOFTWARE_ENCODER:
+                print(f"[Info] {stage}: 首选编码器失败后已回退 {SOFTWARE_ENCODER}")
             return
         except RuntimeError as e:
             _reraise_if_cancelled(e)
             last_error = e
-            if codec_name != 'libx264':
-                print(f"[Warning] {stage}: {codec_name} 编码失败，尝试回退 libx264")
+            if codec_name != SOFTWARE_ENCODER:
+                print(f"[Warning] {stage}: {codec_name} 编码失败，尝试回退 {SOFTWARE_ENCODER}")
                 continue
             raise
     if last_error:
@@ -172,14 +214,21 @@ def _audio_window(start: float, duration: float) -> str:
 def _render_xfade_body_segment(input_path: str, start: float, duration: float,
                                output_path: str, codec: Optional[str], bitrate: str,
                                video_fps: int, stage: str):
-    """裁出一个片段的"主体"（去掉两端转场窗口），统一格式。"""
+    """裁出一个片段的"主体"（去掉两端转场窗口），统一格式。
+
+    裁剪用**输入侧 -ss**：旧写法只靠 filter 里的 trim=start=...，ffmpeg 必须先把
+    每个片段从第 0 秒解码到起点再丢掉——50 段素材意味着每条都白解了前面几秒到几十秒
+    （1080p60 软解约 9ms/帧，起点 20s 就是白烧 ~11 万帧）。-ss 放在 -i 前由 ffmpeg
+    定位到关键帧后再精确解码到目标时刻，重编码下仍是帧级准确。
+    """
     filter_complex = (
-        f"[0:v]trim=start={_format_seconds(start)}:duration={_format_seconds(duration)},"
+        f"[0:v]trim=duration={_format_seconds(duration)},"
         f"setpts=PTS-STARTPTS,fps={video_fps},format=yuv420p,settb=AVTB[v];"
-        f"[0:a]{_audio_window(start, duration)}[a]"
+        f"[0:a]{_audio_window(0, duration)}[a]"
     )
     cmd_prefix = [
         get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'warning',
+        '-ss', _format_seconds(start),
         '-i', input_path,
         '-filter_complex', filter_complex,
         '-map', '[v]', '-map', '[a]'
@@ -191,22 +240,27 @@ def _render_xfade_transition_segment(left_path: str, right_path: str,
                                      left_start: float, duration: float,
                                      output_path: str, codec: Optional[str], bitrate: str,
                                      video_fps: int, stage: str):
-    """对相邻两片的重叠窗口做 xfade（视频）+ acrossfade（音频）。"""
+    """对相邻两片的重叠窗口做 xfade（视频）+ acrossfade（音频）。
+
+    左片的窗口起点同样走输入侧 -ss（理由见 _render_xfade_body_segment）：转场窗口
+    位于每段尾部，旧写法要从头解码整段才能拿到最后 1 秒。
+    """
     duration_s = _format_seconds(duration)
     filter_complex = (
-        f"[0:v]trim=start={_format_seconds(left_start)}:duration={duration_s},"
+        f"[0:v]trim=duration={duration_s},"
         f"setpts=PTS-STARTPTS,fps={video_fps},format=yuv420p,settb=AVTB[v0];"
         f"[1:v]trim=start=0:duration={duration_s},"
         f"setpts=PTS-STARTPTS,fps={video_fps},format=yuv420p,settb=AVTB[v1];"
         f"[v0][v1]xfade=transition=fade:duration={duration_s}:offset=0,"
         f"format=yuv420p,settb=AVTB[vout];"
-        f"[0:a]{_audio_window(left_start, duration)}[a0];"
+        f"[0:a]{_audio_window(0, duration)}[a0];"
         f"[1:a]{_audio_window(0, duration)}[a1];"
         f"[a0][a1]acrossfade=d={duration_s}:c1=tri:c2=tri,"
         f"aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB[aout]"
     )
     cmd_prefix = [
         get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'warning',
+        '-ss', _format_seconds(left_start),
         '-i', left_path, '-i', right_path,
         '-filter_complex', filter_complex,
         '-map', '[vout]', '-map', '[aout]'
@@ -222,11 +276,12 @@ def _is_lockish_text(e: Exception) -> bool:
 
 
 def _concat_island_segments(segment_paths: list, list_file: str, output_path: str,
-                            video_fps: int):
+                            video_fps: int, bitrate: str = "5000k",
+                            codec: Optional[str] = None):
     """concat 流拷贝拼接所有 body/transition 段。
 
     成品被其他程序占用（旧成片还在播放器里开着等）时先退让重试；流拷贝失败
-    再回退重编码。"""
+    再回退重编码（沿用本批选定的编码器与目标码率，别在最后一步偷偷换成 x264）。"""
     with open(list_file, 'w', encoding='utf-8') as f:
         for path in segment_paths:
             safe_path = os.path.abspath(path).replace('\\', '/').replace("'", "'\\''")
@@ -237,16 +292,14 @@ def _concat_island_segments(segment_paths: list, list_file: str, output_path: st
         '-f', 'concat', '-safe', '0',
         '-i', list_file,
         '-c', 'copy',
+        *_mp4_codec_tag_args(codec),
         output_path
     ]
-    reencode_cmd = [
+    reencode_prefix = [
         get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'warning',
         '-f', 'concat', '-safe', '0',
         '-i', list_file,
         '-vf', f'fps={video_fps},format=yuv420p',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-        output_path
     ]
     for attempt in range(3):
         try:
@@ -262,7 +315,8 @@ def _concat_island_segments(segment_paths: list, list_file: str, output_path: st
                 continue
             print(f"[Warning] 最终 concat 流拷贝失败，将回退重编码: {e}")
             break
-    _run_subprocess_checked(reencode_cmd, "transition island 最终 concat 重编码")
+    _run_ffmpeg_encode_with_fallback(reencode_prefix, output_path, codec,
+                                     bitrate, "transition island 最终 concat 重编码")
 
 
 def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1,
@@ -275,6 +329,9 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
     仅调用 FFmpeg/FFprobe，不依赖 MoviePy 或 GPU 计算框架。
     片段需命名为 {数字前缀}_{...}.mp4 以便 sort_video_files 正确排序。
     """
+    # 这道检查以前定义了却没有调用点；xfade/apad 等滤镜都有最低版本要求，
+    # 低版本应在拼接开始前就给出可操作报错，而不是跑到一半才失败。
+    check_ffmpeg_version()
     print("[Info] --------------------开始 transition island 低内存拼接-------------------")
     t_concat_start = time.perf_counter()
 
@@ -293,7 +350,8 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
         raise ValueError("Error: 没有有效的视频片段文件！")
     if len(sorted_files) == 1 or trans_time <= 0:
         return combine_full_video_direct(video_clip_path, auto_add_transition=False,
-                                         trans_time=trans_time, video_fps=video_fps)
+                                         trans_time=trans_time, codec=codec,
+                                         video_fps=video_fps)
 
     file_paths = [os.path.join(video_clip_path, f) for f in sorted_files]
     durations = []
@@ -363,7 +421,8 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
             raise RuntimeError("transition island 未生成任何有效临时片段")
 
         list_file = os.path.join(temp_dir, "concat_list.txt")
-        _concat_island_segments(generated_segments, list_file, output_path, video_fps)
+        _concat_island_segments(generated_segments, list_file, output_path,
+                                video_fps, bitrate, codec)
         # -f concat 对打不开的输入是"跳过它继续拼并返回 0"（实测 4 段只剩 0.42s），
         # 返回码不足以说明成片完整。期望值直接取"进清单的每一段实测时长之和"，
         # 不用 sum(durations) - sum(transition_times) 那个公式——过短的 body/transition
@@ -403,6 +462,7 @@ def combine_full_video_direct(video_clip_path: str, auto_add_transition: bool = 
     - auto_add_transition=False：TS remux + concat 流拷贝（无转场，最快、最低内存）。
     - auto_add_transition=True ：转交 combine_full_video_xfade_islands（低内存 xfade）。
     """
+    check_ffmpeg_version()
     if auto_add_transition and trans_time > 0:
         return combine_full_video_xfade_islands(
             video_clip_path, trans_time=trans_time, codec=codec,
@@ -447,7 +507,7 @@ def combine_full_video_direct(video_clip_path: str, auto_add_transition: bool = 
                     get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'error',
                     '-i', src_path,
                     '-c', 'copy',
-                    '-bsf:v', 'h264_mp4toannexb',
+                    '-bsf:v', _annexb_bsf(codec),
                     '-f', 'mpegts',
                     ts_path
                 ]
@@ -473,6 +533,7 @@ def combine_full_video_direct(video_clip_path: str, auto_add_transition: bool = 
             '-f', 'concat', '-safe', '0',
             '-i', ts_list_file,
             '-c', 'copy',
+            *_mp4_codec_tag_args(codec),
             output_path
         ]
         merge_rc, _mout, merr = run_owned_complete(cmd, encoding=None)

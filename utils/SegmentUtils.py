@@ -15,7 +15,8 @@ from utils.DataUtils import sort_video_files
 from utils.ImageUtils import create_blank_image
 from utils.PageUtils import format_time_difference
 from utils.PathUtils import is_artifact_valid, load_config, save_config, ERROR_LOG_DIR, TEMP_GENERATED_DIR
-from utils.Variables import HARD_RENDER_METHOD, REVERSE_LEVEL_LABELS, image_root_path
+from utils.Variables import (REVERSE_LEVEL_LABELS, image_root_path,
+                             SOFTWARE_ENCODER, fallback_encoder_on_failure)
 
 
 # ==================== 常量定义 ====================
@@ -115,30 +116,44 @@ def global_render_signature(encoder_param: dict, style_config: dict,
     """
     position = ((style_config or {}).get('position') or {}).get('video') or {}
     trans = trans_param or {}
-    return _digest({
+    payload = {
         'res': list(encoder_param.get('resolution') or []),
         'bitrate': encoder_param.get('bitrate'),
         'codec': encoder_param.get('codec'),
+        # 输出帧率必须进指纹：GPU 路会把帧率**探测回写**进 encoder_param['fps']
+        # （QuadRenderer 跟随源视频帧率，源 30fps 就渲 30），经典路没有 fps 控件、
+        # 一直是 DEFAULT_FPS。两个按钮共用同一个片段目录，少了这一项时 30fps 渲好的
+        # 片段会被 60fps 那一批判"新鲜"直接复用，成片里就是每帧复制的顿挫，而界面上
+        # 一声不响。与 'loudness' 同一条口径：宁可换键后第一次整批重渲。
+        'fps': int(encoder_param.get('fps') or DEFAULT_FPS),
         'darkness': (style_config or {}).get('darkness'),
         'overlay': position.get('overlay'),
         'height': position.get('height'),
         'transition': 'bake' if bake_fades else 'xfade',
-        'trans_enabled': trans.get('enabled'),
-        'trans_duration': trans.get('duration'),
+        'trans_enabled': bool(trans.get('enabled')),
         # 响度口径的版本号。修复前 Quadrants 路的 main 片段不施加逐段增益
         # （QuadRenderer 里 volume_adjust_db 写死 0），修复后两路共用
         # measure_audio_gain_db。这个键必须进指纹：否则升级前渲好的 GPU 片段会被
         # 判"新鲜"继续用，跟修复后补渲的那几段差 5~10 dB 拼在同一片子里，
         # 而界面上看不出来。代价是升级后第一次渲染会整批重编（两条路各一次）。
         'loudness': 'per-clip-v2',
-    })
+    }
+    # duration 只在启用转场时影响产物（xfade/acrossfade 的窗口长度，或片段内烘焙的
+    # 淡变时长）。禁用转场时它被两边都忽略——旧写法无条件收进指纹，改一个不生效的
+    # 数值就触发整批重渲。
+    if trans.get('enabled'):
+        payload['trans_duration'] = trans.get('duration')
+    return _digest(payload)
 
 
-def clip_render_signature(config: dict) -> str:
-    """单个片段的指纹：它自己的参数 + 输入素材的 mtime/size。
+def clip_render_signature(config: dict, bg_offset: float = 0.0) -> str:
+    """单个片段的指纹：它自己的参数 + 输入素材的 mtime/size + 背景起播偏移。
 
-    刻意不含 bg_offset —— 那是渲染时按前序片段累计注入的派生值（顺序变了文件名
-    前缀就变，天然会重渲），把它算进来会让"只改一首"波及全片。
+    bg_offset 是渲染时按前序片段累计注入的派生值，但**不是**可以忽略的量：前序片段
+    时长变了（顺序、本段参数都没变）时，本段背景会从循环的另一秒起播。旧写法把它
+    排除在外，于是只改上一首的时长，下一段的背景画面已经换了、指纹却仍判"新鲜"。
+    顺序变化本身会改文件名前缀，不计入这里也不会漏判。两条渲染路必须传同一个累计口径
+    （intro→main→ending），否则混用时会互相判废/误复用。
     """
     return _digest({
         'id': config.get('id'),
@@ -149,6 +164,7 @@ def clip_render_signature(config: dict) -> str:
         'bg_page': config.get('bg_page'),
         'no_overlay': config.get('no_overlay'),
         'no_sound': config.get('no_sound'),
+        'bg_offset': round(float(bg_offset or 0.0), 3),
         'src': {name: _file_stamp(config.get(name))
                 for name in ('main_image', 'full_image', 'video')},
     })
@@ -185,7 +201,7 @@ def write_render_manifest(final_clips_dir: str, global_sig: str,
 # ==================== 音频处理 ====================
 
 def measure_audio_gain_db(audio_path: Optional[str], start: float = 0,
-                          duration: float = None) -> Optional[float]:
+                          duration: Optional[float] = None) -> Optional[float]:
     """算出把该音频段对齐到 DEFAULT_AUDIO_TARGET_DBFS 所需的增益 (dB)。
 
     与旧 MoviePy 实现同一套语义：测 RMS → 求差 → 线性增益限在 [0.1, 3.0]
@@ -228,15 +244,9 @@ def get_bg_duration(bg_video_path: str) -> float:
     return duration
 
 
-# 生成器原始 ffmpeg 命令的逐编码器调优参数（码率由 _build_base_ffmpeg_args 统一提供，
-# 此处不再重复 -b:v）。默认自动探测硬件编码器（N/A/I 逐一实探），
-# 用户在页面上勾了 GPU 加速并指定品牌时以其选择为准。
-_HW_ENCODER_TUNING = {
-    'h264_nvenc': ['-preset', 'p4', '-tune', 'hq'],
-    'h264_amf': ['-quality', 'balanced'],
-    'h264_qsv': ['-preset', 'medium'],
-    'h264_videotoolbox': ['-allow_sw', '1'],
-}
+# 各编码器的调参表搬到 utils/Quadrants/RenderIO.HW_ENCODER_TUNING 了，取用走
+# encoder_tuning()：这张表以前在这里和 get_ffmpeg_encoder_args 的 if/elif 里各有一份，
+# 加编码器要改两处。码率仍由 _build_base_ffmpeg_args 统一给，这里不重复 -b:v。
 
 
 class VideoGenerator:
@@ -340,10 +350,10 @@ class VideoGenerator:
         offset = self._bg_offset(bg_video_path, clip_config)
         labels = []
         first = min(duration, bg_dur - offset)
-        # 与谱面那路一样先 fps=60：两路都落在同一张 60fps 时间网格上，overlay 才会
+        # 与谱面那路落在同一张时间网格上（两路都取 self.out_fps），overlay 才会
         # 每帧推进（否则背景这一路作为主输入决定输出节奏，谱面会被隔帧复制）
         filter_parts.append(
-            f'[{bg_idx}:v]fps={DEFAULT_FPS},trim=duration={first:.3f},'
+            f'[{bg_idx}:v]fps={self.out_fps},trim=duration={first:.3f},'
             f'setpts=PTS-STARTPTS[bg0];')
         labels.append('[bg0]')
 
@@ -353,7 +363,7 @@ class VideoGenerator:
             take = min(remaining, bg_dur)
             input_args.extend(['-i', bg_video_path])
             filter_parts.append(
-                f'[{next_idx}:v]fps={DEFAULT_FPS},trim=duration={take:.3f},'
+                f'[{next_idx}:v]fps={self.out_fps},trim=duration={take:.3f},'
                 f'setpts=PTS-STARTPTS[bg{k}];')
             labels.append(f'[bg{k}]')
             next_idx += 1
@@ -367,23 +377,31 @@ class VideoGenerator:
             f'{" ".join(labels)}concat=n={len(labels)}:v=1:a=0[{src}];')
         return src
 
+    @property
+    def out_fps(self) -> int:
+        """本批片段的输出帧率，与 global_render_signature 用的是同一个数。
+
+        页面没有 fps 控件：经典渲染路从来不带这个键，取 DEFAULT_FPS；GPU 路会探测
+        源视频帧率并写回 encoder_param['fps']（QuadRenderer 里那句"输出帧率跟随源"），
+        于是 GPU 失败回退到本路径时，回退那几段必须按**同一个** fps 渲，否则混在
+        一批里的片段一半 30 一半 60（SafeRender 拼接处也是按这份 fps 走的）。
+        """
+        return int(self.encoder_param.get('fps') or DEFAULT_FPS)
+
     def _build_encoding_args(self) -> List[str]:
         """构建编码参数。
 
-        用户勾选「使用 GPU 硬件加速」时以其选定的品牌编码器为准（显卡型号只有
-        用户自己清楚，自动探测在同机多卡时可能挑错）；未勾选时自动探测
-        （N/A/I 逐一实探），无可用硬件才回退 libx264——不勾选不该等于自废加速。
-        探测针对本路径实际调用的 ffmpeg 二进制，结果进程级缓存只探一次。
+        判据只有 RenderIO.resolve_encoder 一份：用户点名了就以他选的品牌为准
+        （显卡型号只有用户自己清楚，自动探测在同机多卡时可能挑错），没点名才逐一实探
+        （N/A/I），全不通才 libx264——不勾选不该等于自废加速。
+        探测针对本路径实际调用的 ffmpeg 二进制，结果进程级缓存只探一次；解析结果同时
+        写回 encoder_param['codec']，指纹与拼接读的就是这一个值。
         """
-        from utils.Quadrants.RenderIO import detect_hw_encoder
-        codec = None
-        if self.encoder_param.get('hwaccel') and self.encoder_param.get('codec'):
-            codec = self.encoder_param['codec']
-        if not codec:
-            codec, _ = detect_hw_encoder()
+        from utils.Quadrants.RenderIO import resolve_encoder, encoder_tuning
+        codec = resolve_encoder(self.encoder_param)
         self.encoder_name = codec
         args = ['-vcodec', codec]
-        args.extend(_HW_ENCODER_TUNING.get(codec, []))
+        args.extend(encoder_tuning(codec))
         return args
     
     def _build_base_ffmpeg_args(self) -> List[str]:
@@ -397,7 +415,7 @@ class VideoGenerator:
         return [
             '-y',
             '-hide_banner',
-            '-r', str(DEFAULT_FPS),
+            '-r', str(self.out_fps),
             '-threads', str(DEFAULT_THREADS),
             '-thread_type', DEFAULT_THREAD_TYPE,
             '-b:v', f'{self.bitrate}k',
@@ -516,15 +534,25 @@ class InfoSegmentGenerator(VideoGenerator):
             try:
                 _run_encode(cmd)
             except subprocess.CalledProcessError as hw_err:
-                # 硬件编码器探测通过但实际编码失败（段位/驱动行为差异等）：
-                # 回退 libx264 重试一次，避免整段静默丢失。
+                # 硬件编码器探测通过但实际编码失败（段位/驱动行为差异等）：同族才回退
+                # libx264 重试一次，避免整段静默丢失。H.265 失败不能退回 H.264——同一批
+                # 片段会跨编码族，最终 concat -c copy 接不起来，宁可让这一段明确失败。
                 # 但"被取消终止"也长这样——不先过一遍检查点，点取消反而会再烧一遍软编。
                 _render_checkpoint()
-                if getattr(self, 'encoder_name', 'libx264') != 'libx264':
-                    print(f"[SegmentUtils] {self.encoder_name} 编码失败，回退 libx264 重试: {hw_err}")
-                    cmd = _make_cmd(['-vcodec', 'libx264', '-preset', 'medium'])
+                fallback = fallback_encoder_on_failure(
+                    getattr(self, 'encoder_name', SOFTWARE_ENCODER))
+                if fallback:
+                    print(f"[SegmentUtils] {self.encoder_name} 编码失败，回退 {fallback} 重试: {hw_err}")
+                    cmd = _make_cmd(['-vcodec', fallback, '-preset', 'medium'])
                     _run_encode(cmd)
+                    # 兜底成功 = 这段真是 libx264 编的。把结论写回这批共用的字典，
+                    # 让 finally 里重算的指纹记的是实际产物用的那一个——宁可下一轮
+                    # 多判一次过期整批重渲，也不许硬编段与软编段在同一份清单里都自称新鲜。
+                    self.encoder_param['codec'] = fallback
                 else:
+                    if getattr(self, 'encoder_name', SOFTWARE_ENCODER) != SOFTWARE_ENCODER:
+                        print(f"[SegmentUtils] {self.encoder_name} 编码失败；H.265 不跨族"
+                              f"退回 H.264（拼接无法流拷贝），本段按失败处理: {hw_err}")
                     raise
             os.replace(staged_path, output_path)
             print(f"已生成您的视频片段，名称为：{clip_config['id']}.mp4")
@@ -765,14 +793,23 @@ class VideoSegmentGenerator(VideoGenerator):
             try:
                 _run_encode(cmd)
             except subprocess.CalledProcessError as hw_err:
-                # 硬件编码失败：回退 libx264 重试一次，避免整段静默丢失。
+                # 同族才回退 libx264；H.265 不跨族退回 H.264（理由见 InfoSegmentGenerator）。
                 # 取消终止也走这个分支，所以先过检查点——否则点「取消」会再烧一遍软件编码。
                 _render_checkpoint()
-                if getattr(self, 'encoder_name', 'libx264') != 'libx264':
-                    print(f"[SegmentUtils] {self.encoder_name} 编码失败，回退 libx264 重试: {hw_err}")
-                    cmd = _make_cmd(['-vcodec', 'libx264', '-preset', 'medium'])
+                fallback = fallback_encoder_on_failure(
+                    getattr(self, 'encoder_name', SOFTWARE_ENCODER))
+                if fallback:
+                    print(f"[SegmentUtils] {self.encoder_name} 编码失败，回退 {fallback} 重试: {hw_err}")
+                    cmd = _make_cmd(['-vcodec', fallback, '-preset', 'medium'])
                     _run_encode(cmd)
+                    # 兜底成功 = 这段真是 libx264 编的。把结论写回这批共用的字典，
+                    # 让 finally 里重算的指纹记的是实际产物用的那一个——宁可下一轮
+                    # 多判一次过期整批重渲，也不许硬编段与软编段在同一份清单里都自称新鲜。
+                    self.encoder_param['codec'] = fallback
                 else:
+                    if getattr(self, 'encoder_name', SOFTWARE_ENCODER) != SOFTWARE_ENCODER:
+                        print(f"[SegmentUtils] {self.encoder_name} 编码失败；H.265 不跨族"
+                              f"退回 H.264（拼接无法流拷贝），本段按失败处理: {hw_err}")
                     raise
             os.replace(staged_path, output_path)
             print(f"已生成您的视频片段，名称为：{clip_config['id']}-{level}.mp4")
@@ -984,11 +1021,11 @@ class VideoSegmentGenerator(VideoGenerator):
     def _process_video_overlay(self, filter_parts, video_idx, base_stream, start_time, duration):
         coords = self._get_coordinates()
         
-        # fps=60 必须在 scale 之前：overlay 按主输入的时间网格取次输入的帧，两路时间基
+        # fps 必须在 scale 之前：overlay 按主输入的时间网格取次输入的帧，两路时间基
         # 不严格对齐时它会隔几帧才推进一次，产物虽是 60fps 容器、内容却只有 ~40fps
         # （实测现状滤镜图 45 帧里 14 帧与前一帧完全相同，加 fps=60 后为 0）
         filter_parts.append(
-            f'[{video_idx}:v]fps={DEFAULT_FPS},scale=-1:{coords["height"]},'
+            f'[{video_idx}:v]fps={self.out_fps},scale=-1:{coords["height"]},'
             f'trim=duration={duration},'
             f'setpts=PTS-STARTPTS[overlay_vid];'
         )
@@ -1052,6 +1089,8 @@ def gen_black_video(duration: float, resolution: tuple[int, int]):
     
     black_frame = create_blank_image(resolution[0], resolution[1], color=(0, 0, 0, 1))
     clip = ImageClip(black_frame).with_duration(duration)
+    if clip is None:      # moviepy 的 with_duration 标注允许返回 None
+        raise RuntimeError("生成纯黑底板失败：ImageClip 没有返回可用对象")
     clip.write_videofile(f"{bgclips_path}/black_bg.mp4", fps=DEFAULT_FPS)
 
 
@@ -1151,7 +1190,9 @@ def check_rendered_clips_multithreaded(
         t.join()
 
     if global_sig and params_changed:
-        print(f"[SegmentUtils] 渲染参数与上次不同（{manifest.get('global')} → {global_sig}），"
+        # params_changed 已经蕴含 manifest 非 None，但那是另一个变量，窄化带不过来；
+        # 用 or {} 兜一下，静态与运行时同时成立（真为 None 时这行本来就打不出内容）。
+        print(f"[SegmentUtils] 渲染参数与上次不同（{(manifest or {}).get('global')} → {global_sig}），"
               f"上一轮的 {len(manifest_clips)} 个片段将重新编码")
     
     # 收集结果
@@ -1219,9 +1260,20 @@ def render_all_video_clips(
         for config in resources.get(segment_type, []):
             ordered.append((_p, config))
             _p += 1
+    # 编码器与帧率都在算指纹之前定下来并写回：指纹、每段的 -vcodec、拼接阶段读的是
+    # 同一个 encoder_param，谁都不许再各自挑一次（以前页面写 libx264、渲染器却自己探测，
+    # 账面值从来没进过 ffmpeg 命令行）。
+    from utils.Quadrants.RenderIO import resolve_encoder
+    resolve_encoder(encoder_param)
     global_sig = global_render_signature(encoder_param, style_config, trans_param, bake_fades)
-    # 指纹要在注入 bg_offset 之前算：那是派生值，不该参与"这个片段变了吗"的判定
-    clip_sigs = {clip_name(p, cfg): clip_render_signature(cfg) for p, cfg in ordered}
+    # 指纹与下面的 render_selected_clips 用同一个 bg 累计口径（intro→main→ending）：
+    # 前序片段时长变化会改变本段背景的起播秒数，那一段必须跟着判废。若只在渲染时
+    # 注入、不写进指纹，就会复用一段背景起点不同的旧产物，而画面上没人看得出来。
+    clip_sigs: Dict[str, str] = {}
+    _sig_bg = 0.0
+    for _p, _cfg in ordered:
+        clip_sigs[clip_name(_p, _cfg)] = clip_render_signature(_cfg, bg_offset=_sig_bg)
+        _sig_bg += float(_cfg.get('duration', 0) or 0)
     manifest = read_render_manifest(final_clips_dir)
     manifest_clips = (manifest or {}).get('clips') or {}
 
@@ -1324,7 +1376,13 @@ def render_all_video_clips(
     finally:
         # 指纹清单落盘：只记"本次结束时磁盘上可用"的片段。失败与缺失的一个都不写，
         # 下次它们会被判废重渲，而不是被当成陈旧产物混进拼接清单（见 combine_full_video_direct）。
-        write_render_manifest(final_clips_dir, global_sig, kept_signatures)
+        # 按当前 encoder_param 重算，不复用渲染前那份 global_sig：中途退回软编时
+        # （见 _run_encode 的两处兜底）清单必须说真话，否则换了显卡/驱动之后
+        # 旧片段仍被判"新鲜"，硬编段和软编段就混在同一条 -c copy 的拼接里。
+        write_render_manifest(final_clips_dir,
+                              global_render_signature(encoder_param, style_config,
+                                                      trans_param, bake_fades),
+                              kept_signatures)
 
     if failed:
         print(f"[SegmentUtils] 警告：{len(failed)} 个片段没有产出文件，"
@@ -1506,7 +1564,9 @@ def combine_full_video_direct(final_clips_dir: str, username: str) -> str:
         if unreadable:
             raise ValueError(f"有 {len(unreadable)} 个片段读不出时长（多半已损坏或不是有效 mp4），"
                              f"拼接中止以免悄悄缺段落：{unreadable[:8]}")
-        expect_total = sum(d for d, _ in durations)
+        # 上面 unreadable 已经保证每一项都是真数值，这里再过滤一次只为让类型收敛成
+        # float：生成器表达式里 pyright 不会把那道守卫连过来。
+        expect_total = sum(d for d, _ in durations if d)
 
         # 先写 .part 再原子改名：失败时上一次的成功成片保持原样，
         # 也不会留下一份"看起来是成品"的半成品（.part 必须显式 -f mp4，

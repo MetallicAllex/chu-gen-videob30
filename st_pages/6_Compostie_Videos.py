@@ -3,19 +3,21 @@ from datetime import datetime
 from utils.PathUtils import *
 import time, traceback
 from utils.ImageUtils import render_all_images
-from utils.Variables import ACCEL_BRAND, HARD_RENDER_METHOD
+from utils.Variables import ENCODER_BY_CODEC, encoder_choices
 from utils.PageUtils import get_ffmpeg_version
 
 from utils.Quadrants.SafeRender import (RENDER_STATUS, submit_render,
                                         cancel_render, gpu_preflight)
+from utils.Quadrants.RenderIO import (detect_hw_encoder, probe_hw_encoders,
+                                      probe_software_encoders, clear_av1_hw_decode_cache)
 
-# 后端的展示名。'quadrants_cpu' 是实测出来的状态：本机没有可用 CUDA 设备时
+# 后端的展示名。'quadrants_cpu' 是实测出来的状态：本机没有可用 GPU 后端时
 # （独显休眠/驱动掉线，nvidia-smi 直接 NVML: Not Found）Quadrants 会回退到自己的
 # x64 后端——渲染照样成功，但那不是 GPU，界面不能写「Quadrants GPU」。
 _BACKEND_LABEL = {'': '尚未开始',
                   'segmentutils': '经典路径（CPU）',
                   'quadrants': 'Quadrants GPU',
-                  'quadrants_cpu': 'Quadrants（CPU 后端，本机无可用 CUDA 设备）'}
+                  'quadrants_cpu': 'Quadrants（CPU 后端，本机无可用 GPU 后端）'}
 
 
 def _backend_label(name: str) -> str:
@@ -104,7 +106,12 @@ if "save_id" in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 if not username:
@@ -153,7 +160,7 @@ with st.container(border=True):
         else:
             st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
             st.stop()
-    if not save_id or current_paths is None:
+    if not save_id or not current_paths:
         # current_paths 只在上面 `if save_id:` 分支里赋值。这里把它一起判：
         # "save_id 为真 ⇒ current_paths 已赋值"本来只是两处代码的隐式约定，
         # 静态分析连不上这两个独立变量，于是下面每一处 current_paths['...'] 都判
@@ -241,9 +248,16 @@ with st.container(border=True):
         clips_only = st.checkbox("仅渲染每个片段", help="只渲染片段，不拼接为完整视频。", key='clips_only')
 
     with col3:
-        hwaccel = st.checkbox("使用 GPU 硬件加速", value=False, disabled=True, help="此项已被标记为 `deprecated`（弃用，后期将移除此开关，合并到“加速方案”下拉框）")
-        encoder_param["hwaccel"] = hwaccel
-    
+        # 这里原来是一个"使用 GPU 硬件加速"复选框：disabled=True 且恒 False，而下面的
+        # 【加速方案】又把 disabled 挂在它身上 → 那个下拉框永远点不动，SegmentUtils 里
+        # "勾选了就以用户选的品牌为准（同机多卡时自动探测可能挑错）"这条分支根本进不去。
+        # 现在两件事合并成下面这一个选择，不再留一个点不动的开关。
+        # 这一格原来放那个点不动的复选框；现在改成读一条本机状态（探测结果进程级缓存，
+        # 与下方下拉框共用同一份答案），让"为什么只有这几个牌子可选"当场看得见。
+        _got = probe_hw_encoders()
+        st.caption("本机实探可用硬件编码器：" + (
+            "、".join(_n for _c, _n in _got) if _got else "无（自动档将用 CPU 软编）"))
+
     with col4:
         preset_bitrate = st.checkbox("使用预设的码率", True, help="均为常用值，如自定义可删除填入的数值查看范围")
 
@@ -251,11 +265,28 @@ with st.container(border=True):
     display_col1, display_col2, display_col3 = st.columns(3, vertical_alignment="center")
 
     with display_col1:
-        accel_brand = st.selectbox("加速方案", ACCEL_BRAND, 0,
-            help="请根据机器 GPU 品牌选择",
-            disabled=button_disable_stat or not hwaccel
-        )
-        encoder_param["brand"] = accel_brand
+        # 硬件档只列**实探可用**的品牌（probe_hw_encoders 会真编一帧 nullsrc 验证，驱动
+        # 不认的不列出来）：`-encoders` 里有不等于能编，让人点一个必然失败的选项更糟。
+        # 软件档同样实探（libx265 不是每个 ffmpeg 构建都带），libx264 是兜底永远保留。
+        # 选项与标签→编码器的映射在 utils.Variables.encoder_choices 里，那样才测得到。
+        _opts = encoder_choices(probe_hw_encoders(), probe_software_encoders())
+        _enc_choice = st.selectbox("编码器方案", [o[0] for o in _opts], 0,
+            disabled=button_disable_stat,
+            help="两个按钮共用这一个选择（判据只有一份）：选「自动」按本机实探结果编；"
+                 "也可以点名【硬件】品牌或【软件】CPU 档（AVC 就是 H.264，HEVC 即 H.265）。"
+                 "硬件档只列实探可用的，运行期仍可能编不动；软件档始终在列，随时可改回 CPU 渲染。"
+                 "H.265 同画质下体积更小，但纯 CPU 编码明显更慢，老播放器也可能不认；"
+                 "真编不动时渲染器会退回 libx264 重试，不会因此丢片段。")
+        # selectbox 回的是"选中的那个字符串"，不是下标：写成 _opts[_enc_choice] 会把标签
+        # 当索引用（旧引擎直接报 __getitem__ 重载不匹配，新引擎也一样会崩在运行时）。
+        # 按标签查回编码器名即可；查不到就是第一项「自动」，None → 交给实探。
+        chosen_codec = dict(_opts).get(_enc_choice)
+        encoder_param["codec"] = chosen_codec
+        encoder_param["brand"] = ((ENCODER_BY_CODEC.get(chosen_codec) or {}).get('brand')
+                                  if chosen_codec else None)
+        # 这个键的历史含义是「硬件加速」，但 resolve_encoder 用它表示"用户明确点名了
+        # 编码器"——软件档也必须为 True，否则点名的 libx264 会被自动探测覆盖。
+        encoder_param["hwaccel"] = bool(chosen_codec)
 
     with display_col2:
         res_presets = {
@@ -307,7 +338,20 @@ with st.container(border=True):
                 bitrate_display = f"自定义（未填，按默认 {encoder_param['bitrate']}kbps）"
                 st.warning(f"自定义码率还没有值，本次按默认 {encoder_param['bitrate']}kbps 编码。",
                            icon="⚠️")
-            
+
+    decode_col1, decode_col2 = st.columns([1, 2], vertical_alignment="center")
+    with decode_col1:
+        # 解码后端不给选项：能不能硬解由实探决定，用户唯一需要能做的，是清掉
+        # 可能过期的探测结果（换了驱动/显卡后重试）。
+        if st.button("重新探测", disabled=button_disable_stat,
+                     help="清除本进程已缓存的 AV1 硬解探测结果，下次渲染对每条 AV1 源"
+                          "重新实探（约 0.2 秒/文件）。"):
+            clear_av1_hw_decode_cache()
+            st.toast("已清除探测缓存，下次渲染会重新探测", icon="🔍")
+    with decode_col2:
+        st.caption("AV1 解码后端：自动——本机对该 AV1 流能硬解时用 MSMF，否则 FFMPEG；"
+                   "H.264 始终 FFMPEG。")
+
 
 # trans_config_placeholder = st.empty()
 # 仅当选择 "完整视频" 时才显示过渡选项
@@ -365,19 +409,38 @@ def save_video_render_config():
     write_global_config(G_config)
     st.toast("配置已保存！", icon="✅")
 
-if hwaccel:
-    opt_encoder = f"h264_{HARD_RENDER_METHOD[accel_brand]['codec']}"
-    encoder_param['codec'] = opt_encoder
+if encoder_param.get('codec'):
+    # 点名了（硬件品牌或软件档）就按点名的算——背面 resolve_encoder 读的也是同一个值。
+    opt_encoder = encoder_param['codec']
 else:
-    opt_encoder = "libx264"
-    encoder_param['codec'] = opt_encoder
+    # 「自动」不等于 libx264：SegmentUtils 在没有点名时走 detect_hw_encoder()
+    # （本机实测是 h264_nvenc）。旧写法在这里写死 "libx264"，于是按钮 tooltip 和渲染
+    # 指纹里的 codec 都是一个**从来没被用过**的编码器——换了显卡或驱动，旧片段仍然
+    # 被判"新鲜"继续用。探测结果与渲染侧共用同一份缓存，不会各挑各的。
+    opt_encoder, _ = detect_hw_encoder()
+encoder_param['codec'] = opt_encoder
 
+_trans_display = ("启用，淡入淡出 %.1f 秒" % float(trans_time or 0)) if trans_enable else "不启用"
 st.error(f"""
         **注意事项：**
         - 生成平均时间会因片段长度之间不同码率而变化
             - 如果您单个片段很长，渲染时间也会变久，这是事实
-        - 片段之间只有黑屏过渡，且无法更改
-            - ［开发者］正在尝试编写自定义过渡支持
+        - 片段之间的过渡：本次{_trans_display}
+            - 「开始渲染」把淡变**烘焙进片段两端**（观感像经过一次黑），
+              「Quadrants GPU 渲染」改在拼接阶段做 xfade 交叉淡化；两者会互相作废对方渲好的片段
+            - 时长可在上方改；过渡**类型**目前固定为淡化(fade)，没有多种转场可选
+        - 本次参数：编码器 `{opt_encoder}`（自动档=本机实探结果；也可点名硬件品牌或
+          软件 H.264/AVC、H.265/HEVC 档；这就是两个按钮实际会用、也是渲染指纹会记下的
+          那一个），分辨率 {res_display}，码率 {bitrate_display}
+            - 帧率没有控件：经典路固定 60fps；Quadrants 路在渲染前探测本批全部 main 源，
+              取其中**最高**帧率（上限 60fps）。低帧率源按时间基重复帧，时长不变
+            - AV1 解码后端：自动探测（仅 Quadrants 路；缓存可点「重新探测」清除；
+              H.264 固定走 FFMPEG）
+            - H.265/HEVC 在同画质下通常更小，但纯 CPU 编码更慢，部分老播放器/网页预览
+              可能不认；上传前请确认目标平台接受 HEVC
+            - 编码器（含点名的硬件品牌或软件档）在某台机器上编不动时，渲染器会退回
+              libx264 再试一次，片段不会因为选错编码器而丢失；这时清单改记 libx264，
+              下次会按软编重渲
         - 若 GPU （或驱动）太旧而不支持当前 FFmpeg 版本将无法使用硬件加速
             - 当前 FFmpeg 版本为 `{get_ffmpeg_version()}`
         - 如有以下情况，请立即终止生成并检查素材（或同时反馈问题）：
@@ -407,8 +470,10 @@ with btn_col1:
             st.rerun()
 
 # ===== 独立的 Quadrants GPU 渲染按钮（实验，不与上面「开始渲染」合并）=====
-# 灰化与否交给 gpu_preflight()，不再无条件写死禁用：它只看发行包里 quadrants 和它的
-# 两个传递依赖在不在、以及上一次渲染的 GPU 探针结果。页面这一侧**绝不做 CUDA 初始化**——
+# 灰化与否交给 gpu_preflight()，不再无条件写死禁用：它看发行包里 quadrants 和它的
+# 两个传递依赖在不在、上一次渲染的探针结果，以及那一次**真实跑在哪个后端**（CUDA/Metal/
+# Vulkan/AMDGPU 都不可用时 Quadrants 会自己回退 CPU，此时不应再把它当成 GPU 加速）。页面这一侧**绝不做
+# GPU 初始化**——
 # Quadrants 上下文有线程亲和性，脚本线程探针会把上下文建错线程（实测就是「渲到 4-5 段死亡」的成因）。
 _gpu_ok, _gpu_reason = gpu_preflight()
 if st.button("Quadrants GPU 渲染（实验）", "quad_render", width='stretch',
@@ -418,7 +483,13 @@ if st.button("Quadrants GPU 渲染（实验）", "quad_render", width='stretch',
              - 提交到常驻工作线程执行，刷新/关闭页面不影响渲染
              - 点击后弹出模态进度浮窗（无关闭按钮），浮窗打开期间页面不可交互
              - 若 Quadrants 不可用或渲染失败，会自动回退到 SegmentUtils
+             - 渲染后端在常驻工作线程内初始化：qd.gpu（CUDA/Metal/Vulkan/AMDGPU）优先，
+               不可用时尝试 Vulkan，最后回退 Quadrants 的 CPU 后端；这与上方【编码器方案】
+               无关——选【软件】只换 FFmpeg 编码器，不会关掉 GPU 合成
              - 共用上方参数（分辨率 / 码率 / 过渡 / 覆盖已存在 / 仅渲染片段）
+             - 编码器与「开始渲染」用同一个选择（判据只有一份），帧率则由本路跟随谱面源
+             - 输出帧率取本批谱面源的最高值（≤60fps，低帧率源按时间基重复帧），
+               与经典路的固定 60fps 会互相作废片段缓存
              {"" if _gpu_ok else f"当前不可用：{_gpu_reason}"}
              """):
     st.session_state.quad_start_requested = True
@@ -426,6 +497,10 @@ if st.button("Quadrants GPU 渲染（实验）", "quad_render", width='stretch',
 
 if not _gpu_ok:
     st.caption(f"🧪 GPU 渲染暂不可用：{_gpu_reason}")
+else:
+    st.caption("🧪 Quadrants 后端在渲染线程内自动初始化：qd.gpu（CUDA/Metal/Vulkan/AMDGPU）"
+               "→ Vulkan → CPU；"
+               "与上方编码器选择无关（软件编码只影响 FFmpeg 码流）。")
 
 
 # ===== 渲染请求统一交给常驻工作线程 =====

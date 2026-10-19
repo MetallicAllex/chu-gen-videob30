@@ -158,7 +158,12 @@ if "save_id" in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 if not username:

@@ -1,5 +1,6 @@
 import re
 import zlib
+from typing import Sequence, cast
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -114,7 +115,12 @@ st.markdown("""
 ### Savefile Management - Start ###
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 if not username:
@@ -561,6 +567,16 @@ with st.container(border=True):
                                             cn_song = next((s for s in songs_db if s["title"] == title), None)
                                             jp_song = next((s for s in jp_songs_db if s["meta"]["title"] == title), None)
 
+                                        # 三条库记录都可能是 None（`next(..., None)`），而下面按 stype 分支直接取
+                                        # 下标。运行时靠"stype 决定哪一路必然非空"这条隐式约定（上面 550-567 就是
+                                        # 这么赋值的），静态连不上 → 实测 11 条报错。这里把约定落成值：None→空壳。
+                                        # 安全性：下游全是真值判断（`if cn_song:` / `jp_song and ...` /
+                                        # `cn_song["id"] if cn_song else ...`），而 None 与 {} 同为假值，
+                                        # 短路行为逐字不变。
+                                        cn_song = cn_song or {}
+                                        jp_song = jp_song or {}
+                                        intl_song = intl_song or {}
+
                                         diff_rows = []
                                         for label in ["EXPERT", "MASTER", "ULTIMA"]:
                                             cn_val = None
@@ -850,8 +866,10 @@ with st.container(border=True):
                                     "level_next": st.column_config.NumberColumn("下版本等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
                                     "score": st.column_config.NumberColumn("分数", min_value=0, max_value=1010000, step=100, width="small", required=True, format="%d"),
                                     "rating": st.column_config.NumberColumn("Rating", min_value=0.0, max_value=20.0, step=0.01, format="%.2f", width="small", required=True, help="计算 Rating 请在简单编辑页计算，或访问[此页](https://public.cm-tea.top/Rating_Calculator_CHUNITHM.html)"),
-                                    "full_combo": st.column_config.SelectboxColumn("Combo 类型", width="small", options=[None, "fullcombo", "alljustice"], help="若您的成绩为 1010000，直接选择 alljustice 即可（生成器会自动计算 AJC）"),
-                                    "full_chain": st.column_config.SelectboxColumn("Chain 类型", width="small", help="使用水鱼的玩家请自行确定本曲是否已有 Chain（fullchain = 拼机全连，fullchain2 = 拼机 AJ(C)）", options=[None, "fullchain", "fullchain2"]),
+                                    # 下拉里的 None 就是"留空"这一档（选中后落盘也写 None，不是空串）。streamlit 把
+                                    # options 标成 Sequence[str]，收不下这个 None：值照旧交下去，只在签名上说破这一次。
+                                    "full_combo": st.column_config.SelectboxColumn("Combo 类型", width="small", options=cast(Sequence[str], [None, "fullcombo", "alljustice"]), help="若您的成绩为 1010000，直接选择 alljustice 即可（生成器会自动计算 AJC）"),
+                                    "full_chain": st.column_config.SelectboxColumn("Chain 类型", width="small", help="使用水鱼的玩家请自行确定本曲是否已有 Chain（fullchain = 拼机全连，fullchain2 = 拼机 AJ(C)）", options=cast(Sequence[str], [None, "fullchain", "fullchain2"])),
                                     "clip_id": st.column_config.TextColumn("剪辑 ID", width="small", required=True, default="PickUp_1", help="按照 [类型]_[序号] 格式添加，如 Best_1", pinned=True, validate="^[a-zA-Z]+_[0-9]+$"),
                                     "play_count": st.column_config.NumberColumn("游玩次数", width="small", min_value=0, step=1, help="如果需要填写游玩次数，请输入具体数值（留空即不填充）", format="%d", default=None)
                                 },

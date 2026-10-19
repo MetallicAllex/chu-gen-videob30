@@ -23,7 +23,12 @@ if "save_id" in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 if not username:
@@ -73,7 +78,8 @@ with st.container(border=True):
         else:
             st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
             st.stop()
-    if not save_id:
+    if not save_id or not current_paths:
+        # 同页 6 / 页 4：current_paths 只在 `if save_id:` 分支里赋值，约定写进代码。
         st.stop()
 ### Savefile Management - End ###
 
@@ -262,6 +268,10 @@ with preset_col3:
         if apply_custom:
             _apply_preset_theme(template_choice, customize=True)
 
+# 先绑定：custom_data/themes 只在下面的存在性分支里赋值，却在文件末尾的编辑区
+# 无条件使用（实测 10 处）——customization.json 不存在时旧写法是 UnboundLocalError。
+custom_data: dict = {}
+themes = ""
 if os.path.exists(custom_dir):
     custom_data = load_config(custom_dir)
     themes = custom_data['themes']
@@ -402,13 +412,20 @@ if os.path.exists(custom_dir):
                         st.session_state[frame_state_key] = None
                     
                     # 检查备份文件是否存在
+                    # 先给空串再判：themes 是存档里的自由字段，出现没枚举的名字时
+                    # 旧写法根本没绑定 frame_bak_path，下一行 os.path.exists 直接
+                    # UnboundLocalError。空串=没有备份，语义与"该模板不存备份"一致。
+                    frame_bak_path = ""
                     if themes in ("default", "custom_default"):
                         frame_bak_path = os.path.join(image_root_path, f"Frames/{selected_level}-bak.png")
                     elif themes in ("init", "custom_init"):
                         frame_bak_path = os.path.join(image_root_path, f"Base/content/init/{selected_level}-bak.png")
-                    has_frame_backup = os.path.exists(frame_bak_path)
+                    has_frame_backup = bool(frame_bak_path) and os.path.exists(frame_bak_path)
                     
                     # 显示当前图片信息
+                    # 先绑定再分支：themes 是存档里的自由字段，出现没枚举的名字时
+                    # 旧写法根本不绑定，下一行 `if current_frame_path and ...` 就崩
+                    current_frame_path = ""
                     if themes in ("default", "custom_default"):
                         current_frame_path = os.path.join(image_root_path, f"Frames/{selected_level}.png")
                     elif themes in ("init", "custom_init"):
@@ -521,13 +538,16 @@ if os.path.exists(custom_dir):
                     st.session_state.video_upload_info = None
                 
                 # 检查备份文件是否存在
-                video_bak_path = os.path.join(bgclips_path, "bg_bak.mp4") if bgclips_path else None
+                # 取不到目录时给空串而不是 None：下游一律是 `if x and os.path.exists(x)`
+                # 这种真值判断，"" 与 None 同为假值，行为不变，但类型收成 str
+                # （实测这一处消掉 10 条静态报错）。
+                video_bak_path = os.path.join(bgclips_path, "bg_bak.mp4") if bgclips_path else ""
                 has_video_backup = os.path.exists(video_bak_path) if video_bak_path else False
                 
 
                 
                 # 显示当前视频信息（始终显示）
-                current_video_path = os.path.join(bgclips_path, "bg.mp4") if bgclips_path else None
+                current_video_path = os.path.join(bgclips_path, "bg.mp4") if bgclips_path else ""
 
                 # 显示背景视频的预览窗口：优先播当前使用的 bg.mp4（含替换后的版本），
                 # 文件缺失时回退原始备份，两者都没有则提示而不是渲染空播放器
@@ -641,13 +661,13 @@ if os.path.exists(custom_dir):
                     st.session_state.audio_upload_info = None
                 
                 # 检查备份文件是否存在
-                audio_bak_path = os.path.join(audios_path, "bgm_bak.mp3") if audios_path else None
+                audio_bak_path = os.path.join(audios_path, "bgm_bak.mp3") if audios_path else ""
                 has_audio_backup = os.path.exists(audio_bak_path) if audio_bak_path else False
                 
 
                 
                 # 显示当前音频信息（始终显示）
-                current_audio_path = os.path.join(audios_path, "bgm.mp3") if audios_path else None
+                current_audio_path = os.path.join(audios_path, "bgm.mp3") if audios_path else ""
 
                 # 显示音频试听条：优先播当前使用的 bgm.mp3（含替换后的版本），
                 # 文件缺失时回退原始备份，两者都没有则提示而不是渲染空播放器
@@ -1075,7 +1095,11 @@ if os.path.exists(current_paths['custom_style']):
                 keys_to_clear = []
                 for key in st.session_state.keys():
                     # 找出所有坐标相关的输入框键
-                    if any(x in key for x in ['_x', '_y', 'image.']):
+                    # str(...) 是因为 streamlit 把 keys() 的返回写成 Key 而不是 str，
+                    # Pylance 自带的引擎会在 `x in key` 上报"str 不在 Key 里"；运行时
+                    # 这些键本来就是字符串（今天这句能跑就说明没有非 str 的键），包一层
+                    # str 是空操作，只为把类型说清。
+                    if any(x in str(key) for x in ['_x', '_y', 'image.']):
                         keys_to_clear.append(key)
                 
                 # 删除这些键

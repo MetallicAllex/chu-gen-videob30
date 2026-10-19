@@ -7,8 +7,9 @@ utils.Quadrants - Quadrants GPU 视频渲染模块（Taichi → Quadrants 迁移
     render_full_video_safe(video_configs, video_output_path, trans_param,
                            encoder_param, style_config, username, ...)
 
-渲染策略：Quadrants GPU 优先，失败优雅回退到现有 utils.SegmentUtils（CPU/ffmpeg）。
-本模块不修改任何页面；接线方式见 SafeRender.render_full_video_safe 文档。
+渲染策略：Quadrants GPU 优先（CUDA；不可用时尝试 Vulkan），失败优雅回退到现有
+utils.SegmentUtils（CPU/ffmpeg）。本模块不修改任何页面；接线方式见
+SafeRender.render_full_video_safe 文档。
 
 子模块：
 - QuadAccel    : Quadrants 合成 kernel + FrameCompositor（移植自 Taichi/TaichiAccel.py）
@@ -18,8 +19,9 @@ utils.Quadrants - Quadrants GPU 视频渲染模块（Taichi → Quadrants 迁移
 - SafeRender   : 安全入口（Quadrants 优先 + 回退 SegmentUtils）
 
 注意：导入本包不会初始化 GPU（qd.init 惰性发生在 init_quad()）。kernel 定义在
-导入期完成但不编译，编译发生在 init_quad() 的主线程 warmup（Quadrants 要求编译
-必须在主线程，参见 quad-docs/user_guide/quirks.md）。
+导入期完成但不编译，编译发生在 init_quad() 的 warmup 中（Quadrants 要求编译与执行
+在同一线程；实际调用者是 SafeRender 的常驻渲染线程，不是进程主线程，也不是每次刷新
+都会新建的 Streamlit 脚本线程。参见 quad-docs/user_guide/quirks.md）。
 """
 
 from .QuadAccel import (

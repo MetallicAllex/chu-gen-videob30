@@ -41,12 +41,12 @@ from utils.SegmentUtils import (MissingClipInputError, resolve_clip_board_image,
 from . import QuadAccel
 from .QuadAccel import (
     FrameCompositor, resize_host, init_quad, is_available,
-    reinit_quad, is_cuda_context_error,
+    reinit_quad, is_context_error,
 )
 from .RenderIO import render_checkpoint
 from .RenderIO import (
-    VideoFrameReader, FFmpegWriter,
-    detect_hw_encoder, is_transient_lock_error,
+    VideoFrameReader, FramePump, FFmpegWriter,
+    detect_hw_encoder, resolve_encoder, is_transient_lock_error,
     ImageDecodeError, _load_image_rgba,
 )
 
@@ -84,14 +84,19 @@ class RenderContext:
     # codec / style_config 允许不传（None 时 __post_init__ 里补默认值），标注必须是
     # Optional——写成 `codec: str = None` 时静态上"None 不是 str"，而调用方恰恰全都在
     # 传 None（render_all_clips 只给分辨率/码率/帧率）。
-    codec: Optional[str] = None
-    style_config: Optional[dict] = None
+    # 这两个字段在 __post_init__ 里一定会被填成可用值，所以声明成非 Optional：
+    # 否则 ctx.codec 静态上是 str|None、ctx.style_config[...] 是"不可下标"，
+    # 而调用方（render_all_clips）本来就按必有一个可用配置来写。
+    codec: str = field(default='')
+    style_config: dict = field(default_factory=dict)
+    # AV1 解码后端：auto / msmf / ffmpeg（见 RenderIO.VideoFrameReader）。
+    av1_decoder: str = 'auto'
     # 日志去重的游标不是构造参数，用 field(init=False) 声明成真正的字段：
     # 只在 __post_init__ 里首次赋值的话，静态上它不算这个类的成员。
     _last_geom_print: Optional[tuple] = field(default=None, init=False)
 
     def __post_init__(self):
-        if self.codec is None:
+        if not self.codec:      # 空串=未指定，与 None 同义
             self.codec, _ = detect_hw_encoder()
         # 分辨率统一为 (w, h) 整数元组
         self.resolution = (int(self.resolution[0]), int(self.resolution[1]))
@@ -125,9 +130,9 @@ def _run_frame_pipeline(total_frames, producers, composite_fn, write_fn,
 
     - 解码线程（每路一个）：decode_fn(idx) -> data。cv2 解码/缩放释放 GIL，
       bg 与 chart 两路真并行——此前两路在同一线程串行，是实测吞吐短板。
-    - 主线程  ：composite_fn(idx, frames) -> out_frame。frames 为各路按序产出的
+    - 流水线线程：composite_fn(idx, frames) -> out_frame。frames 为各路按序产出的
       帧列表（与 producers 顺序一致）；Quadrants GPU 合成，kernel 已在
-      init_quad 主线程预编译，执行阶段安全。
+      init_quad 所在的常驻渲染线程预编译，这一步与该线程同线程执行，安全。
     - 编码线程：write_fn(out_frame)（memoryview 零拷贝 + ffmpeg 管道写，释放 GIL）
 
     Args:
@@ -323,7 +328,8 @@ def render_info_segment(
         # profiling 实测：对本项目 bg.mp4，cv2 软解(~9.3ms/帧) 快于 ffmpeg -hwaccel
         # 管道(~17ms/帧，管道读延迟高、流水线收益差)，且与 video 片段背景读取一致。
         # 若某些硬件上 hwaccel 更快，可换回 RenderIO.HWAccelFrameReader。
-        bg_reader = VideoFrameReader(bg_video_path)
+        bg_reader = VideoFrameReader(bg_video_path, av1_decoder=ctx.av1_decoder)
+        bg_pump = FramePump(bg_reader, ctx.fps, loop=True)
 
         # 2. 音频（{audios_path}/bgm.mp3，no_sound 可静音）
         audio_path = None
@@ -354,21 +360,27 @@ def render_info_segment(
             audio_path, 0, duration, fade_in, fade_out, volume_adjust_db,
         )
 
-        # 6. 流水线渲染（解码线程 → 主线程合成 → 编码线程）
+        # 6. 流水线渲染（解码线程 → 当前渲染线程合成 → 编码线程）
         fade_in_frames = int(fade_in * ctx.fps) if fade_in > 0 else 0
         fade_out_frames = int(fade_out * ctx.fps) if fade_out > 0 else 0
-        # bg 连续循环：从全局累计偏移处起播（跨片段连续），片段内播完再从头循环
-        bg_reader.seek_to(bg_start_offset % bg_reader.duration if bg_reader.duration > 0 else 0)
+        # bg 连续循环：从全局累计偏移处起播（跨片段连续），片段内播完再从头循环。
+        # FramePump 负责"源帧率 → 输出帧率"的时间基换算（旧写法 30fps 背景配 60fps
+        # 输出时整段被放慢一倍，音画不同步）。
+        bg_pump.seek_to(bg_start_offset % bg_reader.duration if bg_reader.duration > 0 else 0)
         res_w, res_h = ctx.resolution
+        last_bg_raw = None
+        last_bg_frame = None
 
         def _decode_bg(idx):
-            bg_frame = bg_reader.read_next()
-            if bg_frame is None:           # 背景循环播放
-                bg_reader.seek_to(0)
-                bg_frame = bg_reader.read_next()
+            nonlocal last_bg_raw, last_bg_frame
+            bg_frame = bg_pump.read()
             if bg_frame is None:
                 return np.zeros((res_h, res_w, 3), dtype=np.uint8)
-            return resize_host(bg_frame, ctx.resolution)
+            # 源比输出慢时同一帧会连续返回：缩放只做一次（1080p 缩放约 2~4ms/帧）
+            if bg_frame is not last_bg_raw:
+                last_bg_raw = bg_frame
+                last_bg_frame = resize_host(bg_frame, ctx.resolution)
+            return last_bg_frame
 
         def _composite(idx, frames):
             compositor.update_bg(frames[0])
@@ -460,12 +472,14 @@ def render_video_segment(
         bg_video_path = os.path.abspath(f"{bgclips_path}/bg.mp4")
         if not os.path.exists(bg_video_path):
             raise FileNotFoundError(f"背景视频不存在: {bg_video_path}")
-        bg_reader = VideoFrameReader(bg_video_path)
+        bg_reader = VideoFrameReader(bg_video_path, av1_decoder=ctx.av1_decoder)
+        bg_pump = FramePump(bg_reader, ctx.fps, loop=True)
 
         # 2. 谱面视频
         # 谱面视频判据与标准路共用一份（缺素材时带着可操作原因失败，而不是 ValueError 触发重试）
         video_path = resolve_clip_video_path(clip_config)
-        video_reader = VideoFrameReader(video_path)
+        video_reader = VideoFrameReader(video_path, av1_decoder=ctx.av1_decoder)
+        chart_pump = FramePump(video_reader, ctx.fps, loop=False)
 
         # 3. 谱面视频位置与缩放（与 SegmentUtils 一致）
         video_position = ctx.style_config['position']['video']
@@ -508,45 +522,49 @@ def render_video_segment(
             audio_path, audio_start, duration, fade_in, fade_out, volume_adjust_db,
         )
 
-        # 7. 流水线渲染（解码线程 → 主线程合成 → 编码线程）
+        # 7. 流水线渲染（解码线程 → 当前渲染线程合成 → 编码线程）
         total_frames = int(duration * ctx.fps)
         fade_in_frames = int(fade_in * ctx.fps) if fade_in > 0 else 0
         fade_out_frames = int(fade_out * ctx.fps) if fade_out > 0 else 0
-        bg_reader.seek_to(bg_start_offset % bg_reader.duration if bg_reader.duration > 0 else 0)
-        video_reader.seek_to(start_time)
+        # bg / chart 都按输出时间基取帧：30fps 源在 60fps 输出下每帧用两次，
+        # 60fps 源在 30fps 输出下跳帧（grab 不解码）。旧写法一比一读源帧，
+        # 混合帧率批次里 30fps 的谱面视频会被拉成两倍时长。
+        bg_pump.seek_to(bg_start_offset % bg_reader.duration if bg_reader.duration > 0 else 0)
+        chart_pump.seek_to(start_time)
         res_w, res_h = ctx.resolution
         chart_w, chart_h = target_video_size
 
         # bg / chart 两路解码各自独立线程（cv2 解码/缩放释放 GIL，真并行）——
         # 此前在同一线程串行，是实测的吞吐短板（20.7ms/帧 里两路合计占满）
-        def _decode_bg(idx):
-            bg_frame = bg_reader.read_next()
-            if bg_frame is None:
-                bg_reader.seek_to(0)
-                bg_frame = bg_reader.read_next()
-            if bg_frame is None:
-                bg_frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
-            else:
-                bg_frame = resize_host(bg_frame, ctx.resolution)
-            return bg_frame
+        last_bg_raw = None
+        last_bg_frame = None
 
-        last_chart = None
+        def _decode_bg(idx):
+            nonlocal last_bg_raw, last_bg_frame
+            bg_frame = bg_pump.read()
+            if bg_frame is None:
+                return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+            # 同一源帧被连续使用时只缩放一次
+            if bg_frame is not last_bg_raw:
+                last_bg_raw = bg_frame
+                last_bg_frame = resize_host(bg_frame, ctx.resolution)
+            return last_bg_frame
+
+        last_chart_raw = None
+        last_chart_frame = None
 
         def _decode_chart(idx):
-            nonlocal last_chart
-            chart_frame = video_reader.read_next()
+            nonlocal last_chart_raw, last_chart_frame
+            chart_frame = chart_pump.read()
             if chart_frame is None:
-                # 源帧耗尽（典型：30fps 源配 60fps 输出，帧数只有一半）：
-                # 重复最后一帧保持画面连续，不再黑屏补零。
-                # 输出 fps 可经 encoder_param['fps'] 调低以匹配源，见 render_all_clips。
-                if last_chart is None:
-                    chart_frame = np.zeros((chart_h, chart_w, 3), dtype=np.uint8)
-                else:
-                    chart_frame = last_chart
-            else:
-                chart_frame = resize_host(chart_frame, target_video_size)
-                last_chart = chart_frame
-            return chart_frame
+                # 一帧都没读到（空文件/容器损坏）：黑底，保持 compositor 的输入契约。
+                # 源帧正常耗尽时 FramePump 会保持最后一帧，不会走到这里；起点越界
+                # 由 VideoFrameReader.seek_to 夹到最后一帧，也不走这条。
+                return np.zeros((chart_h, chart_w, 3), dtype=np.uint8)
+            if chart_frame is not last_chart_raw:
+                last_chart_raw = chart_frame
+                last_chart_frame = resize_host(chart_frame, target_video_size)
+            return last_chart_frame
 
         def _composite(idx, frames):
             bg_frame, chart_frame = frames
@@ -631,44 +649,65 @@ def render_all_clips(
     """
     resolution = encoder_param['resolution']
     bitrate = f"{encoder_param['bitrate']}k"
-    # 输出帧率自适应：优先显式指定（encoder_param['fps']），否则探测第一个可用的
-    # 谱面源视频的帧率——源是 30fps 时按 60fps 渲染等于每帧翻倍重绘+编码，
-    # 纯浪费（用户反馈：有人只用 30 帧的）。探测失败回退 60。
+    # 输出帧率：优先显式指定，否则取**本批全部 main 源**里的最高帧率（≤60）。
+    # 早期版本的 break 让整批只看 main[0]；只修成"第一条存在的源"仍然不对——一批里
+    # 混着 30fps 与 60fps 素材时，按 30fps 输出会把 60fps 谱面砍掉一半帧（画面顿挫）。
+    # 取最高值后，低帧率源由 FramePump 按时间基重复帧，既不失真也不改变时长。
     video_fps = int(encoder_param.get('fps') or 0)
     if video_fps <= 0:
-        video_fps = 60
+        probed_sources = []   # [(fps, basename)]：探测成功的每一条都参与决策
         for cfg in (video_configs.get('main', []) or []):
             vpath = cfg.get('video') or ''
-            # 旧写法这里少一个 continue：break 挂在 for 的层级上，于是整批只看 main[0]。
-            # 第一条恰好是页 4「缺失项留空」那种配置时，探测根本不执行，整批按 60fps 渲
-            # ——30fps 源的翻倍成本，而"跟随源帧率"这条优化一声不响地没生效。
             if not (vpath and os.path.exists(vpath)):
                 continue
             try:
                 cap = cv2.VideoCapture(vpath)
-                probed = cap.get(cv2.CAP_PROP_FPS)
-                cap.release()
+                try:
+                    probed = cap.get(cv2.CAP_PROP_FPS)
+                finally:
+                    cap.release()
                 if probed and 1 < probed <= 120:
-                    video_fps = max(1, min(60, round(probed)))
-                    print(f"[QuadRenderer] 输出帧率跟随源视频: {video_fps}fps（{os.path.basename(vpath)}）")
+                    probed_sources.append((float(probed), os.path.basename(vpath)))
             except Exception as e:
-                print(f"[QuadRenderer] 源帧率探测失败，回退 60fps: {e}")
-            break
+                print(f"[QuadRenderer] 源帧率探测失败（{os.path.basename(vpath)}）: {e}")
+                continue
+        if probed_sources:
+            best_fps, best_name = max(probed_sources, key=lambda item: item[0])
+            video_fps = max(1, min(60, round(best_fps)))
+            distinct = sorted({round(fps, 2) for fps, _ in probed_sources})
+            print(f"[QuadRenderer] 输出帧率取本批源视频最高值: {video_fps}fps"
+                  f"（{len(probed_sources)} 段源，{best_fps:.3f}fps 来自 {best_name}"
+                  + (f"，混合 {distinct}fps" if len(distinct) > 1 else "") + "）")
+        else:
+            video_fps = 60
+            print("[QuadRenderer] 没有可探测的 main 源视频，输出帧率回退 60fps")
 
     # 写回探测结果：SafeRender 的 CPU 回退路径要用同一个 fps 拼接（片段与
     # 拼接时间基一致，混用 quad/回退片段时不会出现帧率不一致）
     encoder_param['fps'] = video_fps
 
-    # 编码器设计上无视页面的【使用 GPU 硬件加速】复选框（那是 CPU 路径的选项）：
-    # Quadrants 渲染始终自动探测最优硬件编码器（videotoolbox→nvenc→amf→qsv），
-    # 无硬件可用才落回 libx264。不要把页面写入的 encoder_param['codec'] 接进来——
-    # 未勾选加速时它是 libx264，其编码线程会与 cv2 解码线程抢 CPU 核
-    # （本次实测解码被拖到 27-47ms/帧）。
-    ctx = RenderContext(resolution, video_fps, bitrate, style_config=style_configs)
+    # 两条路用**同一个判据**选编码器（RenderIO.resolve_encoder：页面点名了就用点名的，
+    # 没点名就实探 videotoolbox→nvenc→amf→qsv，全不通才 libx264），所以【编码器方案】
+    # 对两个按钮都算数，指纹里记的也只有一个值（resolve 会把结论写回 encoder_param）。
+    # 这里以前刻意不接页面的选择，理由是"未勾选加速时它是 libx264，软编线程与 cv2 解码
+    # 抢核（实测解码被拖到 27-47ms/帧）"——那个前提已经不成立了：自动档现在写的就是
+    # 实探结果，只有整台机器一个硬编都没有时才会落到 libx264，那时两条路都只能软编。
+    ctx = RenderContext(resolution, video_fps, bitrate,
+                        codec=resolve_encoder(encoder_param), style_config=style_configs,
+                        av1_decoder=encoder_param.get('av1_decoder', 'auto'))
 
     intro_configs = video_configs.get('intro', []) or []
     main_configs = video_configs.get('main', []) or []
     ending_configs = video_configs.get('ending', []) or []
+
+    # 缺 main 不是能出片的状态：经典路早就有这道守卫，GPU 路此前会把 intro/ending
+    # 照渲一遍、拼出一支没有正片的"成片"，页面还按成功上报。判据与文案两路对齐。
+    if not main_configs:
+        why = ("配置缺少 main 段（video_configs.json 里没有 main 或它是空列表），"
+               "本次没有渲染任何片段。请回到【编辑 Best50 视频片段】页重新生成配置")
+        print(f"[QuadRenderer] [!] {why}")
+        return {"status": "error", "info": why, "failed": [why]}
+
     total_clips = len(intro_configs) + len(main_configs) + len(ending_configs)
 
     os.makedirs(video_output_path, exist_ok=True)
@@ -700,9 +739,14 @@ def render_all_clips(
     _manifest = read_render_manifest(video_output_path)
     clip_sigs: dict = {}
     _ci = 0
+    _sig_offset = 0.0   # 与渲染循环同一个 bg 累计口径（intro→main→ending）
     for _cfgs in (intro_configs, main_configs, ending_configs):
         for _c in _cfgs:
-            clip_sigs[f"{_ci}_{_c['id']}.mp4"] = clip_render_signature(_c)
+            # bg_offset 决定这段背景从循环的哪一秒起播。前序片段时长一变（不换序、
+            # 不改本段参数），本段指纹也必须跟着变，否则会复用一段背景起点错误的旧产物。
+            clip_sigs[f"{_ci}_{_c['id']}.mp4"] = clip_render_signature(
+                _c, bg_offset=_sig_offset)
+            _sig_offset += float(_c.get('duration', 0) or 0)
             _ci += 1
     kept_signatures: dict = {}
 
@@ -720,14 +764,15 @@ def render_all_clips(
     def make_cb(clip_name):
         if progress_callback is None:
             return None
-        def cb(frame, total_frames, name):
-            progress_callback(clip_idx, total_clips, frame, total_frames, clip_name)
+        cb_target = progress_callback   # 闭包里读的是形参的声明类型（Optional），
+        def cb(frame, total_frames, name):   # 用局部变量把上面判过的结果带进闭包
+            cb_target(clip_idx, total_clips, frame, total_frames, clip_name)
         return cb
 
     def _render_with_retry(render_fn, config, output_file, name, kind_label, bg_start_offset=0.0):
         """片段级重试：文件占用类瞬时失败退让重试；CUDA 上下文失效则重建 GPU
         运行时后重试——避免一处故障就让整条链路降级成 CPU 全量回退。"""
-        last = None
+        last: dict = {}   # 循环里必然被赋值；给个空 dict 让静态也能读 .get
         reinited = False
         attempt = 0
         while attempt < 3:
@@ -746,11 +791,11 @@ def render_all_clips(
             render_checkpoint()
             last = result
             info = str(result.get('info', ''))
-            # CUDA 上下文一旦死亡，重试只会原地失败：先重建运行时再谈重试。
+            # GPU 上下文一旦死亡，重试只会原地失败：先重建运行时再谈重试。
             # 重建不消耗重试名额（正常只需一次，耗时秒级）。
-            if not reinited and is_cuda_context_error(info):
+            if not reinited and is_context_error(info):
                 reinited = True
-                print(f"[QuadRenderer] {kind_label}片段 {name}: 检测到 CUDA 上下文失效，重建 GPU 运行时")
+                print(f"[QuadRenderer] {kind_label}片段 {name}: 检测到 GPU 上下文失效，重建运行时")
                 if reinit_quad():
                     continue
             attempt += 1

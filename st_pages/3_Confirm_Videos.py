@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import datetime
 from utils.PathUtils import *
 import shutil, time, random, traceback, os, re
+from typing import cast
 from utils.DataUtils import (download_one_video, search_one_video, merge_b50_data,
                             rank_video_candidates, video_match_warning, apply_playlist_matches,
                             migrate_search_args,
@@ -10,6 +11,7 @@ from utils.Variables import REVERSE_LEVEL_LABELS, VIDEO_LISTS
 from utils.PageUtils import escape_markdown_text
 from utils.fetch_settings import (render_fetch_settings, apply_fetch_settings, settings_from_config,
                                   settings_fingerprint, init_downloader, credential_state)
+from utils.video_crawler import Downloader
 
 G_config = read_global_config()
 
@@ -24,7 +26,12 @@ if "save_id" in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 if not username:
@@ -83,7 +90,7 @@ with st.container(border=True):
 # 后面每一环都要用 current_paths['config_yt'] 之类。以前这里只 warning 不中止，最后崩在
 # 对 None 取下标上（TypeError: 'NoneType' object is not subscriptable），用户看到的是整页
 # traceback 而不是"先选一份存档"。放在更换存档的折叠栏之后，保证这里仍来得及直接选一份。
-if current_paths is None:
+if not current_paths:
     st.stop()
 
 def get_web_search_url(song_data, dl_type):
@@ -430,6 +437,7 @@ def update_editor(placeholder, config, current_index, dl_instance, record_ids):
             if search_mode == "视频 ID":
                 has_cache = False
                 refresh_cache = False
+                selected_lists = []   # 视频 ID 模式不用列表选择（对面那条分支同样把 replace_id 置空）
                 replace_id = st.text_input(
                     f"谱面确认的 { f"{search_platform} ID " if search_platform == 'YouTube' else f"哔哩哔哩 BV 号"}",
                     key=f"replace_id_{song['clip_id']}",
@@ -650,17 +658,35 @@ if st.session_state.get('downloader') is None or \
 if settings_fingerprint(fetch_settings) != settings_fingerprint(st.session_state.get('downloader_settings')):
     st.info("抓取设置已修改但尚未保存，点击「保存配置」后生效", icon="ℹ️")
 
-dl_instance = st.session_state.downloader
-downloader_type = st.session_state.downloader_type
-if not dl_instance:
+# session_state 里拿回来的下载器，类型是"下载器或 None"（init_downloader 在下载器名字
+# 不认识时就返回 None）。上面那道守卫把它筛成非 None，但光靠守卫不够：本页的 st 被判成
+# Unknown —— 第 3 行那句 from utils.PathUtils import * 会把 PathUtils 自己的
+# import streamlit as st 一起带进来（PathUtils 没写 __all__），把第 1 行的绑定顶掉；
+# st 是 Unknown，st.stop() 在类型系统里就不算"必然中止"，窄化带不进下面那些函数与
+# @st.dialog 的作用域（它们读到的是变量的声明类型，同 current_paths: dict 那条）。
+# 所以 cast 把守卫后的事实写进签名——cast 只说签名、不改值，运行时该拦的还是这道守卫。
+_downloader = st.session_state.downloader
+if not _downloader:
     st.error("未找到可用的下载器，请确认抓取设置后点击「保存配置」！", icon="❌")
     st.stop()
+dl_instance = cast(Downloader, _downloader)
+downloader_type = st.session_state.downloader_type
 
 # 读取存档的b30 config文件
+# 先无条件绑定：下面那个 if/elif/else 里 else 虽然 st.stop()，但 pyright 仍把
+# 这个变量判成"可能未绑定"（同形状的最小复现却不报，原因未定位），于是后面 9 处
+# 使用全红。绑定交给这一行说，else 继续负责给用户可操作的报错。
+b30_config_file = ""
 if downloader_type == "youtube":
     b30_config_file = current_paths['config_yt']
 elif downloader_type == "bilibili":
     b30_config_file = current_paths['config_bi']
+else:
+    # 原来没有 else：DOWNLOADER 被改成第三个值（或被旧版配置文件带进来）时
+    # b30_config_file 根本没绑定，下面第一次用它就是 UnboundLocalError，
+    # 用户看到的是一屏 traceback 而不是"这个下载器名字不认识"。
+    st.error(f"不支持的下载器【{downloader_type}】，请在设置页选择 bilibili 或 youtube。", icon="❌")
+    st.stop()
 
 # 加载旧搜索数据
 exported_b30_search_config_file = current_paths['exported_b30_search_config']

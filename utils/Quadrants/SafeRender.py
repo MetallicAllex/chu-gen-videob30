@@ -176,16 +176,23 @@ class RenderStatus:
 RENDER_STATUS = RenderStatus()
 
 
-# GPU 可用性对页面暴露的只读视图。**这里绝不做 CUDA 初始化**：Quadrants 的上下文有线程
+# GPU 可用性对页面暴露的只读视图。**这里绝不做 GPU 初始化（CUDA/Metal/Vulkan/AMDGPU）**：Quadrants 的上下文有线程
 # 亲和性（在哪个线程 init 就在哪个线程用），页面脚本线程每次刷新都是新线程，在这里探针
 # 会把上下文建在错误的线程上——实测就是「渲染 4-5 个片段后死亡」那条事故的成因。
 # 所以页面只看两件便宜的事：发行包里装没装齐（find_spec 不执行 import，微秒级），
 # 以及工作线程上一次渲染的探针结果。
-_gpu_probe_state = {'ok': None, 'reason': ''}
+_gpu_probe_state = {'ok': None, 'reason': '', 'on_gpu': None}
 
 
 def gpu_preflight() -> tuple:
-    """返回 (能不能走 GPU 路, 不能走的原因)。用于决定实验按钮灰化与提示文案。"""
+    """返回 (能不能走 GPU 路, 不能走的原因)。用于决定实验按钮灰化与提示文案。
+
+    「装了依赖」不等于「跑在 GPU 上」：init_quad 在 qd.gpu 不可用时会先尝试 Vulkan，
+    两者都起不来才静静回退 qd.cpu（独显休眠/驱动不匹配都实测过）。这里把上一次渲染
+    探针的真实后端也纳入判断——否则页面把按钮亮着、写着「GPU 加速」，用户点下去得到
+    的是一支在 CPU 上编出来的片子。on_gpu=None 表示还没有渲染过、无从判断，此时不拦
+    （首次照常尝试）。
+    """
     import importlib.util
     missing = [name for name in ('quadrants', 'pydantic', 'cffi')
                if importlib.util.find_spec(name) is None]
@@ -194,13 +201,18 @@ def gpu_preflight() -> tuple:
                        "GPU 路起不来；现在点渲染会直接走 CPU 路径")
     if _gpu_probe_state['ok'] is False:
         return False, _gpu_probe_state['reason'] or "上次渲染的 GPU 探针失败，已回退 CPU"
+    if _gpu_probe_state.get('on_gpu') is False:
+        return False, ("上次渲染发现 Quadrants 只能跑在 CPU 后端（CUDA/Metal/Vulkan/AMDGPU 都没有可用的 GPU 设备，"
+                       "或被 QUAD_DEVICE 强制为 CPU），"
+                       "这条路不比经典路快；接上独显/更新驱动后重启应用再试。"
+                       "现在点「开始渲染」会走经典 CPU 路径")
     return True, ""
 
 
 # ============================================================================
 # 常驻渲染工作线程
 # ============================================================================
-# 关键约束：Quadrants 的 CUDA 上下文有**线程亲和性**——运行时在哪个线程初始化，
+# 关键约束：Quadrants 的 GPU 上下文（CUDA/Metal/Vulkan/AMDGPU）有**线程亲和性**——运行时在哪个线程初始化，
 # 就应始终在哪个线程使用。Streamlit 每次脚本运行都是新线程，如果每次渲染直接
 # 起临时线程，刷新页面后的渲染就跑在与初始化不同的线程上，第一次显存分配即报
 # CUDA_ERROR_INVALID_CONTEXT（两次"渲染 4-5 个片段后死亡"的事故实为此因：
@@ -245,9 +257,11 @@ def _ensure_render_worker():
                         if _res.get('info'):
                             RENDER_STATUS.error = str(_res['info'])
                 finally:
-                    RENDER_STATUS.running = False
-                    RENDER_STATUS.end_ts = time.time()
-                    RENDER_STATUS.job = None
+                    # 收尾顺序：先清理临时目录，**再**在提交锁内复位状态。
+                    # 旧写法先无条件把 running 置 False、再慢慢 rmtree：页面恰好在这段
+                    # 窗口里提交新任务时，新任务刚写进 temp_generated 的文件会被上一轮
+                    # 的清理删掉。清理完再开闸，并且只在"当前任务仍是本任务"时复位，
+                    # 避免迟到的收尾把新任务的 running/job 抹掉。
                     # 回退到 SegmentUtils 时会用到 temp_generated，清理其中的临时产物；
                     # 但若产物目录本身就在 temp_generated 之内（测试/特殊配置），跳过——
                     # 不能把刚渲染完的片段连带删掉
@@ -272,6 +286,11 @@ def _ensure_render_worker():
                             os.makedirs(_tg, exist_ok=True)
                     except Exception as e:
                         print(f"[SafeRender] 收尾清理没执行（不阻断）：{type(e).__name__}: {e}")
+                    with _submit_lock:
+                        if RENDER_STATUS.job is job.get('_render_job'):
+                            RENDER_STATUS.running = False
+                            RENDER_STATUS.end_ts = time.time()
+                            RENDER_STATUS.job = None
 
         threading.Thread(target=_worker_loop, name="quad-render-worker", daemon=True).start()
         _render_worker_started = True
@@ -500,15 +519,21 @@ def _render_full_video_safe_impl(
         if ensure_healthy_context():
             _gpu_probe_state['ok'] = True
             _gpu_probe_state['reason'] = ''
-            # 探针通过 ≠ 在 GPU 上跑：本机没有可用 CUDA 设备时 init_quad 会回退 qd.cpu
-            # （实测独显休眠后就是这个状态，qd.init(qd.gpu) 报 CUDA_ERROR_NO_DEVICE）。
+            # 探针通过 ≠ 在 GPU 上跑：CUDA 不可用时 init_quad 会先试 Vulkan、再回退 qd.cpu
+            # （实测独显休眠后 CUDA 报 CUDA_ERROR_NO_DEVICE；无 CUDA 的机器只能靠 Vulkan）。
             # 状态与返回值都说真后端，别让进度条写着「渲染片段（GPU）」而全场在 CPU 上编。
-            _on_gpu = quad_backend() == 'gpu'
-            _q_label = 'Quadrants GPU' if _on_gpu else 'Quadrants（CPU 后端）'
+            _backend = quad_backend()
+            _on_gpu = _backend in ('cuda', 'metal', 'vulkan', 'amdgpu')
+            _gpu_name = {'cuda': 'CUDA', 'metal': 'Metal',
+                         'vulkan': 'Vulkan', 'amdgpu': 'AMDGPU'}.get(_backend, 'GPU')
+            # 记下真实后端：页面下一次 gpu_preflight 据此决定是否还亮着「GPU 加速」。
+            _gpu_probe_state['on_gpu'] = _on_gpu
+            _q_label = f'Quadrants GPU（{_gpu_name}）' if _on_gpu else 'Quadrants（CPU 后端）'
             print("=" * 60)
             print(f"[SafeRender] 使用 {_q_label} 加速渲染")
             print("=" * 60)
-            RENDER_STATUS.phase = f"渲染片段（{'GPU' if _on_gpu else 'Quadrants·CPU 后端'}）"
+            RENDER_STATUS.phase = (f"渲染片段（GPU·{_gpu_name}）" if _on_gpu
+                                   else "渲染片段（Quadrants·CPU 后端）")
             res = render_all_clips(
                 video_configs, video_output_path, encoder_param,
                 trans_param, style_config, force_render, _status_cb,
@@ -531,10 +556,10 @@ def _render_full_video_safe_impl(
                 trans_enabled = trans_param.get('enabled', True) if trans_param else True
                 trans_time = trans_param.get('duration', 1.0) if (trans_param and trans_enabled) else 0
                 bitrate = f"{encoder_param['bitrate']}k"
-                # 与片段渲染同为自动探测——Quadrants 路径设计上无视【使用 GPU 加速】
-                # 复选框，始终选最优可用编码器；fps 一并传递，避免拼接与片段的
-                # 时间基假设不一致
-                codec, _ = detect_hw_encoder()
+                # 拼接沿用片段渲染**实际用的那一个**编码器（QuadRenderer 选定后已写回
+                # encoder_param['codec']），不再自己探一次：指纹记的、各段用的、成片
+                # 重编用的必须是同一个值。fps 同理，两边共用一个读数。
+                codec = encoder_param.get('codec') or detect_hw_encoder()[0]
                 video_fps = int(encoder_param.get('fps') or 60)
                 island_out = combine_full_video_xfade_islands(
                     video_output_path, trans_time=trans_time, codec=codec,
@@ -567,7 +592,7 @@ def _render_full_video_safe_impl(
             print("[SafeRender] Quadrants 不可用，回退 SegmentUtils")
             _gpu_probe_state['ok'] = False
             _gpu_probe_state['reason'] = (
-                "本次渲染的 GPU 健康探针失败（CUDA 上下文起不来或已失效），已回退 CPU 路径；"
+                "本次渲染的 GPU 健康探针失败（CUDA/Metal/Vulkan/AMDGPU 上下文起不来或已失效），已回退 CPU 路径；"
                 "再试一次通常会在渲染前重建上下文")
     except RenderCancelled as e:
         RENDER_STATUS.phase = "已取消"
@@ -651,8 +676,11 @@ def _render_full_video_safe_impl(
             trans_enabled = trans_param.get('enabled', True) if trans_param else True
             trans_time = trans_param.get('duration', 1.0) if (trans_param and trans_enabled) else 0
             bitrate = f"{encoder_param['bitrate']}k"
-            codec, _ = detect_hw_encoder()
-            video_fps = int(encoder_param.get('fps') or 60)
+            # 回退补渲那几段的编码器由 render_all_video_clips 解析后写回
+            # fb_encoder_param（中途退回软编重试时也会改成 libx264），拼接跟着它走；
+            # 否则补渲段是软编、拼接却按探测结果重编，清单与实际产物又分家了。
+            codec = fb_encoder_param.get('codec') or detect_hw_encoder()[0]
+            video_fps = int(fb_encoder_param.get('fps') or encoder_param.get('fps') or 60)
             island_out = combine_full_video_xfade_islands(
                 video_output_path, trans_time=trans_time, codec=codec,
                 bitrate=bitrate, video_fps=video_fps,

@@ -523,7 +523,13 @@ def backfill_pool_fields(b50_data_file, apply_changes=False):
         if not rec.get('artist') and artist:
             updates['artist'] = artist
 
-        old_levels = rec.get('levels') if isinstance(rec.get('levels'), dict) else {}
+        # 原来写成 `X if isinstance(X, dict) else {}` 的三元：isinstance 窄化的是
+        # 判断里那个表达式节点，返回位置是**另一次调用**，于是 old_levels 的推导类型
+        # 仍含 None，下游 dict(old_levels)/old_levels.get/merged.get 一次摊出 7 条。
+        # 拆成两句，窄化就落在同一个名字上。
+        old_levels = rec.get('levels')
+        if not isinstance(old_levels, dict):
+            old_levels = {}
         merged = dict(old_levels)
         for server, value in levels.items():
             # 只刷新或新增，不把已有的非空值降级成 None
@@ -1216,19 +1222,22 @@ def cn_filter_options(server, assets):
         entries = (assets or {}).get("chart_index")
         if not entries:
             return None
-
-        def split(entry):
-            info = entry.get("basic_info") or {}
-            return (info.get("genre"), info.get("from"), info.get("artist"),
-                    [chart.get("charter") for chart in entry.get("charts") or []])
     else:
         entries = (assets or {}).get("song_index")
         if not entries:
             return None
 
-        def split(entry):
-            return (entry.get("genre"), entry.get("version"), entry.get("artist"),
-                    [chart.get("note_designer") for chart in (entry.get("_charts") or {}).values()])
+    # 两份索引形状不同（水鱼把元信息放在 basic_info / charts，落雪放在 _charts），
+    # 取值口径按 server 分在同一个函数里。原先两个分支各写一个同名 def split：后一个
+    # 把前一个盖住（静态检查直接报 obscured），读的人得先确认自己走的是哪条分支
+    # 才知道手上这个 split 是哪一份。
+    def split(entry):
+        if server == "fish":
+            info = entry.get("basic_info") or {}
+            return (info.get("genre"), info.get("from"), info.get("artist"),
+                    [chart.get("charter") for chart in entry.get("charts") or []])
+        return (entry.get("genre"), entry.get("version"), entry.get("artist"),
+                [chart.get("note_designer") for chart in (entry.get("_charts") or {}).values()])
 
     titles = (assets or {}).get("version_titles") or {}
 
@@ -1311,7 +1320,7 @@ def _normalize_pool(server, pool_source, raw, assets, include_selections=False):
 
 def build_cn_pool(server, best_or_new, pool_source=POOL_BRIEF, filter_mode=MODE_LOCAL,
                   spec=None, caps=None, include_selections=False, raw=None, assets=None,
-                  new_versions=None, group_parts=True):
+                  new_versions=None, group_parts=True) -> dict:
     """
     取数 → 规范化 →（服务端模式先粗筛一次）→ 本地精筛 → 分组截断 → 按原形状重建 raw。
 
@@ -1530,6 +1539,12 @@ def _get_with_retry(url, headers=None, timeout=30):
             last = e
             if attempt + 1 < LIBRARY_RETRY_ATTEMPTS:
                 time.sleep(LIBRARY_RETRY_DELAY * (attempt + 1))
+    if last is None:
+        # 只有 LIBRARY_RETRY_ATTEMPTS<=0 才会走到这里，但 `raise None` 抛的是
+        # TypeError('exceptions must derive from BaseException')，把真正的症状
+        #（重试次数被配成 0）盖成一句看不懂的运行时怪话。
+        raise RuntimeError(f"曲库请求一次都没发出：LIBRARY_RETRY_ATTEMPTS="
+                           f"{LIBRARY_RETRY_ATTEMPTS}，应为正整数")
     raise last
 
 
@@ -1634,7 +1649,10 @@ def _fetch_json_etag(name, url, filepath, source=None, transformer=None, version
         return False
 
     if response.status_code == 304:
-        _patch_status(status_sources_path, **{source: {"last_update": datetime.now().isoformat()}})
+        # 只在有记账源时写（200 分支那条也是这么守的）：source 为 None 意味着这个端点
+        # 不支持条件请求，**{None: ...} 会让这一路当场炸"keywords must be strings"。
+        if source:
+            _patch_status(status_sources_path, **{source: {"last_update": datetime.now().isoformat()}})
         # 304 就是"这份本地副本仍然新鲜"的确认，但产物文件没被重写。启动自动更新拿 mtime
         # 当上次确认时刻，不把时间顶上去，每次开机都会把这一份判成过期、天天全量重拉。
         os.utime(filepath, None)
@@ -2181,7 +2199,7 @@ def _retry_cooldown_left():
     if not saved.get("last_error"):
         return 0
     try:
-        attempted = datetime.fromisoformat(saved.get("last_attempt")).timestamp()
+        attempted = datetime.fromisoformat(saved.get("last_attempt") or "").timestamp()
     except (TypeError, ValueError):
         return 0
     return max(0.0, RETRY_BACKOFF_HOURS * 3600 - (time.time() - attempted))
@@ -2258,8 +2276,12 @@ def start_music_data_update(staleness_hours=MUSIC_DATA_STALENESS_HOURS, force=Fa
     return True
 
 
-def music_data_state(staleness_hours=MUSIC_DATA_STALENESS_HOURS):
-    """首页要读的状态：跑不跑着、上次结果怎么说、现在还缺哪几份。"""
+def music_data_state(staleness_hours=MUSIC_DATA_STALENESS_HOURS) -> dict:
+    """首页要读的状态：跑不跑着、上次结果怎么说、现在还缺哪几份。
+
+    返回值标成 dict：盒子里混着 bool、list、str，不标的话 `state()["missing"]` 会被
+    读成"所有值类型的联合"，页面上 `label in ...` 就成了 float 与 bool 之争。
+    """
     missing, _ = music_data_gaps(staleness_hours)
     core_missing = [name for name in missing if name in dict(MUSIC_DATA_CORE)]
     return dict(_music_state, missing=missing, core_ready=not core_missing)

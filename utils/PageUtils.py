@@ -200,7 +200,8 @@ def build_song_indexes(song_db, jp_song_db, intl_song_db):
 def lookup_song_fields(song_id, song_name, level_index, indexes):
     """按当前曲库算出 (artist, levels)。建档与存档回填共用这一份口径，两边不许各写一套匹配规则。"""
     artist = None
-    levels = {"CN": None, "JP": None, "INT": None}
+    # 标注成 dict：不写就被推成 dict[str, None]，后面每塞一个定数都报"值类型是 None"
+    levels: dict = {"CN": None, "JP": None, "INT": None}
 
     cn_song = indexes["CN"].get(str(song_id))
     if cn_song:

@@ -24,7 +24,12 @@ if "save_id" in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 if not username:
@@ -76,7 +81,9 @@ with st.container(border=True):
         else:
             st.warning("未找到任何存档，请先在存档管理页获取！", icon="⚠️")
             st.stop()
-    if not save_id:
+    if not save_id or not current_paths:
+        # current_paths 只在上面 `if save_id:` 分支里赋值；把这条约定写进代码，
+        # 而不是让后面每一处 current_paths['...'] 都靠人记住（页 6 同型问题实测 42 条）。
         st.stop()
 ### Savefile Management - End ###
 
@@ -499,10 +506,17 @@ else:
     downloader_type = G_config['DOWNLOADER']
 
 # 读取存档的b30 config文件
+# 先无条件绑定（同页 3）：下面 else 里已经 st.stop()，但 pyright 仍把这个变量判成
+# "可能未绑定"，后面每一处使用全红；绑定交给这一行说，else 继续负责给用户可操作的报错。
+b30_config_file = ""
 if downloader_type == "youtube":
     b30_config_file = current_paths['config_yt']
 elif downloader_type == "bilibili":
     b30_config_file = current_paths['config_bi']
+else:
+    # 同页 3：缺 else 时下面第一次读 b30_config_file 就是 UnboundLocalError
+    st.error(f"不支持的下载器【{downloader_type}】，请回到设置页选择 bilibili 或 youtube。", icon="❌")
+    st.stop()
 if not os.path.exists(b30_config_file):
     # 索引副本只在进入搜索/下载页时才从数据主文件复制出来；直接来本页生成配置时补上这一步，
     # 免得让人折返（数据主文件也缺失时才真的是存档损坏）。

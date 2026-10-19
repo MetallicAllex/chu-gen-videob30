@@ -20,7 +20,12 @@ if "save_id" in st.session_state:
 
 username = st.session_state.get("username", None)
 save_id = st.session_state.get("save_id", None)
-current_paths = None
+# 声明成 dict 而不是 None：这是模块级变量，函数与 @st.fragment 里读到的是它的
+# **声明类型**，判空守卫的窄化带不进那些作用域——保持 None 的话每处
+# current_paths['x'] 都要再摊一条"None 不可下标"（实测 7 页 37 条）。
+# get_data_paths 永远返回非空 dict，所以拿不到存档时它就是下面的空 dict，
+# 各页的 `not current_paths` 守卫照样拦得住。
+current_paths: dict = {}
 data_loaded = False
 
 @st.fragment
@@ -69,7 +74,10 @@ def edit_context_widget(name, config, config_file_path):
                 
         # 删除按钮（只有当列表长度大于 1 时才显示）
         if len(items) > 1:
-            if st.button(f"删除第 {idx + 1} 页", key=f"delete_{name}", icon="🗑️", width='stretch'):
+            # 用 len(items) 而不是循环里剩下来的 idx：两者在这个位置恒等（enumerate 跑到
+            # 最后 idx 就是 len-1），但 idx 是循环变量，items 为空时它根本没绑定 ——
+            # 静态检查报"可能未绑定"，读的人也得先确认循环跑过几次才敢用。
+            if st.button(f"删除第 {len(items)} 页", key=f"delete_{name}", icon="🗑️", width='stretch'):
                 items.pop()
                 st.session_state[f"{name}_items"] = items
                 st.rerun(scope="fragment")
@@ -421,6 +429,11 @@ if not username:
     st.stop()
     
 with st.container(border=True):
+    # 先无条件绑定（同页 3）：这两个名字只在下面 `if save_id:` 那一支里赋值，save_id
+    # 为空时靠容器末尾那句 st.stop() 拦住，所以带不出容器；但 pyright 看不见这层关系，
+    # 会把 484 往后每一处 config / video_config_file 都判成"可能未绑定"。
+    video_config_file = ""
+    config = None
     if save_id:
         # load save data
         current_paths = get_data_paths(username, save_id)
