@@ -1,11 +1,12 @@
 import numpy as np
-import os, traceback
+import hashlib, json, os, tempfile, traceback
+from typing import Optional
 import streamlit as st
 from PIL.Image import Resampling
 from PIL import Image, ImageDraw, ImageFont
 from utils.PageUtils import calculate_rating, parse_oped_text_markers
 from utils.PathUtils import load_config, save_config, is_artifact_valid
-from utils.TextRenderer import render_text_to_image
+from utils.TextRenderer import get_failed_emojis, render_text_to_image
 from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, font_path, REVERSE_LEVEL_LABELS
 
 # def get_splited_text(text, text_max_bytes=70):
@@ -62,6 +63,45 @@ def create_blank_image(width, height, color=(0, 0, 0, 0)):
 # 文字允许的最大宽度：TextDraw 的默认值，也是存档里没配 maxWidth 时的取值。
 DEFAULT_TEXT_MAX_WIDTH = 2000
 
+# 默认模板右下「定数变动」面板。原底图把 CN/Mate 两枚 logo 烘死在像素里，
+# 三服对比要用 content_base_versions.png（同尺寸，logo 区已清空）再按所选版本重画。
+VERSION_COLUMN_LAYOUT_VERSION = 1  # 面板布局改动时 +1，让旧底图失效
+VERSION_COLUMN_MANIFEST_NAME = "versions_manifest.json"
+VERSION_PANEL_IMAGE_NAME = "content_base_versions.png"
+VERSION_PANEL_LEFT = 1452
+VERSION_PANEL_RIGHT = 1873
+VERSION_PANEL_LOGO_TOP = 884
+VERSION_PANEL_VALUE_Y = 1018
+VERSION_LOGO_DIR = f"{image_root_path}/Base/content/versions"
+VERSION_LOGO_FILES = {"CN": "cn.png", "JP": "jp.png", "INT": "int.png"}
+
+# 文字/整图渲染指纹：目录存在、文件非空都不能证明图是最新的。
+# 改文本、改样式、换底图都要让对应产物失效；版本号用于以后合并逻辑变化时整体作废。
+IMAGE_RENDER_MANIFEST_NAME = "render_manifest.json"
+IMAGE_RENDER_MANIFEST_VERSION = 1
+
+
+def _save_png_atomic(image: Image.Image, output_path: str) -> None:
+    """先写同目录临时文件再 os.replace：中断时保留上一张完整图，不留半张 PNG。"""
+    output_dir = os.path.dirname(output_path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".png", dir=output_dir)
+    os.close(fd)
+    try:
+        image.save(tmp_path, "PNG")
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def _file_stamp(path: str) -> str:
+    try:
+        stat = os.stat(path)
+        return f"{stat.st_mtime_ns}:{stat.st_size}"
+    except OSError:
+        return "missing"
+
 
 def FrameLoader(level_index: int = 0):
     with Image.open(f"{image_root_path}/Frames/{level_index}.png") as _frame:
@@ -70,7 +110,8 @@ def FrameLoader(level_index: int = 0):
 def LevelLoader(level: float, level_next: float = 0.0):
     # print(f"DEBUG: level={level}, type={type(level)}")
     # print(f"DEBUG: level_next={level_next}, type={type(level_next)}")
-    lv = level if level > 1.0 else level_next
+    # 0 才是缺失；1.0 是合法定数（曲库里确有 BASIC 1.0），不能一并当缺失
+    lv = level if level > 0 else level_next
     __lv = str(lv)
     # 不再复写形参 level：它声明是 float，被改成字符串后既自相矛盾（78 行把它当
     # 文本传给 TextDraw），也丢掉了"传进来的等级"这个原始值。
@@ -92,6 +133,108 @@ def LevelLoader(level: float, level_next: float = 0.0):
                                     font_size=42, font_color=(255, 255, 255))
 
     return level_number_img
+
+
+def _version_column_layout(count: int):
+    """把「定数变动」面板宽度按版本数量等分，返回每列中心与列宽。"""
+    count = max(1, min(count, 3))
+    width = VERSION_PANEL_RIGHT - VERSION_PANEL_LEFT
+    column_width = width / count
+    centers = [int(VERSION_PANEL_LEFT + column_width * (i + 0.5)) for i in range(count)]
+    return centers, column_width
+
+
+def positive_constant(value) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    # 定数最小 1.0；0.x 只可能是坏数据（国际服库实际出现过 0.3）
+    return parsed if parsed >= 1.0 else None
+
+
+def version_selection_changed(image_dir: str, versions) -> bool:
+    """当前版本组合是否需要重画成绩板；没有清单时只在启用三服时强制。"""
+    manifest_path = os.path.join(image_dir, VERSION_COLUMN_MANIFEST_NAME)
+    current = [v for v in (versions or []) if v][:3]
+    if not os.path.exists(manifest_path):
+        return bool(current)
+    try:
+        manifest = load_config(manifest_path)
+    except Exception:
+        return bool(current)
+    if not isinstance(manifest, dict):
+        return bool(current)
+    stored_versions = manifest.get('versions')
+    last_versions = [str(v) for v in stored_versions] if isinstance(stored_versions, list) else []
+    return (current != last_versions
+            or manifest.get('layout') != VERSION_COLUMN_LAYOUT_VERSION)
+
+
+def save_version_selection(image_dir: str, versions) -> None:
+    save_config(os.path.join(image_dir, VERSION_COLUMN_MANIFEST_NAME), {
+        "versions": [v for v in (versions or []) if v][:3],
+        "layout": VERSION_COLUMN_LAYOUT_VERSION,
+    })
+
+
+def draw_version_columns(image: Image.Image, versions: list, levels: dict,
+                         current_color, next_color) -> Image.Image:
+    """在面板里等宽画各版本的 logo 与定数。
+
+    第一列是基准版本，其余列与基准比较；缺定数写 --，缺 logo 退回文本缩写。
+    不画 CN/INT/JP 字符标记——logo 本身已经表达版本。
+    """
+    versions = [v for v in (versions or []) if v][:3]
+    if not versions:
+        return image
+    centers, column_width = _version_column_layout(len(versions))
+    base_level = positive_constant(levels.get(versions[0]))
+    logo_height = 52 if len(versions) >= 3 else 62
+    max_logo_width = max(1, int(column_width - 18))
+    value_size = {1: 45, 2: 42, 3: 36}.get(len(versions), 34)
+
+    for index, key in enumerate(versions):
+        center_x = centers[index]
+        logo_drawn = False
+        logo_name = VERSION_LOGO_FILES.get(str(key))
+        if logo_name:
+            logo_path = os.path.join(VERSION_LOGO_DIR, logo_name)
+            if is_artifact_valid(logo_path):
+                try:
+                    with Image.open(logo_path) as source:
+                        logo = source.convert("RGBA")
+                    scale = min(logo_height / logo.height, max_logo_width / logo.width)
+                    logo = logo.resize(
+                        (max(1, round(logo.width * scale)), max(1, round(logo.height * scale))),
+                        Resampling.LANCZOS,
+                    )
+                    image.alpha_composite(logo, (center_x - logo.width // 2, VERSION_PANEL_LOGO_TOP))
+                    logo_drawn = True
+                except Exception:
+                    logo_drawn = False
+        if not logo_drawn:
+            TextDraw(image, str(key), (center_x, VERSION_PANEL_LOGO_TOP + logo_height // 2),
+                     font_path=title_font_path, font_size=24,
+                     font_color=current_color, h_align="center")
+
+        level_value = positive_constant(levels.get(key))
+        if level_value is None:
+            text = "--"
+        elif index == 0:
+            text = f"{level_value:.1f}→"
+        elif base_level is None:
+            text = f"{level_value:.1f}"
+        else:
+            arrow = "↑" if level_value > base_level else "↓" if level_value < base_level else "→"
+            text = f"{level_value:.1f}{arrow}"
+        TextDraw(image, text, (center_x, VERSION_PANEL_VALUE_Y),
+                 font_path=title_font_path, font_size=value_size,
+                 font_color=next_color if index else current_color,
+                 h_align="center", max_width=int(column_width) - 6)
+
+    return image
+
 
 def ScoreLoader(score: int = 0):
     if score < 0 or score > 1010000:
@@ -145,8 +288,7 @@ def ScoreLoader(score: int = 0):
                 score_number_img.paste(char_img, (paste_x, char_y), char_img)
                 current_x += char_width
         except Exception as e:
-            print(f"加载字符 '{char}' 失败: {e}")
-            continue
+            raise RuntimeError(f"加载分数素材 {char!r} 失败（{image_path}）") from e
             
     return score_number_img
 
@@ -202,8 +344,7 @@ def RatingLoader(rating: float):
                 ra_number_img.paste(char_img, (current_x, char_y), char_img)
                 current_x += char_width
         except Exception as e:
-            print(f"加载字符 '{char}' 失败: {e}")
-            continue
+            raise RuntimeError(f"加载 Rating 素材 {char!r} 失败（{image_path}）") from e
 
     return ra_number_img  # 修正：在循环结束后返回
         
@@ -291,7 +432,9 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), offset: tuple = (0, 0),
         return image
 
 # def generate_single_image(record_detail: dict, style_config: dict, output_path, prefix, index: int):
-def generate_single_image(record_detail: dict, style_config: dict, output_path):
+def generate_single_image(record_detail: dict, style_config: dict, output_path,
+                          version_columns: Optional[list] = None,
+                          version_levels: Optional[dict] = None):
     """
     生成单个 Best50 成绩记录图。
 
@@ -309,11 +452,51 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
             - level_next (float): 下版本定数
         style_config (dict): 元素坐标，用于读取 customization.json 文件
         output_path (str): 输出目录
+        version_columns (list | None): 三服对比的版本顺序（2-3 个）；None 保持旧两栏
+        version_levels (dict | None): 各版本定数 {版本: 定数}，仅 version_columns 生效
         prefix (str): 文件名前缀(deprecated)
         index (int): 索引编号(deprecated)
 
     渲染失败时抛异常且不落盘：下游把"文件存在"当成"已生成"，写一张错误占位图会被永久当成成品。
     """
+    # 旧存档没有这些键：直接下标会让整张成绩板停在 KeyError。
+    # 归一化一份副本，既不修改调用方的数据，也不用把下面每处下标都改写成 .get。
+    record_detail = dict(record_detail)
+    record_detail['song_name'] = record_detail.get('song_name') or ''
+    record_detail['artist'] = record_detail.get('artist') or ''
+    record_detail['full_combo'] = record_detail.get('full_combo') or ''
+    record_detail['full_chain'] = record_detail.get('full_chain') or ''
+    if record_detail.get('play_count') == '':
+        record_detail['play_count'] = None
+    # 定数从 1.0 起步，0/负数只可能是坏存档或旧版占位；和缺键一样按"缺失"处理，
+    # 由另一个字段互补。两个都没有才落到 0.0，模板里会显示成 -- / 0.0。
+    for level_field in ('level', 'level_next'):
+        value = record_detail.get(level_field)
+        if value in (None, ''):
+            record_detail[level_field] = None
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        record_detail[level_field] = parsed if parsed > 0 else None
+    if record_detail['level'] is None:
+        record_detail['level'] = record_detail['level_next']
+    if record_detail['level_next'] is None:
+        record_detail['level_next'] = record_detail['level']
+    if record_detail['level'] is None:
+        record_detail['level'] = 0.0
+    if record_detail['level_next'] is None:
+        record_detail['level_next'] = 0.0
+    # 归一化后的类型收口：下面所有算术/LevelLoader 都用这两个 float，
+    # 不再从 dict 里取出"可能是 None"的值。
+    level_value = float(record_detail['level'] or 0.0)
+    level_next_value = float(record_detail['level_next'] or 0.0)
+    # 传了 2 个以上版本才启用三服面板；0/1 个版本保持旧的两栏布局
+    version_columns = [v for v in (version_columns or []) if v][:3] or None
+    if version_columns and not isinstance(version_levels, dict):
+        version_levels = {}
+
     template = style_config['themes']
     position = style_config['position']['image']
     size = style_config['size']
@@ -329,7 +512,13 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
         if template in ("default", "custom_default"):
             if record_detail['level_index'] not in range(0, 5):
                 raise ValueError(f"未知的等级索引: {record_detail['level_index']!r}（可选：0-4）")
-            image_base_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base.png")
+            if version_columns:
+                image_base_path = os.path.join(
+                    f"{image_root_path}/Base/content/default", VERSION_PANEL_IMAGE_NAME)
+                if not is_artifact_valid(image_base_path):
+                    raise FileNotFoundError(f"三服对比底图不存在：{image_base_path}")
+            else:
+                image_base_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base.png")
             with Image.open(image_base_path) as background:
                 background = background.convert("RGBA")
                 if background.size != (1920, 1080):
@@ -350,42 +539,52 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 # 等级
                 # level_pos = (100, 884) # x 坐标 + 4（发现已偏移 4px）
                 level_pos = position['level']['integer']
-                level = LevelLoader(record_detail['level'], record_detail['level_next'])
+                badge_level = level_value
+                if version_columns:
+                    base_constant = positive_constant((version_levels or {}).get(version_columns[0]))
+                    if base_constant is not None:
+                        badge_level = base_constant
+                level = LevelLoader(badge_level, level_next_value)
                 if level.mode != 'RGBA':
                     level = level.convert('RGBA')
                 temp_img.paste(level, level_pos, level)
                 
                 # 定数
-                # cur_pos = (1562, 1018)
-                # next_pos = (1756, 1018)
-                cur_pos = position['level']['current']
-                next_pos = position['level']['next']
-                cur_color = color['level']['current']
-                next_color = color['level']['next']
-                cur_next_size = size['level']
-                cur_next_align = align['level']
-                
-                # 成绩数据
-                cur_level = record_detail['level']
-                next_level = record_detail['level_next']
-                cur_text = f"{cur_level:.1f}"
-                if cur_level <= 0.0:
-                    cur_text = "--"
-                temp_img = TextDraw(temp_img, cur_text, cur_pos,
-                                    font_path=title_font_path,
-                                    font_size=cur_next_size, font_color=cur_color, h_align=cur_next_align)
-                
-                if cur_level <= 0:
-                    next_text = f"{next_level:.1f}"
-                elif next_level > cur_level:
-                    next_text = f"{next_level:.1f}" + "↑" 
-                elif next_level < cur_level:
-                    next_text = f"{next_level:.1f}" + "↓"
+                if version_columns:
+                    temp_img = draw_version_columns(
+                        temp_img, version_columns, version_levels or {},
+                        color['level']['current'], color['level']['next'],
+                    )
                 else:
-                    next_text = f"{next_level:.1f}" + "→"
-                temp_img = TextDraw(temp_img, next_text, next_pos,
-                                    font_path=title_font_path,
-                                    font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
+                    # cur_pos = (1562, 1018)
+                    # next_pos = (1756, 1018)
+                    cur_pos = position['level']['current']
+                    next_pos = position['level']['next']
+                    cur_color = color['level']['current']
+                    next_color = color['level']['next']
+                    cur_next_size = size['level']
+                    cur_next_align = align['level']
+
+                    cur_level = level_value
+                    next_level = level_next_value
+                    cur_text = f"{cur_level:.1f}"
+                    if cur_level <= 0.0:
+                        cur_text = "--"
+                    temp_img = TextDraw(temp_img, cur_text, cur_pos,
+                                        font_path=title_font_path,
+                                        font_size=cur_next_size, font_color=cur_color, h_align=cur_next_align)
+
+                    if cur_level <= 0:
+                        next_text = f"{next_level:.1f}"
+                    elif next_level > cur_level:
+                        next_text = f"{next_level:.1f}" + "↑"
+                    elif next_level < cur_level:
+                        next_text = f"{next_level:.1f}" + "↓"
+                    else:
+                        next_text = f"{next_level:.1f}" + "→"
+                    temp_img = TextDraw(temp_img, next_text, next_pos,
+                                        font_path=title_font_path,
+                                        font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
                 
                 # 分数
                 # score_pos = (706, 958)
@@ -572,9 +771,13 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
                 level_center_x = level_layer.width // 2
                 level_center_y = level_layer.height // 2
                 
-                difficulty_name = REVERSE_LEVEL_LABELS[record_detail['level_index']]
-                old_const = record_detail['level']
-                new_const = record_detail['level_next']
+                difficulty_name = REVERSE_LEVEL_LABELS.get(record_detail['level_index'])
+                if difficulty_name is None:
+                    raise ValueError(
+                        f"未知的等级索引: {record_detail['level_index']!r}（可选：0-4）"
+                    )
+                old_const = level_value
+                new_const = level_next_value
                 
                 if new_const > old_const:
                     level_text = f"{difficulty_name}[{old_const:.1f} ↑ {new_const:.1f}(NEXT)]"
@@ -675,7 +878,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path):
             raise ValueError(f"未知的主题模板【{template}】"
                              f"（可选：default / custom_default / init / custom_init）")
 
-        background.save(os.path.join(output_path, f"{prefix}_{index}.png"))
+        _save_png_atomic(background, os.path.join(output_path, f"{prefix}_{index}.png"))
     except Exception as e:
         print(f"生成 {prefix} 第 {index} 张图像失败：{e}")
         print(traceback.format_exc())
@@ -712,21 +915,43 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
             'auto_height': layout['autoHeight'],
         }
     
-    def merge_text_with_background(text_path, bg_path, output_path, position_ratio, bg_size=(1920, 1080)):
-        """合并单张文字图与背景图"""
-        background = Image.open(bg_path, 'r').convert("RGBA")
-        text_img = Image.open(text_path, 'r').convert("RGBA")
-        
+    def render_signature(seg_type, text, params, position, bg_path):
+        """这一张图的内容指纹：文本、渲染参数、位置、底图本身都要参与。"""
+        payload = {
+            "v": IMAGE_RENDER_MANIFEST_VERSION,
+            "type": seg_type,
+            "text": text,
+            "params": params,
+            "position": list(position),
+            "bg": os.path.abspath(bg_path) if bg_path else "",
+            "bg_stamp": _file_stamp(bg_path) if bg_path else "none",
+        }
+        return hashlib.sha1(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
+
+    def merge_text_with_background(text_path, bg_path, output_path, position_ratio):
+        """合并单张文字图与背景图；文字图大于背景板时明确报错，不再静默裁掉底部。"""
+        with Image.open(bg_path, 'r') as background_file:
+            background = background_file.convert("RGBA")
+        with Image.open(text_path, 'r') as text_file:
+            text_img = text_file.convert("RGBA")
+
         text_width, text_height = text_img.size
-        bg_width, bg_height = bg_size
-        
+        bg_width, bg_height = background.size
+        if text_width > bg_width or text_height > bg_height:
+            raise ValueError(
+                f"文字图 {text_width}×{text_height} 超过背景板 {bg_width}×{bg_height}"
+                f"（{os.path.basename(text_path)}）——请缩短文字或调小字号"
+            )
+
         x = int(bg_width * position_ratio[0])
         y = int(bg_height * position_ratio[1])
         x = max(0, min(x, bg_width - text_width))
         y = max(0, min(y, bg_height - text_height))
-        
+
         background.paste(text_img, (x, y), text_img)
-        background.save(output_path, "PNG")
+        _save_png_atomic(background, output_path)
         return output_path
     
     def update_config_with_image_paths():
@@ -737,8 +962,7 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
             style_cfg = load_config(style_config_file_path)
             
             if not config_to_update or not style_cfg:
-                st.warning("无法更新配置：配置文件加载失败", icon="⚠️")
-                return
+                raise RuntimeError("无法更新配置：配置文件加载失败")
             
             theme = style_cfg['themes']
             # custom_ 前缀（自定义模式）回退到原模板目录
@@ -756,42 +980,34 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                 for seg in config_to_update.get(seg_type, []):
                     total += 1
                     file_name = f"{seg['id']}.png"
-                    bg_page = seg['bg_page']
-                    no_overlay = seg['no_overlay']
+                    # 旧存档没有这两个键，直接下标会让整段回写停在 KeyError，
+                    # full_image 全部保持 None
+                    bg_page = seg.get('bg_page', False)
+                    no_overlay = seg.get('no_overlay', False)
+                    raw_text = seg.get('text') or ''
+                    clean_text, _ = parse_oped_text_markers(raw_text)
+                    has_text = bool(clean_text.strip())
 
                     if no_overlay:
                         # [无底图] 标记：不叠加任何底图（不再依赖 bg_page 前置）
                         full_image_path = ""
                     elif bg_page:
-                        # 旧存档兼容：背景板页使用静态模板底图
-                        full_image_path = intro_bg_path if os.path.exists(intro_bg_path) else ""
+                        # 旧存档兼容：背景板页使用静态模板底图，与文本是否为空无关
+                        full_image_path = intro_bg_path if is_artifact_valid(intro_bg_path) else ""
                         if full_image_path:
                             filled += 1
+                    elif not has_text:
+                        # 普通文本页但文本为空：不能把上一次留下的 fullbg
+                        # 当成这次的结果写回去
+                        full_image_path = ""
                     else:
                         # 普通文本页面：底图只有真实生成过才写入路径——
                         # 文本为空/生成失败时留下幽灵路径，会让两条渲染路径
                         # 行为分歧（quad 优雅跳过、SegmentUtils 直接炸）
                         candidate = os.path.join(fullbg_dir, file_name)
-                        full_image_path = candidate if os.path.exists(candidate) else ""
+                        full_image_path = candidate if is_artifact_valid(candidate) else ""
                         if full_image_path:
                             filled += 1
-                    
-                    # if bg_page:
-                    #     if no_overlay:
-                    #         # 背景板页面 + 保留背景板底图
-                    #         full_image_path = intro_bg_path if os.path.exists(intro_bg_path) else ""
-                    #         if full_image_path:
-                    #             filled += 1
-                    #     else:
-                    #         # 背景板页面且不保留背景板 → 留空
-                    #         full_image_path = ""
-                    # else:
-                    #     # 普通文本页面，使用生成的完整背景图
-                    #     full_image_path = os.path.join(fullbg_dir, file_name)
-                    #     # if os.path.exists(full_image_path):
-                    #     filled += 1
-                    #     # else:
-                    #         # full_image_path = ""
                     
                     seg['full_image'] = full_image_path
             
@@ -799,8 +1015,9 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
             for seg in config_to_update.get('main', []):
                 total += 1
                 file_name = f"{seg['clip_id']}.png"
-                full_image_path = os.path.join(fullbg_dir, file_name)
-                seg['full_image'] = full_image_path if os.path.exists(full_image_path) else ""
+                has_text = bool((seg.get('text') or '').strip())
+                candidate = os.path.join(fullbg_dir, file_name)
+                seg['full_image'] = candidate if has_text and is_artifact_valid(candidate) else ""
                 if seg['full_image']:
                     filled += 1
             
@@ -809,7 +1026,9 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
             st.toast(f"已更新 {filled}/{total} 个图像路径到配置文件", icon="✅")
             
         except Exception as e:
-            st.warning(f"更新配置失败：{str(e)}", icon="⚠️")
+            # 以前这里只 warning：图片生成了但路径没写回去，页 6 仍会拿旧配置出片。
+            # 上抛给外层统一进 render_error，页 6 会据此阻止提交。
+            raise RuntimeError(f"更新配置失败：{str(e)}") from e
     
     try:
         # 加载配置
@@ -817,8 +1036,8 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
         video_data = load_config(video_config_file)
         
         if not style_data or not video_data:
-            st.error("配置文件加载失败！", icon="❌")
-            return [], []
+            # 不能只 st.error 后正常返回：调用方会当成"没有文字要渲染"继续提交视频。
+            raise RuntimeError("配置文件加载失败")
         
         styles = style_data['styleConfig']
         layouts = style_data['layoutConfig']
@@ -833,7 +1052,20 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
         fullbg_dir = os.path.join(image_root, 'fullbg')
         os.makedirs(text_dir, exist_ok=True)
         os.makedirs(fullbg_dir, exist_ok=True)
-        
+
+        # 上次成功渲染的指纹。旧存档没有这个文件：第一次会全量重画一遍，
+        # 之后就只重画文本/样式/位置/底图真正变过的那些。
+        manifest_path = os.path.join(image_root, IMAGE_RENDER_MANIFEST_NAME)
+        manifest = {}
+        if os.path.exists(manifest_path):
+            try:
+                loaded_manifest = load_config(manifest_path)
+                if isinstance(loaded_manifest, dict):
+                    manifest = loaded_manifest
+            except Exception:
+                manifest = {}
+        manifest_dirty = False
+
         # 准备背景路径
         # custom_ 前缀（自定义模式）回退到原模板目录
         intro_theme = theme[7:] if theme.startswith("custom_") else theme
@@ -874,13 +1106,25 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                 text_path = os.path.join(text_dir, file_name)
                 fullbg_path = os.path.join(fullbg_dir, file_name)
                 
-                # 检查是否需要跳过（0 字节的失败产物不算已生成，否则页面上会显示"已就绪"却读不出图）
-                if not force_regen and is_artifact_valid(text_path) and is_artifact_valid(fullbg_path):
+                key = f"{seg_type}:{file_name}"
+                if seg_type == 'main':
+                    bg_path = os.path.join(content_bg_dir, file_name)
+                    position_ratio = content_position
+                else:
+                    bg_path = intro_bg_path
+                    position_ratio = intro_position
+                signature = render_signature(seg_type, text.strip(), params, position_ratio, bg_path)
+
+                # 跳过条件必须同时满足：产物可用，且文本/样式/位置/底图都没变。
+                if (not force_regen
+                        and manifest.get(key) == signature
+                        and is_artifact_valid(text_path)
+                        and is_artifact_valid(fullbg_path)):
                     skipped_count += 1
                     text_files.append(text_path)
                     fullbg_files.append(fullbg_path)
                     continue
-                
+
                 # 生成文字图
                 rendered = render_text_to_image(
                     text=text.strip(),
@@ -891,39 +1135,60 @@ def render_all_images(video_config_file, style_config_file_path, save_paths, for
                 # 那两个 return）。这里恒定传了路径，但"哪一格是路径"按签名说不清，就按形状判一次。
                 saved_text_path = rendered[1] if isinstance(rendered, tuple) else text_path
                 text_files.append(saved_text_path)
-                
-                # 合并背景图
-                if seg_type == 'main':
-                    bg_path = os.path.join(content_bg_dir, file_name)
-                    if os.path.exists(bg_path):
-                        merge_text_with_background(
-                            saved_text_path,
-                            bg_path,
-                            fullbg_path,
-                            content_position
-                        )
-                        fullbg_files.append(fullbg_path)
-                    else:
-                        st.warning(f"背景图不存在，跳过合并: {file_name}", icon="⚠️")
+
+                # 合并背景图；成功才写指纹。底图缺失时清掉上一轮的旧整图，
+                # 避免配置继续指向一张与当前文本无关的图。
+                if is_artifact_valid(bg_path):
+                    merge_text_with_background(
+                        saved_text_path,
+                        bg_path,
+                        fullbg_path,
+                        position_ratio
+                    )
+                    fullbg_files.append(fullbg_path)
+                    manifest[key] = signature
+                    manifest_dirty = True
                 else:
-                    if os.path.exists(intro_bg_path):
-                        merge_text_with_background(
-                            saved_text_path,
-                            intro_bg_path,
-                            fullbg_path,
-                            intro_position
-                        )
-                        fullbg_files.append(fullbg_path)
-                    else:
-                        st.warning(f"Intro 背景图不存在，跳过合并: {file_name}", icon="⚠️")
+                    if os.path.exists(fullbg_path):
+                        os.remove(fullbg_path)
+                    manifest.pop(key, None)
+                    manifest_dirty = True
+                    label = "背景图" if seg_type == 'main' else "Intro 背景图"
+                    st.warning(f"{label}不存在，跳过合并: {file_name}", icon="⚠️")
         
-        # 显示结果
-        new_count = len(text_files) - skipped_count
-        if new_count > 0:
-            st.success(f"成功生成 {new_count} 张文字图 + {new_count} 张完整背景图", icon="✅")
+        # 显示结果：文字图与整图要分别计数，背景缺失时不能报成"各 N 张"
+        new_text_count = len(text_files) - skipped_count
+        new_full_count = len(fullbg_files) - skipped_count
+        if new_text_count > 0 or new_full_count > 0:
+            st.success(
+                f"本次生成 {new_text_count} 张文字图 + {new_full_count} 张完整背景图",
+                icon="✅",
+            )
+        missing_full = max(0, new_text_count - new_full_count)
+        if missing_full > 0:
+            st.warning(
+                f"有 {missing_full} 张文字图没有生成完整背景图"
+                "（背景素材缺失，详见上方警告）",
+                icon="⚠️",
+            )
         if skipped_count > 0:
-            st.info(f"跳过已存在的 {skipped_count} 组图片", icon="⏭️")
-        
+            st.info(f"跳过未变化的 {skipped_count} 组图片", icon="⏭️")
+
+        failed_emojis = get_failed_emojis()
+        if failed_emojis:
+            sample = " ".join(sorted(failed_emojis)[:10])
+            st.warning(
+                f"{len(failed_emojis)} 个 emoji 因网络问题未能下载，相关位置会留空：{sample}",
+                icon="⚠️",
+            )
+
+        if manifest_dirty:
+            try:
+                save_config(manifest_path, manifest)
+            except Exception as e:
+                # 指纹写不进去只会导致下次重画，不该拦住本次已经正确的图片
+                st.warning(f"渲染指纹写入失败（下次会重新生成）：{e}", icon="⚠️")
+
         # ========== 关键：更新配置文件中的图像路径 ==========
         update_config_with_image_paths()
         

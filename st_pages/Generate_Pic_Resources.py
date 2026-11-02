@@ -7,21 +7,37 @@ import os, time, traceback, shutil
 from utils.Variables import root_path, music_info_path, jp_music_info_path, intl_music_info_path
 from concurrent.futures import ThreadPoolExecutor
 from utils.DataUtils import load_config_with_types, _load_optional_json, backfill_pool_fields
-from utils.ImageUtils import generate_single_image
+from utils.ImageUtils import (generate_single_image, version_selection_changed,
+                              save_version_selection, positive_constant)
 
-def st_generate_b30_images(placeholder, save_paths):
+def st_generate_b30_images(placeholder, save_paths, force_regen=False, version_columns=None):
     b50_data = load_config(save_paths['data_file'])
     image_path = f"{save_paths['image_dir']}/background"
     
     # 确保图片目录存在
     os.makedirs(image_path, exist_ok=True)
-    
+
+    version_columns = [v for v in (version_columns or []) if v][:3] or None
+    version_indexes = None
+    if version_columns:
+        version_indexes = build_song_indexes(
+            load_config(music_info_path, use_cache=True) or [],
+            load_config(jp_music_info_path, use_cache=True) or [],
+            _load_optional_json(intl_music_info_path) or [],
+        )
+
+    # 版本组合变了就忽略旧底图；否则切完版本点生成会继续用旧图
+    force_regen = force_regen or version_selection_changed(
+        save_paths['image_dir'], version_columns)
+
     def check_image_exists(record_detail):
-        """检查图片是否已存在"""
+        """检查图片是否已存在（强制重生成时一律视为不存在）"""
         prefix, index = record_detail['clip_id'].split('_', 1)
         # 构建预期的图片文件名（根据你的命名规则调整）
         expected_filename = f"{prefix}_{index}.png"  # 或其他扩展名
         expected_path = os.path.join(image_path, expected_filename)
+        if force_regen:
+            return False, expected_filename
         # 用同一条产物判据：0 字节的失败 PNG 不能算"已生成"而跳过
         return is_artifact_valid(expected_path), expected_filename
     
@@ -34,11 +50,31 @@ def st_generate_b30_images(placeholder, save_paths):
         
         custom_data = load_config(current_paths['custom_style'])
         try:
-            generate_single_image(
-                record_detail,
-                custom_data,
-                image_path,
-            )
+            if version_columns and version_indexes is not None:
+                stored_levels = record_levels(record_detail)
+                _, live_levels = lookup_song_fields(
+                    record_detail.get('id'),
+                    record_detail.get('song_name') or '',
+                    record_detail.get('level_index'),
+                    version_indexes,
+                )
+                version_levels = {
+                    key: live_levels.get(key) or stored_levels.get(key)
+                    for key in version_columns
+                }
+                generate_single_image(
+                    record_detail,
+                    custom_data,
+                    image_path,
+                    version_columns=version_columns,
+                    version_levels=version_levels,
+                )
+            else:
+                generate_single_image(
+                    record_detail,
+                    custom_data,
+                    image_path,
+                )
             return "success", None
         except Exception as e:
             clip_id = record_detail['clip_id']
@@ -147,6 +183,12 @@ def st_generate_b30_images(placeholder, save_paths):
                 st.error(f"以下记录渲染失败、未落盘，请修正数据后重新生成：{shown}{more}", icon="❌")
             # 不自动 rerun：重跑会把上面这份失败清单一起抹掉，而生成结果都在磁盘上，没有需要重新探测的状态
 
+        try:
+            save_version_selection(save_paths['image_dir'], version_columns)
+        except Exception as e:
+            # 写不进去只会导致下次重复生成，不该拦住本次已经完成的底图
+            st.warning(f"版本布局记录写入失败（下次会重新生成）：{e}", icon="⚠️")
+
 st.title("Step 1: 生成 Best50 成绩底图")
 
 ### Savefile Management - Start ###
@@ -199,11 +241,12 @@ with st.container(border=True):
                     st.info(f"曲库比这份存档新：{len(pool_changes)} 条成绩的曲师 / 三服定数可回填。"
                             f"成绩本身、编号与你手工添加的 PickUp 行都不会被改动。", icon="ℹ️")
                 else:
-                    st.warning(f"有 {len(pool_skipped)} 条成绩的 id 在当前曲库里对不上，已跳过。", icon="⚠️")
+                    st.warning(f"有 {len(pool_skipped)} 条成绩的 id 在当前曲库里对不上，已跳过回填"
+                               f"（不影响底图 / 视频生成）。", icon="⚠️")
             with backfill_col2:
                 if pool_changes and st.button(
                         "回填曲库字段", icon="✨", width='stretch',
-                        help="按 id 用当前曲库重算 artist / levels，以及仍为空的 level、level_next；"
+                        help="按 id 用当前曲库重算 artist / 三服定数，以及仍为空的 level、level_next；"
                              "不重建成绩列表，也不会去拉网络数据"):
                     _, applied, _ = backfill_pool_fields(current_paths['data_file'], apply_changes=True)
                     for stale in ('viewing_b50_data', 'processed_data'):
@@ -316,6 +359,7 @@ with st.container(border=True):
                             - **等级**：歌曲难度等级（1.0-20.0）
                             - **等级索引**：2=EXPERT(红), 3=MASTER(紫), 4=ULTIMA(黑)
                             - **下版本等级**：下一版本中的难度等级（如使用国际服数据则此参数与当前定数相同）
+                            - **三服定数**：国服 / 日服 / 国际服各自的谱面定数，查不到时留空
                             - **分数**：您的成绩（0-1010000）
                             - **Rating**：单曲Rating值
                             - **Combo 类型**：fullcombo 或 alljustice
@@ -334,7 +378,9 @@ with st.container(border=True):
                             "level": st.column_config.NumberColumn("等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", disabled=True),
                             "level_index": st.column_config.NumberColumn("等级索引", min_value=2, max_value=4, step=1, width="small", help="2=EXPERT(红), 3=MASTER(紫), 4=ULTIMA(黑)", disabled=True, format="%d"),
                             "level_next": st.column_config.NumberColumn("下版本等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", disabled=True),
-                            "levels": st.column_config.JsonColumn("三服定数", width="small", help='{"CN": 国服, "JP": 日服, "INT": 国际服}'),
+                            "level_cn": st.column_config.NumberColumn("国服定数", step=0.1, format="%.1f", width="small", disabled=True),
+                            "level_jp": st.column_config.NumberColumn("日服定数", step=0.1, format="%.1f", width="small", disabled=True),
+                            "level_int": st.column_config.NumberColumn("国际服定数", step=0.1, format="%.1f", width="small", disabled=True),
                             "score": st.column_config.NumberColumn("分数", min_value=0, max_value=1010000, step=100, width="small", disabled=True, format="%d"),
                             "rating": st.column_config.NumberColumn("Rating", min_value=0.0, max_value=20.0, step=0.01, format="%.2f", width="small", disabled=True),
                             "full_combo": st.column_config.TextColumn("Combo 类型", width="small", disabled=True),
@@ -342,6 +388,9 @@ with st.container(border=True):
                             "clip_id": st.column_config.TextColumn("剪辑 ID", width="small", disabled=True),
                             "play_count": st.column_config.NumberColumn("游玩次数", width="small", min_value=0, step=1, disabled=True, format="%d")
                         },
+                        column_order=["id", "song_name", "artist", "level_cn", "level_jp", "level_int",
+                                      "level", "level_index", "level_next", "score", "rating",
+                                      "full_combo", "full_chain", "clip_id", "play_count"],
                         hide_index=True,  # 不显示行号
                         width='stretch'
                     )
@@ -384,30 +433,30 @@ with st.container(border=True):
     ### Version Selector Section - Start ###
         with st.container(border=True):
             st.subheader("🎯 选择定数版本")
-            st.caption("选择在底图中使用的定数版本，当前仅做选择，实际渲染将在后续版本中添加。")
+            st.caption("选择基准与对比版本：至少选一个对比版本后，默认模板右下「定数变动」区会按所选版本数等宽分栏渲染；仅选基准时保持当前/下版本两栏。")
 
-            # 扫描数据中各版本覆盖情况
+            # 扫描数据中各版本覆盖情况。必须与真正渲染时的解析同一口径：
+            # CN 按 id、日服/国际服按曲名，不能这里按曲名、下面按 id 各算一套。
             scan_data = st.session_state.viewing_b50_data if st.session_state.get('viewing_b50_data') else load_config(current_paths['data_file'])
             total = len(scan_data)
-            # 从数据库实时查定数（兼容无 levels 字段的旧数据）
-            cn_lkp = {s["title"]: s for s in load_config(music_info_path, use_cache=True)}
-            jp_lkp = {s["meta"]["title"]: s for s in load_config(jp_music_info_path, use_cache=True)}
-            intl_lkp = {s["title"]: s for s in (_load_optional_json(intl_music_info_path) or [])}
+            version_indexes = build_song_indexes(
+                load_config(music_info_path, use_cache=True) or [],
+                load_config(jp_music_info_path, use_cache=True) or [],
+                _load_optional_json(intl_music_info_path) or [],
+            )
             version_stats = {"CN": 0, "JP": 0, "INT": 0}
             for item in scan_data:
-                name, li = item.get("song_name", ""), item.get("level_index")
-                lbl = REVERSE_LEVEL_LABELS.get(li) if li else None
-                if cn := cn_lkp.get(name):
-                    if lbl and any(d["difficulty"] == li for d in cn.get("difficulties", [])):
-                        version_stats["CN"] += 1
-                if jp := jp_lkp.get(name):
-                    if lbl and lbl in jp.get("data", {}):
-                        version_stats["JP"] += 1
-                if intl := intl_lkp.get(name):
-                    if lbl and lbl in intl.get("difficulty", {}):
-                        version_stats["INT"] += 1
+                _, levels = lookup_song_fields(
+                    item.get("id"), item.get("song_name") or "",
+                    item.get("level_index"), version_indexes,
+                )
+                stored_levels = record_levels(item)
+                for key in version_stats:
+                    value = levels.get(key) or stored_levels.get(key)
+                    if positive_constant(value) is not None:
+                        version_stats[key] += 1
 
-            available_versions = [v for v in ["CN", "JP", "INT"] if version_stats[v] > 0]
+            available_versions = [v for v in ["CN", "INT", "JP"] if version_stats[v] > 0]
             version_labels = {"CN": "国服", "JP": "日服", "INT": "国际服"}
             version_sources = {"CN": "all_music_infos.json", "JP": "jp_songs_info.json", "INT": "intl_songs_info.json"}
 
@@ -459,6 +508,27 @@ with st.container(border=True):
                                 st.info(f"ℹ️ {version_labels[v]}：{missing} 首缺失")
     ### Version Selector Section - End ###
 
+        # 「定数变动」面板只在默认模板里；init 模板仍走原来的两栏定数
+        try:
+            style_data = load_config(current_paths['custom_style'])
+            style_theme = style_data.get('themes', 'default') if isinstance(style_data, dict) else 'default'
+        except Exception:
+            style_theme = 'default'
+        selected_versions = [
+            v for v in (
+                st.session_state.get("version_ref"),
+                st.session_state.get("version_cmp1"),
+                st.session_state.get("version_cmp2"),
+            ) if v
+        ]
+        version_columns = (
+            selected_versions
+            if len(selected_versions) >= 2 and style_theme in ("default", "custom_default")
+            else None
+        )
+        if len(selected_versions) >= 2 and version_columns is None:
+            st.info("当前模板不是 default/custom_default，三服对比面板不会生效；如需对比请先切换模板。", icon="ℹ️")
+
         image_path = current_paths['image_dir']
         with st.container(border=False):
             info_col1, info_col2 = st.columns([1, 1.5], vertical_alignment="center")
@@ -469,12 +539,16 @@ with st.container(border=True):
             
             col1, col2 = st.columns(2)
             with col1:
+                force_regen = st.checkbox(
+                    "强制重新生成", value=False, key="force_regen_b30_images",
+                    help="忽略已存在的底图，按当前样式重新生成全部图片。"
+                )
                 if st.button("生成成绩图底图", help="使用 1920 × 1080 生成", icon="🔄️", width='stretch'):
                     generate_info_placeholder = st.empty()
                     try:
                         if not os.path.exists(image_path):
                             os.makedirs(image_path, exist_ok=True)
-                        st_generate_b30_images(generate_info_placeholder, current_paths)
+                        st_generate_b30_images(generate_info_placeholder, current_paths, force_regen, version_columns)
                         # st.success("操作成功完成。")
                     except Exception as e:
                         st.toast(f"生成时发生错误: {e}", icon="❌")

@@ -3,6 +3,19 @@
 > 仓库内只维护这一份全量更新日志（相对上一个发布版本的全部改动），含实测数字、成因、完整已知问题、发行包注意事项。
 > 面向自己人与反馈排查；对外简略说明在出包时另行摘录，仓库内不留第二份。
 
+## [未发布] - 2026-10-21
+
+### 三服定数拆成三个字段
+
+- `b30_config.json` 不再写 `levels:{CN,JP,INT}`，改为 `level_cn` / `level_jp` / `level_int`；
+  `level` / `level_next` 保留。图片页的数据表按三列显示，高级数据表可直接编辑，视频配置也写三列。
+- 旧存档兼容：`record_levels` 三字段优先、旧 `levels` 字典兜底；旧值被 Streamlit 数据编辑器
+  转成 Python repr 字符串时用 `ast.literal_eval` 还原。`load_config_with_types`、`save_song_data`
+  和 `backfill_pool_fields` 都会做形态迁移。
+- 同时修掉 Issue #4 的 4-1 崩溃：旧 `levels` 字典列进入 `st.data_editor` 会被整列转成字符串，
+  现在编辑器只面对三个标量列。本地 outside_test 存档实测：编辑器 Arrow-incompatible 列 0 个，
+  回填 23 条拆列、27 条外服 id 仍跳过；`tests/_levels_split_check.py` 全过。
+
 ## [1.2.6a] - 2026-10-02 出包，工作树截至 2026-10-18
 
 相对 v1.2.6 的全量改动：20 个已跟踪文件 +800/−524（`git diff --numstat cd322c3 662c2dc` 排除本文件，实测恰为此数：
@@ -425,6 +438,7 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
 - 缺字段的补法：`backfill_pool_fields`（`:442`）按当前曲库重算 `artist` / `levels` / 空 `level` / `level_next`，
   不动记录列表；入口是【生成 Best50 图 / 查看数据】页的「回填曲库字段」。存档记录新增 `levels:{CN,JP,INT}`，
   `level` / `level_next` 由它派生，`gen_video_config` 会把 `levels` 带进 `video_config_data`。
+  （该字段已在 2026-10-21 拆成 `level_cn` / `level_jp` / `level_int`，见顶部「未发布」节。）
 
 ### 视频检索与下载
 
@@ -595,6 +609,7 @@ v1.2.6 那节已把"合并找不到 ffmpeg"的主因修掉（`FFMPEG_PATH` 裸�
 - **老存档没有 `levels` 字段，且没有自动迁移**：渲染回退到 `song["level"]`，要拿三服定数得上
   【生成 Best50 图 / 查看数据】页手动「回填曲库字段」（`backfill_pool_fields`，`utils/DataUtils.py:442`）。
   首次升级就直奔渲染的用户不会看到任何报错，只是定数表少两列。
+  （2026-10-21 起读取/保存/回填都会自动迁移，见顶部「未发布」节。）
 - `create_downloader`（`utils/video_crawler.py:1598`）硬编码 `./cred_datas/bilibili_cred.pkl`，忽略传进来的
   `credential_path`；`streamlit_login_bilibili()`（`:1009`）已经零调用点（旧的命令提示符登录），下次动这个文件时清掉。
 - 底图与成绩图的正本在**样式子目录**里（`Base/content/default/`、`Base/content/init/`），外层 flat 那几张

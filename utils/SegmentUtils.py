@@ -82,7 +82,7 @@ def resolve_clip_board_image(clip_config: dict) -> str:
     full_image = (clip_config.get('full_image') or '').strip()
     main_image = (clip_config.get('main_image') or '').strip()
     for cand in (full_image, main_image):
-        if cand and os.path.exists(cand):
+        if cand and is_artifact_valid(cand):
             return os.path.abspath(cand).replace('\\', '/')
     raise MissingClipInputError(
         "成绩板图片不可用（main_image 与 full_image 都指向不存在的文件："
@@ -601,7 +601,7 @@ class InfoSegmentGenerator(VideoGenerator):
         if not raw:
             print(f"信息: 片段 {clip_id} 声明了底图页但没有底图路径，按纯背景渲染")
             return None
-        if not os.path.exists(raw):
+        if not is_artifact_valid(raw):
             # 降级必须说破：勾了背景板却渲出纯背景，不能让人以为底图生效了
             print(f"信息: 片段 {clip_id} 的底图不存在（{raw}），本次按纯背景渲染"
                   f"{'（背景板页）' if bg_page else ''}")

@@ -658,6 +658,14 @@ with st.container(border=True):
                                             )
 
                                         lbl = REVERSE_LEVEL_LABELS[li]
+                                        cn_lv = next((d["level_value"] for d in cn_song.get("difficulties", [])
+                                                      if d["difficulty"] == li), None) if cn_song else None
+                                        jp_lv = jp_song["data"].get(lbl, {}).get("const") if jp_song else None
+                                        intl_raw = intl_song.get("difficulty", {}).get(lbl) if intl_song else None
+                                        try:
+                                            intl_lv = float(intl_raw) if intl_raw is not None else None
+                                        except (TypeError, ValueError):
+                                            intl_lv = None
                                         if stype == "cn":
                                             lv = next((d["level_value"] for d in cn_song["difficulties"] if d["difficulty"] == li), 13.0)
                                             lv_next = jp_song["data"][lbl]["const"] if jp_song and lbl in jp_song.get("data", {}) else lv
@@ -688,6 +696,7 @@ with st.container(border=True):
                                             new_song = {
                                                 "id": song_id, "song_name": title,
                                                 "artist": artist, "level": lv,
+                                                "level_cn": cn_lv, "level_jp": jp_lv, "level_int": intl_lv,
                                                 "level_index": li, "level_next": lv_next,
                                                 "score": sc, "rating": auto_rating,
                                                 "full_combo": qal_combo, "full_chain": qal_chain,
@@ -772,6 +781,9 @@ with st.container(border=True):
                                                     "song_name": selected_song.get("song_name", ""),
                                                     "artist": selected_song.get("artist", ""),
                                                     "level": e_lv, "level_index": e_li,
+                                                    "level_cn": selected_song.get("level_cn"),
+                                                    "level_jp": selected_song.get("level_jp"),
+                                                    "level_int": selected_song.get("level_int"),
                                                     "level_next": float(selected_song.get("level_next", e_lv)),
                                                     "score": e_sc, "rating": e_rating,
                                                     "full_combo": e_combo, "full_chain": e_chain,
@@ -849,8 +861,12 @@ with st.container(border=True):
                                     - 要逐曲微调顺序请切到"手动拖拽"
                                     - 「排序设置」或简单编辑一落盘，本表格里**还没点「保存修改」的改动会被作废**
                                     - 改了分数或等级后要点「自动计算 Rating」，表格不会替你算
+                                    - 三服定数分别对应国服 / 日服 / 国际服的谱面定数，查不到的那一服留空
                                     """, icon="ℹ️")
-                            
+
+                            for record in b50_data:
+                                if isinstance(record, dict):
+                                    record.pop("levels", None)
                             edited_data = st.data_editor(
                                 b50_data,
                                 column_config={
@@ -861,6 +877,9 @@ with st.container(border=True):
     """, required=True, format="%d"),
                                     "song_name": st.column_config.TextColumn("曲名", width="medium", required=True),
                                     "artist": st.column_config.TextColumn("曲师", width="medium", required=True),
+                                    "level_cn": st.column_config.NumberColumn("国服定数", step=0.1, format="%.1f", width="small"),
+                                    "level_jp": st.column_config.NumberColumn("日服定数", step=0.1, format="%.1f", width="small"),
+                                    "level_int": st.column_config.NumberColumn("国际服定数", step=0.1, format="%.1f", width="small"),
                                     "level": st.column_config.NumberColumn("等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
                                     "level_index": st.column_config.NumberColumn("等级索引", min_value=2, max_value=4, step=1, width="small", help="可填写：2(EXPERT/红)、3(MASTER/紫)、4(ULTIMA/黑)", required=True, format="%d"),
                                     "level_next": st.column_config.NumberColumn("下版本等级", min_value=1.0, max_value=20.0, step=0.1, format="%.1f", width="small", required=True),
@@ -873,6 +892,9 @@ with st.container(border=True):
                                     "clip_id": st.column_config.TextColumn("剪辑 ID", width="small", required=True, default="PickUp_1", help="按照 [类型]_[序号] 格式添加，如 Best_1", pinned=True, validate="^[a-zA-Z]+_[0-9]+$"),
                                     "play_count": st.column_config.NumberColumn("游玩次数", width="small", min_value=0, step=1, help="如果需要填写游玩次数，请输入具体数值（留空即不填充）", format="%d", default=None)
                                 },
+                                column_order=["id", "song_name", "artist", "level_cn", "level_jp", "level_int",
+                                              "level", "level_index", "level_next", "score", "rating",
+                                              "full_combo", "full_chain", "clip_id", "play_count"],
                                 hide_index=True,  # 不显示行号
                                 num_rows="dynamic",
                                 width='stretch',

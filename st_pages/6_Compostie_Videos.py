@@ -515,12 +515,14 @@ def _prepare_and_submit(prefer: str) -> bool:
         return False
     save_video_render_config()
 
-    # 成绩板 / 底板图像预渲染：放在页面线程里做，带 UI 反馈
-    image_root = current_paths['image_dir']
-    fullbg_dir = os.path.join(image_root, 'fullbg')
-    if not os.path.exists(fullbg_dir):
-        print("正在预先渲染背景板图像。")
-        render_all_images(video_config_file, current_paths['custom_style'], current_paths)
+    # 成绩板 / 底板图像预渲染：放在页面线程里做，带 UI 反馈。
+    # 不能以 fullbg 目录是否存在当判据——目录在第一次渲染开始前就建好了，
+    # 首次失败、之后改评论都会被它挡住。render_all_images 内部按内容指纹跳过未变的图。
+    print("正在检查并生成背景板图像。")
+    st.session_state.pop('render_error', None)
+    render_all_images(video_config_file, current_paths['custom_style'], current_paths)
+    if st.session_state.get('render_error'):
+        st.stop()
 
     return submit_render(
         video_configs=video_configs,

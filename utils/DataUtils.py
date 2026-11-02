@@ -6,7 +6,8 @@ import json, random, os, base64, hashlib, requests, threading, time, re, unicode
 from utils.Variables import (DIFFICULTY_MAP, music_info_path, jp_music_info_path, intl_music_info_path,
                              jp_music_info_url, intl_music_info_url,
                              MUSIC_DATA_USER_AGENT, music_status_dir)
-from utils.PageUtils import _process_cn_data, _process_intl_data, build_song_indexes, lookup_song_fields
+from utils.PageUtils import (_process_cn_data, _process_intl_data, build_song_indexes, lookup_song_fields,
+                             LEVEL_FIELDS, record_levels, migrate_record_levels)
 from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE
 from utils.Variables import (fish_music_info_path,
                              fish_latest_version_path, cn_song_meta_path)
@@ -156,9 +157,9 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
         processed_data = _process_cn_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_song_db,
                                           clip_prefixes)
     
-    # 从 levels 派生 level/level_next 以保持下游兼容（后续由版本选择器决定取哪个）
+    # 从三服定数派生 level/level_next 以保持下游兼容（后续由版本选择器决定取哪个）
     for item in processed_data:
-        lv = item.get("levels", {})
+        lv = record_levels(item)
         item["level"] = lv.get("CN") or lv.get("JP")
         item["level_next"] = lv.get("JP") or lv.get("CN")
 
@@ -249,15 +250,17 @@ def gen_video_config(b50_data, images_path, videoes_path, output_file,
         if missing_vid:
             st.warning(f"视频不存在: {video_tag}.mp4", icon="🎬")
 
-        lvls = song.get("levels", {})
+        lvls = record_levels(song)
         main_clip_data = {
             "id": song["id"],
             "clip_id": song["clip_id"],
             "song_name": song["song_name"],
             "artist": song["artist"],
-            "levels": lvls,
-            "level": lvls.get("CN") or lvls.get("JP") or song["level"],
-            "level_next": lvls.get("JP") or lvls.get("CN") or song.get("level_next", song["level"]),
+            "level_cn": lvls.get("CN"),
+            "level_jp": lvls.get("JP"),
+            "level_int": lvls.get("INT"),
+            "level": lvls.get("CN") or lvls.get("JP") or song.get("level"),
+            "level_next": lvls.get("JP") or lvls.get("CN") or song.get("level_next") or song.get("level"),
             "level_index": song["level_index"],
             "score": song["score"],
             "rating": song["rating"],
@@ -290,13 +293,17 @@ def load_config_with_types(file_path):
         
         # 数据类型转换
         for item in data:
+            if not isinstance(item, dict):
+                continue
+            # 旧存档的 levels 先拆成三个字段，后面的类型转换和编辑器都只面对标量列
+            migrate_record_levels(item)
             # 整型字段
             for int_field in ['id', 'score', 'level_index']:
                 if int_field in item and item[int_field] is not None:
                     item[int_field] = int(item[int_field])
             
             # 浮点型字段
-            for float_field in ['level', 'level_next', 'rating']:
+            for float_field in ['level', 'level_next', 'rating', 'level_cn', 'level_jp', 'level_int']:
                 if float_field in item and item[float_field] is not None:
                     item[float_field] = float(item[float_field])
             
@@ -354,6 +361,10 @@ def save_song_data(current_data, current_paths, message, should_rerun=True):
     调用方只在「解锁」状态下可达（写操作按钮都以 disabled=not editing_enabled 挡住），
     所以这里不再区分只读分支。
     """
+    # 写盘前统一形态：旧 levels 字典/字符串都拆成三个标量字段，避免编辑器回传字符串
+    for item in current_data:
+        if isinstance(item, dict):
+            migrate_record_levels(item)
     if not save_config_with_types(current_paths['data_file'], current_data):
         return False
 
@@ -486,10 +497,11 @@ def backfill_pool_fields(b50_data_file, apply_changes=False):
     """
     用当前曲库回填存档里的曲库派生字段，不重建成绩列表。
 
-    存档里的 artist / levels 是**建档那一刻**的曲库快照：曲库后来补齐了某首歌、或官方调过定数，
+    存档里的 artist / 三服定数是**建档那一刻**的曲库快照：曲库后来补齐了某首歌、或官方调过定数，
     已存在的 b30_config.json 不会自动跟上，而空 artist 会让底图渲染直接失败。
-    这里只重算这几个字段，成绩本身（曲名、分数、rating、combo、clip_id、手工添加的 PickUp 行）
-    一律不碰 —— 从 raw 重建列表会把那些手加行直接删掉。
+    这里只重算这几个字段（顺带把旧 levels 字段拆成三个标量列），成绩本身
+    （曲名、分数、rating、combo、clip_id、手工添加的 PickUp 行）一律不碰 ——
+    从 raw 重建列表会把那些手加行直接删掉。
 
     返回 (records, changes, skipped)：changes 是逐条字段级 before→after，供界面如实展示。
     """
@@ -523,32 +535,40 @@ def backfill_pool_fields(b50_data_file, apply_changes=False):
         if not rec.get('artist') and artist:
             updates['artist'] = artist
 
-        # 原来写成 `X if isinstance(X, dict) else {}` 的三元：isinstance 窄化的是
-        # 判断里那个表达式节点，返回位置是**另一次调用**，于是 old_levels 的推导类型
-        # 仍含 None，下游 dict(old_levels)/old_levels.get/merged.get 一次摊出 7 条。
-        # 拆成两句，窄化就落在同一个名字上。
-        old_levels = rec.get('levels')
-        if not isinstance(old_levels, dict):
-            old_levels = {}
+        old_levels = record_levels(rec)
         merged = dict(old_levels)
         for server, value in levels.items():
             # 只刷新或新增，不把已有的非空值降级成 None
             if value is not None and old_levels.get(server) != value:
                 merged[server] = value
-        if merged != old_levels:
-            updates['levels'] = merged
+
+        legacy_present = 'levels' in rec
+        for server, field in LEVEL_FIELDS.items():
+            value = merged.get(server)
+            if value is not None and rec.get(field) != value:
+                updates[field] = value
+            elif legacy_present and field not in rec:
+                updates[field] = None
 
         if rec.get('level') in (None, ''):
             updates['level'] = merged.get('CN') or merged.get('JP')
         if rec.get('level_next') in (None, ''):
             updates['level_next'] = merged.get('JP') or merged.get('CN')
 
-        if updates:
-            changes.append((clip_id, {f: (rec.get(f, '（无此字段）'), v) for f, v in updates.items()}))
+        if updates or legacy_present:
+            shown = {f: (rec.get(f, '（无此字段）'), v) for f, v in updates.items()}
+            if legacy_present:
+                shown['levels'] = (rec.get('levels'), '已拆分为 level_cn / level_jp / level_int')
+            changes.append((clip_id, shown))
             if apply_changes:
                 rec.update(updates)
+                rec.pop('levels', None)
 
     if apply_changes and changes:
+        # 回填按钮一旦落盘，顺手把跳过的旧记录也拆列，避免文件里长期维持混合形态
+        for rec in records:
+            if isinstance(rec, dict):
+                migrate_record_levels(rec)
         save_config(b50_data_file, records)
     return records, changes, skipped
 

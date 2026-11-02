@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
-import os, re, unicodedata, math
+import os, re, tempfile, unicodedata, math
 
 
 # ============================================================================
@@ -100,6 +100,11 @@ def _clear_emoji_cache():
     global _emoji_cache, _failed_emojis
     _emoji_cache.clear()
     _failed_emojis.clear()
+
+
+def get_failed_emojis() -> set:
+    """当前进程内下载失败的 emoji，供上层在界面上如实提示（不触发重试）。"""
+    return set(_failed_emojis)
 
 
 # ============================================================================
@@ -371,13 +376,26 @@ class TextRenderer:
     
     @staticmethod
     def _has_emoji(text: str) -> bool:
-        """检查文本是否包含 emoji"""
+        """检查文本是否包含 emoji（含新版 emoji、旗帜与 keycap 序列）"""
+        try:
+            import emoji
+        except ImportError:
+            pass
+        else:
+            if emoji.emoji_list(text):
+                return True
+
+        # emoji 包不可用时的兜底：按码位范围判断。旧范围停在 1F9FF，漏掉了
+        # 1FA70–1FAFF（🩰 等新 emoji）、1F1E6–1F1FF（国旗）和 keycap 的
+        # 组合符 20E3/VS16，这些字符会走普通文字路径渲染成方框。
         for char in text:
             code = ord(char)
-            # 常见 emoji 范围
-            if (0x1F300 <= code <= 0x1F9FF or  # 各种 emoji
-                0x2600 <= code <= 0x27BF or    # 符号
-                0x1F600 <= code <= 0x1F64F):   # 表情
+            if (0x1F000 <= code <= 0x1FAFF or
+                0x2600 <= code <= 0x27BF or
+                0x2300 <= code <= 0x23FF or
+                0x2B00 <= code <= 0x2BFF or
+                0xFE00 <= code <= 0xFE0F or
+                code == 0x20E3):
                 return True
         return False
     
@@ -394,6 +412,11 @@ class TextRenderer:
             # 创建临时图片用于 Pilmoji
             temp_img = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
             
+            def measure(value: str) -> int:
+                with Pilmoji(temp_img, source=_get_bootcdn_source()()) as pilmoji:
+                    bbox = pilmoji.getsize(value, font=font)
+                return bbox[0]
+
             lines = []
             paragraphs = text.split('\n')
             
@@ -411,23 +434,23 @@ class TextRenderer:
                     test_line = current_line + token
                     
                     # 使用 Pilmoji 计算宽度
-                    with Pilmoji(temp_img, source=_get_bootcdn_source()()) as pilmoji:
-                        bbox = pilmoji.getsize(test_line, font=font)
-                        width = bbox[0]
+                    width = measure(test_line)
                     
                     if width <= max_width:
                         current_line = test_line
                     else:
                         if current_line:
                             lines.append(current_line)
+                            current_line = ""
+
+                        # 当前行已提交后 token 仍需单独适配：能放下就整词换行，
+                        # 放不下才逐字符拆，否则超长单词会整词越过右边距
+                        if measure(token) <= max_width:
                             current_line = token
                         else:
-                            # 单个 token 太长，按字符分割
                             for char in token:
                                 test_line = current_line + char
-                                with Pilmoji(temp_img, source=_get_bootcdn_source()()) as pilmoji:
-                                    bbox = pilmoji.getsize(test_line, font=font)
-                                    width = bbox[0]
+                                width = measure(test_line)
                                 
                                 if width <= max_width:
                                     current_line = test_line
@@ -468,6 +491,12 @@ class TextRenderer:
                 else:
                     if current_line:
                         lines.append(current_line)
+                        current_line = ""
+
+                    # 当前行已提交后 token 仍需单独适配：能放下就整词换行，
+                    # 放不下才逐字符拆，否则超长单词会整词越过右边距
+                    token_bbox = font.getbbox(token)
+                    if token_bbox[2] - token_bbox[0] <= max_width:
                         current_line = token
                     else:
                         for char in token:
@@ -788,18 +817,26 @@ class TextRenderer:
     def render_to_file(self, text: str, output_path: str) -> str:
         """渲染并保存为文件"""
         image = self.render(text)
-        
-        output_dir = os.path.dirname(output_path)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
-        
-        image.save(output_path, "PNG")
+        _save_png_atomic(image, output_path)
         return output_path
 
 
 # ============================================================================
 # 便捷函数
 # ============================================================================
+
+def _save_png_atomic(image: Image.Image, output_path: str) -> None:
+    """先写同目录临时文件再 os.replace：渲染中断时保留上一张完整图，不留半张 PNG。"""
+    output_dir = os.path.dirname(output_path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".png", dir=output_dir)
+    os.close(fd)
+    try:
+        image.save(tmp_path, "PNG")
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 def render_text_to_image(
     text: str,
@@ -840,7 +877,9 @@ def render_text_to_image(
     image = renderer.render(text)
     
     if output_path:
-        renderer.render_to_file(text, output_path)
+        # 保存第一次 render 的结果。render_to_file 会再 render 一遍，
+        # 调用方每条文本等于白算一次换行、测量和绘制。
+        _save_png_atomic(image, output_path)
         return image, output_path
     
     return image

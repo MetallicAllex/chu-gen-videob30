@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 
 from utils.Variables import REVERSE_LEVEL_LABELS, bgclips_path, audios_path
+from utils.PathUtils import is_artifact_valid
 # 素材判据与"缺素材"异常类型都取自标准路，两条路共用同一份（SegmentUtils 顶层不 import
 # Quadrants，所以这里在模块级导入不会成环）。响度对齐增益同理共用一份：以前 GPU 路自己
 # 算了一遍（info，夹在 ±9.5）并且对 main 干脆写死 0，两条路对同一段素材的音量不一致。
@@ -299,13 +300,13 @@ def render_info_segment(
     if no_overlay:
         print(f"[QuadRenderer] 信息片段 {clip_id}: 无底图，纯背景渲染")
     elif bg_page:
-        if full_image_path and os.path.exists(full_image_path):
+        if full_image_path and is_artifact_valid(full_image_path):
             overlay_image = _load_layer_or_missing(full_image_path, ctx.resolution)
             print(f"[QuadRenderer] 信息片段 {clip_id}: 使用默认底板图")
         else:
             print(f"[QuadRenderer] 信息片段 {clip_id}: 默认底板图不存在，跳过")
     else:  # 普通文本页
-        if full_image_path and os.path.exists(full_image_path):
+        if full_image_path and is_artifact_valid(full_image_path):
             overlay_image = _load_layer_or_missing(full_image_path, ctx.resolution)
             print(f"[QuadRenderer] 信息片段 {clip_id}: 使用含文字底板")
         else:

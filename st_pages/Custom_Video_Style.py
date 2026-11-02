@@ -159,11 +159,26 @@ if 'preset_style' not in st.session_state:
 sel_preset_style = st.session_state.preset_style
 
 def _list_available_themes():
-    """检测可用样式模板：内置 default/init + 用户放入 assets/themes/ 的分享样式文件"""
+    """检测可用样式模板：内置 default/init + 内部 themes 仍为 default/init 的分享样式。
+
+    文件名只是显示名；真正决定渲染分支的是 JSON 里的 themes。渲染器只认
+    default/custom_default/init/custom_init，列表里混入其他名字等于让人选一个必炸的模板。
+    """
     theme_dir = f"{root_path}/themes"
     if not os.path.isdir(theme_dir):
         return ["default", "init"]
-    return sorted(os.path.splitext(f)[0] for f in os.listdir(theme_dir) if f.endswith(".json"))
+    themes = []
+    for file_name in sorted(os.listdir(theme_dir)):
+        if not file_name.endswith(".json"):
+            continue
+        name = os.path.splitext(file_name)[0]
+        try:
+            data = load_config(os.path.join(theme_dir, file_name))
+        except Exception:
+            continue
+        if isinstance(data, dict) and data.get('themes') in ("default", "init"):
+            themes.append(name)
+    return themes or ["default", "init"]
 
 def _apply_preset_theme(template_name: str, customize: bool):
     """复制所选模板到存档；customize=True 时改 themes 为 custom_* 并进入自定义模式"""
@@ -226,7 +241,7 @@ with preset_col1:
         help="""
 default: 由 mai-gen 官方制作的默认模版\n
 init: 由哔哩哔哩 @init_ 制作的 PPT 模版\n
-其他选项: 检测到 assets/themes/ 下的分享样式文件
+其他选项: assets/themes/ 下内部 themes 为 default/init 的分享样式文件
         """ if not has_style else "❌ 当前已应用模板，无法更改（如需要，请点击「删除模板」后重新选择）",
         disabled=has_style
     )

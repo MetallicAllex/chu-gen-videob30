@@ -1,10 +1,14 @@
 import os
+import ast
 import re, subprocess
 import shutil, streamlit as st
 from decimal import ROUND_HALF_UP, Decimal
 from concurrent.futures import ThreadPoolExecutor
 from utils.PathUtils import APP_ROOT
 from utils.Variables import CHUNI_CHAIN_TYPES, CHUNI_COMBO_TYPES, LEVEL_LABELS, REVERSE_LEVEL_LABELS
+
+# 三服定数持久化字段。旧存档只有 levels:{CN,JP,INT}，读取统一走 record_levels。
+LEVEL_FIELDS = {"CN": "level_cn", "JP": "level_jp", "INT": "level_int"}
 
 def escape_markdown_text(text: str) -> str:
     # 更全面的转义，包括 Streamlit 可能需要的额外字符
@@ -197,6 +201,40 @@ def build_song_indexes(song_db, jp_song_db, intl_song_db):
     }
 
 
+def _legacy_levels_dict(value):
+    """旧 levels 可能被数据编辑器转成 Python repr 字符串，能还原就还原。"""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value.strip())
+        except (ValueError, SyntaxError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def record_levels(record: dict) -> dict:
+    """读三服定数：level_cn / level_jp / level_int 优先，旧 levels 字段兜底。"""
+    levels = {server: record.get(field) for server, field in LEVEL_FIELDS.items()}
+    legacy = _legacy_levels_dict(record.get("levels"))
+    for server in LEVEL_FIELDS:
+        if levels[server] is None:
+            levels[server] = legacy.get(server)
+    return levels
+
+
+def apply_record_levels(record: dict, levels: dict) -> None:
+    for server, field in LEVEL_FIELDS.items():
+        record[field] = levels.get(server)
+
+
+def migrate_record_levels(record: dict) -> None:
+    """把旧 levels 拆成三个字段；旧字符串形态也在这里恢复。"""
+    apply_record_levels(record, record_levels(record))
+    record.pop("levels", None)
+
+
 def lookup_song_fields(song_id, song_name, level_index, indexes):
     """按当前曲库算出 (artist, levels)。建档与存档回填共用这一份口径，两边不许各写一套匹配规则。"""
     artist = None
@@ -255,6 +293,7 @@ def _process_cn_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_so
             # 从曲库补曲师与三服定数（只用于补充信息，不影响rating）
             processed_song["artist"], processed_song["levels"] = lookup_song_fields(
                 processed_song["id"], processed_song["song_name"], processed_song["level_index"], indexes)
+            migrate_record_levels(processed_song)
 
             return processed_song
             
@@ -344,6 +383,7 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
                 print(f"错误：无法获取【{processed_song['song_name']}】的定数，rating设为0")
                 processed_song["rating"] = 0
 
+            migrate_record_levels(processed_song)
             return processed_song
             
         except Exception as e:

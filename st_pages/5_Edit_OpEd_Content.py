@@ -5,7 +5,7 @@ from datetime import datetime
 from utils.ImageUtils import render_all_images
 from utils.PageUtils import parse_oped_text_markers
 from utils.Variables import font_path, image_root_path
-from utils.PathUtils import read_global_config, save_config, load_config, get_data_paths, get_user_versions
+from utils.PathUtils import read_global_config, save_config, load_config, get_data_paths, get_user_versions, is_artifact_valid
 
 st.header("Step 4-2: 片头/片尾内容编辑")
 
@@ -515,15 +515,31 @@ if config:
                 - 片头/尾若以背景板展示，则下方不会显示片头/尾图像
                 """, icon="ℹ️")
         col1, col2 = st.columns(2)
+        main_items = config.get('main') or []
+        first_main = main_items[0] if main_items else {}
+        main_preview = (first_main.get('full_image') or '').strip()
+        main_fallback = (first_main.get('main_image') or '').strip()
+        if not main_fallback and first_main.get('clip_id'):
+            main_fallback = os.path.join(
+                current_paths['image_dir'], 'background', f"{first_main['clip_id']}.png"
+            )
         with col1:
-            if os.path.exists(f"{current_paths['image_dir']}/fullbg/Best_1.png"):
-                st.image(f"{current_paths['image_dir']}/fullbg/Best_1.png",  caption="Best #1 预览")
+            if is_artifact_valid(main_preview):
+                st.image(main_preview, caption="Best #1 预览")
+            elif is_artifact_valid(main_fallback):
+                st.warning("未找到带文字的 Best #1 图像，显示无文字版本", icon="⚠️")
+                st.image(main_fallback, caption="Best #1（无文字）预览")
             else:
-                st.warning("未找到 Best #1 图像，将显示 Best #1 无文字版本！", icon="⚠️")
-                st.image(f"{current_paths['image_dir']}/background/Best_1.png",  caption="Best #1（无文字）预览")
+                st.warning("未找到 Best #1 图像，请先生成成绩板底图", icon="⚠️")
         with col2:
-            if os.path.exists(f"{current_paths['image_dir']}/fullbg/intro_1.png"):
-                st.image(f"{current_paths['image_dir']}/fullbg/intro_1.png",  caption="片头/尾预览")
+            intro_preview = ""
+            for seg in (config.get('intro') or []) + (config.get('ending') or []):
+                candidate = (seg.get('full_image') or '').strip()
+                if is_artifact_valid(candidate):
+                    intro_preview = candidate
+                    break
+            if intro_preview:
+                st.image(intro_preview, caption="片头/尾预览")
             else:
                 st.warning("未找到片头/尾图像，您是否【作为背景板展示】或【未渲染图像】！", icon="⚠️")
     st.divider()
