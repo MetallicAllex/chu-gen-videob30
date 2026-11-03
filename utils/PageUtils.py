@@ -2,9 +2,10 @@ import os
 import ast
 import re, subprocess
 import shutil, streamlit as st
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from concurrent.futures import ThreadPoolExecutor
-from utils.PathUtils import APP_ROOT
+from utils.PathUtils import APP_ROOT, load_config, save_config
 from utils.Variables import CHUNI_CHAIN_TYPES, CHUNI_COMBO_TYPES, LEVEL_LABELS, REVERSE_LEVEL_LABELS
 
 # 三服定数持久化字段。旧存档只有 levels:{CN,JP,INT}，读取统一走 record_levels。
@@ -193,11 +194,20 @@ def assign_clip_ids(b50_data, best_or_new, clip_prefixes=None):
     return clip_ids
 
 def build_song_indexes(song_db, jp_song_db, intl_song_db):
-    """三份曲库的查表索引。国服按 id 对齐（成绩里的 id 与曲库同源），日服与国际服只有曲名可对齐。"""
+    """三份曲库的查表索引。国服按 id 对齐（成绩里的 id 与曲库同源），日服与国际服只有曲名可对齐。
+
+    CN_TITLE / INT_ID 是给跨服场景用的：成绩 id 只保证与**自己那一服**的库同源，
+    国际服编号撞上国服 id 时曲名对不上（backfill 以前就在这道门上整条跳过）。
+    跨服一律以曲名为准，INT_ID 只用于「这份存档来自哪一服」的收录差集推断。
+    """
+    cn_songs = song_db or []
+    intl_songs = intl_song_db or []
     return {
-        "CN": {str(s.get("id")): s for s in song_db or []},
+        "CN": {str(s.get("id")): s for s in cn_songs},
+        "CN_TITLE": {s.get("title"): s for s in cn_songs if s.get("title")},
         "JP": {s["meta"]["title"]: s for s in jp_song_db or [] if isinstance(s.get("meta"), dict)},
-        "INT": {s.get("title"): s for s in intl_song_db or []},
+        "INT": {s.get("title"): s for s in intl_songs},
+        "INT_ID": {str(s.get("id")): s for s in intl_songs if s.get("id") is not None},
     }
 
 
@@ -235,13 +245,101 @@ def migrate_record_levels(record: dict) -> None:
     record.pop("levels", None)
 
 
-def lookup_song_fields(song_id, song_name, level_index, indexes):
-    """按当前曲库算出 (artist, levels)。建档与存档回填共用这一份口径，两边不许各写一套匹配规则。"""
+SAVE_META_SCHEMA = 1
+# 建档入口决定区域：水鱼/落雪走国服，CHUNITHM-NET 导出走国际服。
+# 落雪（lxns）只服务国服（2026-11-03 用户确认），映射到 CN 没有歧义。
+SERVER_REGION = {"fish": "CN", "lxns": "CN", "intr": "INT"}
+
+
+def read_save_meta(meta_file):
+    """读存档元数据；文件不存在/损坏/形状不对都返回 None，由调用方决定怎么补。"""
+    if not meta_file or not os.path.exists(meta_file):
+        return None
+    try:
+        meta = load_config(meta_file, use_cache=False)
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def write_save_meta(meta_file, server, region, source="build"):
+    """写存档元数据。sidecar 与 b30_config.json 同目录，复制存档目录时会一起带走。"""
+    meta = {
+        "schema": SAVE_META_SCHEMA,
+        "server": server,
+        "region": region,
+        "region_source": source,
+        "created": datetime.now().isoformat(timespec="seconds"),
+    }
+    save_config(meta_file, meta)
+    return meta
+
+
+def infer_region(records, indexes):
+    """旧存档没有 save_meta 时，用 id 的收录差集推断区域。
+
+    三库共用同一套编号，CN 独有 / INT 独有的 id 只可能来自对应服；全落在交集就判不出，
+    返回 None（交给界面让用户选一次，别猜）。同一份存档同时命中两边 = 混合/手工存档，也不猜。
+    """
+    int_ids = set(indexes.get("INT_ID", {}))
+    cn_ids = set(indexes.get("CN", {}))
+    if not cn_ids or not int_ids:
+        return None
+    cn_only = cn_ids - int_ids
+    int_only = int_ids - cn_ids
+    votes = {"CN": 0, "INT": 0}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        rec_id = str(rec.get("id"))
+        if rec_id in cn_only:
+            votes["CN"] += 1
+        elif rec_id in int_only:
+            votes["INT"] += 1
+    if votes["CN"] and votes["INT"]:
+        return None
+    if votes["CN"]:
+        return "CN"
+    if votes["INT"]:
+        return "INT"
+    return None
+
+
+def ensure_save_meta(meta_file, records, indexes, server_hint=None):
+    """读存档元数据；缺就按入口或 id 差集推断一次并写回（写失败只在内存里用，不阻断）。"""
+    meta = read_save_meta(meta_file)
+    if meta and meta.get("region") in ("CN", "INT"):
+        return meta
+    region = SERVER_REGION.get(server_hint or "") or infer_region(records, indexes)
+    if region is None:
+        return meta
+    meta = {
+        "schema": SAVE_META_SCHEMA,
+        "server": server_hint,
+        "region": region,
+        "region_source": "inferred",
+        "created": datetime.now().isoformat(timespec="seconds"),
+    }
+    try:
+        save_config(meta_file, meta)
+    except OSError as exc:
+        print(f"提示：存档元数据写入失败（按推断值继续）：{exc}")
+    return meta
+
+
+def lookup_song_fields(song_id, song_name, level_index, indexes, *, cn_by_title=False):
+    """按当前曲库算出 (artist, levels)。建档与存档回填共用这一份口径，两边不许各写一套匹配规则。
+
+    cn_by_title=True 用于跨服回填：国际服成绩的 id 在国服库里不可信（另一套编号），
+    但曲名仍能对上国服库——此时按曲名补 artist/CN 定数，而不是整条跳过。
+    """
     artist = None
     # 标注成 dict：不写就被推成 dict[str, None]，后面每塞一个定数都报"值类型是 None"
     levels: dict = {"CN": None, "JP": None, "INT": None}
 
     cn_song = indexes["CN"].get(str(song_id))
+    if cn_song is None and cn_by_title:
+        cn_song = indexes.get("CN_TITLE", {}).get(song_name)
     if cn_song:
         artist = cn_song["artist"]
         for diff in cn_song.get("difficulties", []):
@@ -249,7 +347,9 @@ def lookup_song_fields(song_id, song_name, level_index, indexes):
                 level_value = diff["level_value"]
                 levels["CN"] = float(level_value) if isinstance(level_value, int) else level_value
                 break
-    else:
+    elif not cn_by_title:
+        # 跨服回填（cn_by_title）本来就允许国服库没有这首歌，跳过是正常结果，
+        # 逐条打印会把控制台刷满；整条记录最终是否跳过由调用方统一报告。
         print(f"提示：未找到［{song_name}］的国服（曲师，难度）信息")
 
     label = REVERSE_LEVEL_LABELS.get(level_index)
@@ -314,6 +414,9 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
     """处理国际服数据 - 优先使用国服定数，其次使用日服定数"""
     processed_data = []
     clip_ids = assign_clip_ids(b50_data, best_or_new, clip_prefixes)
+    # 三张表只建一次索引：原先每条成绩都要各扫一遍（存档 1500 条 × 曲库 1767 首），
+    # 这里只是把匹配换成字典查询，优先级（国服 → 日服 → 国际服）保持不变。
+    indexes = build_song_indexes(song_db, jp_song_db, intl_song_db)
     
     def process_intl_song(song, i, clip_id):
         try:
@@ -333,7 +436,7 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
             }
             
             # 1. 优先从国服数据库匹配
-            song_info = next((item for item in song_db if item.get("title") == processed_song["song_name"]), None)
+            song_info = indexes["CN_TITLE"].get(processed_song["song_name"])
             if song_info:
                 # 匹配曲师
                 processed_song["artist"] = song_info["artist"]
@@ -348,7 +451,7 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
 
             # 2. 如果国服匹配失败，尝试日服数据库
             if processed_song["artist"] is None or processed_song["levels"]["CN"] is None:
-                jp_song_info = next((item for item in jp_song_db if item["meta"]["title"] == processed_song["song_name"]), None)
+                jp_song_info = indexes["JP"].get(processed_song["song_name"])
                 if jp_song_info:
                     # 匹配曲师（日服曲师信息可能在meta中）
                     if processed_song["artist"] is None:
@@ -368,7 +471,7 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
 
             # 3. 查找国际服定数
             level_label = REVERSE_LEVEL_LABELS.get(processed_song["level_index"])
-            intl_song_info = next((item for item in intl_song_db if item["title"] == processed_song["song_name"]), None)
+            intl_song_info = indexes["INT"].get(processed_song["song_name"])
             if intl_song_info and level_label and level_label in intl_song_info.get("difficulty", {}):
                 try:
                     processed_song["levels"]["INT"] = float(intl_song_info["difficulty"][level_label])

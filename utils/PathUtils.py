@@ -44,6 +44,9 @@ def get_data_paths(username, timestamp=None):
     return {
         'raw_file': os.path.join(version_dir, "b30_raw.json"),
         'data_file': os.path.join(version_dir, "b30_config.json"),
+        # 存档元数据（来源/区域）。sidecar 而不是塞进 b30_config.json：后者是裸 list，
+        # 全仓按 list 消费；加头部字段会让 load_config_with_types 与所有 for rec in data 失效。
+        'meta_file': os.path.join(version_dir, "save_meta.json"),
         'config_yt': os.path.join(version_dir, "b30_config_youtube.json"),
         'config_bi': os.path.join(version_dir, "b30_config_bilibili.json"),
         'custom_style': os.path.join(version_dir, "customization.json"),

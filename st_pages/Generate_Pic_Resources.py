@@ -261,6 +261,31 @@ with st.container(border=True):
                         f"{field} {old!r} → {new!r}" for field, (old, new) in updates.items()))
                 for clip_id, song_id, reason in pool_skipped:
                     st.caption(f"{clip_id}（id={song_id}）跳过：{reason}")
+
+        # 存档区域：建档写、旧存档按曲目推断；判不出时让用户选一次，写回 sidecar 后不再询问。
+        meta = read_save_meta(current_paths['meta_file'])
+        region = (meta or {}).get('region')
+        if region in ('CN', 'INT'):
+            region_label = '国服' if region == 'CN' else '国际服'
+            source_label = {
+                'build': '建档记录',
+                'inferred': '旧存档按曲目推断',
+                'user': '手动指定',
+            }.get((meta or {}).get('region_source'), '来源未知')
+            st.caption(f"存档区域：{region_label}（{source_label}）")
+        else:
+            st.warning("这份存档看不出是国服还是国际服（歌曲 id 都落在三服交集里）。选一次会记到"
+                       "存档目录的 save_meta.json，之后不再询问。", icon="🌍")
+            pick_col, btn_col = st.columns([2, 1], vertical_alignment="center")
+            with pick_col:
+                picked = st.radio("存档区域", ["国服", "国际服"], horizontal=True,
+                                  label_visibility="collapsed", key=f"save_region_pick_{save_id}")
+            with btn_col:
+                if st.button("记录区域", icon="💾", width='stretch'):
+                    write_save_meta(current_paths['meta_file'], server=(meta or {}).get('server'),
+                                    region={'国服': 'CN', '国际服': 'INT'}[picked], source='user')
+                    st.toast(f"已记录存档区域：{picked}", icon="✅")
+                    st.rerun()
     else:
         st.warning("未索引到存档，请在下方「更换 Best50 存档」中选择一份，或回到存档管理页重新获取！", icon="⚠️")
 

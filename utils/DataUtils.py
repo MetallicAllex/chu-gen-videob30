@@ -7,7 +7,8 @@ from utils.Variables import (DIFFICULTY_MAP, music_info_path, jp_music_info_path
                              jp_music_info_url, intl_music_info_url,
                              MUSIC_DATA_USER_AGENT, music_status_dir)
 from utils.PageUtils import (_process_cn_data, _process_intl_data, build_song_indexes, lookup_song_fields,
-                             LEVEL_FIELDS, record_levels, migrate_record_levels)
+                             LEVEL_FIELDS, record_levels, migrate_record_levels,
+                             SERVER_REGION, write_save_meta, ensure_save_meta)
 from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_DATA_TYPE
 from utils.Variables import (fish_music_info_path,
                              fish_latest_version_path, cn_song_meta_path)
@@ -165,6 +166,15 @@ def _process_b50_data(raw_data, source_type: str, b50_raw_file, b50_data_file, b
 
     print(f"=== 处理完成，成功处理 {len(processed_data)} 首曲目 ===\n若需要添加 PickUp 曲目，请按照 b50_config.json 中的格式编写")
     save_config(b50_data_file, processed_data)
+    # 存档元数据随存档目录走：建档入口决定区域（水鱼/落雪=国服，CHUNITHM-NET 导出=国际服），
+    # 落盘后下游（回填/出图/rating）不再靠 id 或 raw schema 猜。写失败只提示，不挡建档。
+    try:
+        write_save_meta(os.path.join(os.path.dirname(b50_data_file), "save_meta.json"),
+                        server=source_type,
+                        region=SERVER_REGION.get(source_type, "CN"),
+                        source="build")
+    except OSError as exc:
+        print(f"提示：存档元数据写入失败（不影响建档）：{exc}")
     return processed_data
     
 def gen_video_config(b50_data, images_path, videoes_path, output_file,
@@ -515,22 +525,34 @@ def backfill_pool_fields(b50_data_file, apply_changes=False):
         _load_optional_json(intl_music_info_path) or [],
     )
 
+    # 老存档没有 save_meta.json 时按 id 差集补一次；判不出就留空，界面再让用户选
+    meta_file = os.path.join(os.path.dirname(b50_data_file), "save_meta.json")
+    try:
+        ensure_save_meta(meta_file, records, indexes)
+    except OSError as exc:
+        print(f"提示：存档元数据写入失败（不影响回填）：{exc}")
+
     changes, skipped = [], []
     for i, rec in enumerate(records):
         if not isinstance(rec, dict):
             continue
         clip_id = rec.get('clip_id', f"第 {i + 1} 条")
         cn_song = indexes['CN'].get(str(rec.get('id')))
-        if not cn_song:
-            skipped.append((clip_id, rec.get('id'), "曲库里查不到这个 id"))
-            continue
-        # 国际服存档的 id 来自另一套编号，撞上国服 id 也不会是同一首歌，标题对不上就不动它
-        if _compact_text(cn_song.get('title')) != _compact_text(rec.get('song_name')):
-            skipped.append((clip_id, rec.get('id'), f"该 id 在曲库里是《{cn_song.get('title')}》，与存档曲名不符"))
-            continue
+        # 国际服存档的 id 来自另一套编号，撞上国服 id 也不会是同一首歌：
+        # 标题对不上就弃用这个 id，但曲名还能对上国服/日服/国际服库时照常补（cn_by_title）。
+        cn_id_usable = cn_song is not None and (
+            _compact_text(cn_song.get('title')) == _compact_text(rec.get('song_name')))
+        conflict = cn_song is not None and not cn_id_usable
 
-        artist, levels = lookup_song_fields(rec.get('id'), rec.get('song_name'),
-                                            rec.get('level_index'), indexes)
+        artist, levels = lookup_song_fields(
+            rec.get('id') if cn_id_usable else None,
+            rec.get('song_name'), rec.get('level_index'), indexes, cn_by_title=True)
+
+        if artist is None and all(value is None for value in levels.values()):
+            reason = (f"该 id 在曲库里是《{cn_song.get('title')}》，与存档曲名不符（曲名也没对上三服曲库）"
+                      if conflict else "三服曲库里都查不到这个 id / 曲名")
+            skipped.append((clip_id, rec.get('id'), reason))
+            continue
         updates = {}
         if not rec.get('artist') and artist:
             updates['artist'] = artist

@@ -3,7 +3,7 @@
 > 仓库内只维护这一份全量更新日志（相对上一个发布版本的全部改动），含实测数字、成因、完整已知问题、发行包注意事项。
 > 面向自己人与反馈排查；对外简略说明在出包时另行摘录，仓库内不留第二份。
 
-## [未发布] - 2026-10-21
+## [1.2.6b] - 2026-11-04 出包
 
 ### 三服定数拆成三个字段
 
@@ -14,7 +14,33 @@
   和 `backfill_pool_fields` 都会做形态迁移。
 - 同时修掉 Issue #4 的 4-1 崩溃：旧 `levels` 字典列进入 `st.data_editor` 会被整列转成字符串，
   现在编辑器只面对三个标量列。本地 outside_test 存档实测：编辑器 Arrow-incompatible 列 0 个，
-  回填 23 条拆列、27 条外服 id 仍跳过；`tests/_levels_split_check.py` 全过。
+  回填 50 条全部解析、0 跳过（三库合并回填见下一节）；`tests/_levels_split_check.py` 全过。
+
+### 存档区域元数据与三库合并回填
+
+- 新存档在 `b30_datas/<user>/<save_id>/save_meta.json` 落 `{schema, server, region, region_source, created}`：
+  `server` 取建档来源（`fish` / `lxns` / `intr`），`region` 为 `CN` / `INT`，`region_source` 记 `build`
+  （建档写）或 `inferred`（旧存档首次回填时按 id 差集补写）。元数据跟着存档目录走，复制 / 打包 / 换机
+  都不会丢；只拷 `b30_config.json` 单文件的场景没有元数据，回填时按 id 差集推断，判不出就不写、留给界面。
+  不塞进 `b30_config.json` 的原因：那份文件是裸 list，`load_config_with_types` 和全仓 `for rec in data`
+  都按 list 消费，加头部字段会连锁失效。
+- 旧存档补写只发生一次：`ensure_save_meta` 见已有 `region` 直接返回；全在交集（CN / INT 都收录）或三库
+  都没有时不猜、不写文件。`region_source` 区分 `build` / `inferred`，排查时能看出这条是建档写的还是补的。
+- `build_song_indexes` 从「CN id + JP / INT 曲名」扩成 CN / CN_TITLE / JP / INT / INT_ID 五张表；
+  `lookup_song_fields` 增加 `cn_by_title` 回退：跨服成绩的 id 在国服库查不到时改按曲名补 artist 与 CN 定数，
+  不再整条跳过。`backfill_pool_fields` 只有三服曲库都查不到（或 id / 曲名冲突且曲名也对不上）才跳过，
+  跳过原因分开写，跨服正常缺收录不再刷「未找到国服信息」。
+- 实测（`b30_datas/outside_test/20260909_205411`，50 条）：改造前回填 23 条、跳过 27 条；改造后 50 条
+  全部解析、0 跳过，三列覆盖 CN 22 / JP 50 / INT 30（覆盖差异来自曲库收录范围，不是匹配失败）；
+  `save_meta.json` 推断为 `INT`（`region_source: inferred`）。`tests/test_region_meta.py` 与
+  `tests/_levels_split_check.py` 全过。
+- 落雪（lxns）只服务国服（2026-11-03 用户确认），`SERVER_REGION` 里归 `CN` 没有歧义；需要推断的只剩
+  没有元数据的旧存档。判不出时在底图页回填面板手动选一次，写入 `save_meta.json` 并记 `region_source: user`，
+  之后不再询问。
+- `_process_intl_data` 改用同一张三库索引：`build_song_indexes` 在建档时只建一次，逐条查
+  `CN_TITLE` / `JP` / `INT`，不再为每条成绩把三张表各线性扫一遍（存档 1500 条 × 曲库 1767 首）；
+  匹配优先级仍是 国服 → 日服 → 国际服。新增 `tests/test_intl_lookup.py` 覆盖四类输入：
+  三库都有、只有日服、只有国际服、三库都没有（记录保留、rating 记 0）。
 
 ## [1.2.6a] - 2026-10-02 出包，工作树截至 2026-10-18
 
