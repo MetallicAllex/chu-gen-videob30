@@ -65,15 +65,20 @@ DEFAULT_TEXT_MAX_WIDTH = 2000
 
 # 默认模板右下「定数变动」面板。原底图把 CN/Mate 两枚 logo 烘死在像素里，
 # 三服对比要用 content_base_versions.png（同尺寸，logo 区已清空）再按所选版本重画。
-VERSION_COLUMN_LAYOUT_VERSION = 1  # 面板布局改动时 +1，让旧底图失效
+VERSION_COLUMN_LAYOUT_VERSION = 2  # 面板布局改动时 +1，让旧底图失效
 VERSION_COLUMN_MANIFEST_NAME = "versions_manifest.json"
 VERSION_PANEL_IMAGE_NAME = "content_base_versions.png"
 VERSION_PANEL_LEFT = 1452
 VERSION_PANEL_RIGHT = 1873
-VERSION_PANEL_LOGO_TOP = 884
+# 原底图把 logo 按列宽缩放后垂直居中在 y≈944：宽约 186，高随宽高比（94/82）。
+# 固定高度会让 logo 只有原设计的一半大，所以这里也按列宽反推高度。
+VERSION_PANEL_LOGO_CENTER_Y = 944
+VERSION_PANEL_LOGO_MAX_HEIGHT = 104
 VERSION_PANEL_VALUE_Y = 1018
 VERSION_LOGO_DIR = f"{image_root_path}/Base/content/versions"
 VERSION_LOGO_FILES = {"CN": "cn.png", "JP": "jp.png", "INT": "int.png"}
+# 面板角标文案：logo 只画图案，哪一服靠这行小字点明
+SERVER_TAGS = {"CN": "国服", "JP": "日服", "INT": "国际服"}
 
 # 文字/整图渲染指纹：目录存在、文件非空都不能证明图是最新的。
 # 改文本、改样式、换底图都要让对应产物失效；版本号用于以后合并逻辑变化时整体作废。
@@ -136,10 +141,16 @@ def LevelLoader(level: float, level_next: float = 0.0):
 
 
 def _version_column_layout(count: int):
-    """把「定数变动」面板宽度按版本数量等分，返回每列中心与列宽。"""
+    """把「定数变动」面板按版本数量分列，返回每列中心与列宽。
+
+    两列沿用原底图烤死的 logo 位置（1472-1658 / 1665-1848，中心 1565 / 1756），
+    数字也对齐这两个中心；三列才等分面板宽度。
+    """
     count = max(1, min(count, 3))
     width = VERSION_PANEL_RIGHT - VERSION_PANEL_LEFT
     column_width = width / count
+    if count == 2:
+        return [1565, 1756], column_width
     centers = [int(VERSION_PANEL_LEFT + column_width * (i + 0.5)) for i in range(count)]
     return centers, column_width
 
@@ -179,24 +190,52 @@ def save_version_selection(image_dir: str, versions) -> None:
 
 
 def draw_version_columns(image: Image.Image, versions: list, levels: dict,
-                         current_color, next_color) -> Image.Image:
-    """在面板里等宽画各版本的 logo 与定数。
+                         current_color, next_color,
+                         value_font_size: int = 45) -> Image.Image:
+    """在面板里按列画各版本的 logo、定数与服务器角标。
 
-    第一列是基准版本，其余列与基准比较；缺定数写 --，缺 logo 退回文本缩写。
-    不画 CN/INT/JP 字符标记——logo 本身已经表达版本。
+    第一列是基准版本，只写数值不画箭头（与原面板一致）；其余列与基准比较，
+    写 ↑/↓/→。缺定数写 --，缺 logo 退回文本缩写。定数默认用模板 level 字号；
+    三列时列宽只有 140，压到 42 以免 "15.0→" 顶到面板边。箭头与数字同字号、
+    单独绘制并做墨迹对齐：字体里 ↑/↓ 的左侧留白远大于 →，混在一个字符串里
+    会撑出空隙。
     """
     versions = [v for v in (versions or []) if v][:3]
     if not versions:
         return image
     centers, column_width = _version_column_layout(len(versions))
     base_level = positive_constant(levels.get(versions[0]))
-    logo_height = 52 if len(versions) >= 3 else 62
-    max_logo_width = max(1, int(column_width - 18))
-    value_size = {1: 45, 2: 42, 3: 36}.get(len(versions), 34)
+    # 全等合并：所选服务器的定数完全相同时只画一个数字（放面板中间），
+    # 避免三列重复写同一个值；部分相等仍按列显示。
+    value_list = [positive_constant(levels.get(key)) for key in versions]
+    merged = (len(versions) >= 2
+              and all(value is not None for value in value_list)
+              and len({round(value, 1) for value in value_list if value is not None}) == 1)
+    # 按列宽缩放、垂直居中：与旧底图里烘死的 logo 同大（两列约 186 宽）。
+    logo_target_width = max(1, int(column_width - 24))
+    logo_max_height = VERSION_PANEL_LOGO_MAX_HEIGHT
+    # 定数字号：旧底图/旧两栏一律是模板 level 字号（45）；三列时列宽只有 140，
+    # "15.0→" 用 45 会顶到面板边，压到 42 才能留出间距。
+    value_size = max(20, int(value_font_size or 45))
+    if len(versions) >= 3:
+        value_size = min(value_size, 42)
+    # 箭头与数字同字号：旧设计里 "14.1→" 的箭头就是 45px 的 →（墨迹 43×21），
+    # 不是上标式小箭头；缩到 0.58 会让箭头明显比数字小一圈。
+    arrow_size = value_size
+    draw = ImageDraw.Draw(image)
+    value_font = ImageFont.truetype(title_font_path, value_size)
+    arrow_font = ImageFont.truetype(title_font_path, arrow_size)
+    # 三列时 logo 本身只有两列的三分之二宽，角标也要收小，免得盖住半个 logo
+    tag_size = 15 if len(versions) <= 2 else 12
+    tag_font = ImageFont.truetype(title_font_path, tag_size)
 
+    columns = []
     for index, key in enumerate(versions):
         center_x = centers[index]
         logo_drawn = False
+        logo_width_used = 0
+        logo_height_used = 0
+        logo_top_used = VERSION_PANEL_LOGO_CENTER_Y
         logo_name = VERSION_LOGO_FILES.get(str(key))
         if logo_name:
             logo_path = os.path.join(VERSION_LOGO_DIR, logo_name)
@@ -204,34 +243,113 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
                 try:
                     with Image.open(logo_path) as source:
                         logo = source.convert("RGBA")
-                    scale = min(logo_height / logo.height, max_logo_width / logo.width)
+                    scale = min(logo_target_width / logo.width,
+                                logo_max_height / logo.height)
                     logo = logo.resize(
                         (max(1, round(logo.width * scale)), max(1, round(logo.height * scale))),
                         Resampling.LANCZOS,
                     )
-                    image.alpha_composite(logo, (center_x - logo.width // 2, VERSION_PANEL_LOGO_TOP))
+                    logo_top = VERSION_PANEL_LOGO_CENTER_Y - logo.height // 2
+                    image.alpha_composite(logo, (center_x - logo.width // 2, logo_top))
                     logo_drawn = True
+                    logo_width_used = logo.width
+                    logo_height_used = logo.height
+                    logo_top_used = logo_top
                 except Exception:
                     logo_drawn = False
         if not logo_drawn:
-            TextDraw(image, str(key), (center_x, VERSION_PANEL_LOGO_TOP + logo_height // 2),
+            TextDraw(image, str(key), (center_x, VERSION_PANEL_LOGO_CENTER_Y),
                      font_path=title_font_path, font_size=24,
                      font_color=current_color, h_align="center")
 
+        # 角标统一画在循环外，保证所有服务器标签落在同一条横线上
+        columns.append({
+            "key": str(key),
+            "center_x": center_x,
+            "drawn": logo_drawn,
+            "width": logo_width_used,
+            "height": logo_height_used,
+            "top": logo_top_used,
+        })
+
         level_value = positive_constant(levels.get(key))
         if level_value is None:
-            text = "--"
+            value_text, arrow = "--", ""
         elif index == 0:
-            text = f"{level_value:.1f}→"
+            # 旧设计里基准列只写数值（"14.1"），箭头只标在对比列上
+            value_text, arrow = f"{level_value:.1f}", ""
         elif base_level is None:
-            text = f"{level_value:.1f}"
+            value_text, arrow = f"{level_value:.1f}", ""
         else:
+            value_text = f"{level_value:.1f}"
             arrow = "↑" if level_value > base_level else "↓" if level_value < base_level else "→"
-            text = f"{level_value:.1f}{arrow}"
-        TextDraw(image, text, (center_x, VERSION_PANEL_VALUE_Y),
-                 font_path=title_font_path, font_size=value_size,
-                 font_color=next_color if index else current_color,
-                 h_align="center", max_width=int(column_width) - 6)
+
+        # 用墨迹边界而不是字体步进量来排数字和箭头：字体给 "0" 的右侧留白
+        # 会让箭头看起来悬空，而 ↑/↓ 本身的左右留白更大。
+        if not merged:
+            value_mask = value_font.getmask(value_text).getbbox()
+            value_ink_right = value_mask[2] if value_mask else int(value_font.getlength(value_text))
+            arrow_ink = arrow_shift = 0
+            if arrow:
+                mask_box = arrow_font.getmask(arrow).getbbox()
+                if mask_box:
+                    arrow_shift = mask_box[0]
+                    arrow_ink = mask_box[2] - mask_box[0]
+                else:
+                    arrow_ink = arrow_font.getlength(arrow)
+            gap = 3
+            total_w = value_ink_right + (gap + arrow_ink if arrow else 0)
+            start_x = center_x - total_w / 2
+            color = next_color if index else current_color
+            TextDraw(image, value_text, (int(start_x), VERSION_PANEL_VALUE_Y),
+                     font_path=title_font_path, font_size=value_size,
+                     font_color=color, h_align="left", max_width=int(column_width) - 6)
+            if arrow:
+                # 单独绘制时 TextDraw 按各自的 ink 高度垂直居中，↑/↓ 会比数字低半截；
+                # 用 bbox 顶部偏移把箭头 ink 中心对到数字 ink 中心（与原字符串渲染一致）。
+                value_bbox = value_font.getbbox(value_text)
+                arrow_bbox = arrow_font.getbbox(arrow)
+                arrow_y = VERSION_PANEL_VALUE_Y + value_bbox[1] - arrow_bbox[1]
+                TextDraw(image, arrow,
+                         (int(start_x + value_ink_right + gap - arrow_shift), arrow_y),
+                         font_path=title_font_path, font_size=arrow_size,
+                         font_color=color, h_align="left", max_width=int(column_width) - 6)
+
+    # 角标统一贴在同一条横线上：按最高的 logo 底边算，避免 logo 高度不同导致高低不齐
+    pad_x, pad_y = (6, 2) if len(versions) <= 2 else (5, 2)
+    overlap = -1 if len(versions) <= 2 else -2
+    drawn_bottoms = [c["top"] + c["height"] for c in columns if c["drawn"]]
+    badge_line_bottom = max(drawn_bottoms, default=VERSION_PANEL_LOGO_CENTER_Y) + overlap
+    for column in columns:
+        tag_key = str(column["key"])
+        tag_text = SERVER_TAGS.get(tag_key, tag_key)
+        tag_box = draw.textbbox((0, 0), tag_text, font=tag_font)
+        tag_w, tag_h = tag_box[2] - tag_box[0], tag_box[3] - tag_box[1]
+        badge_w, badge_h = tag_w + pad_x * 2, tag_h + pad_y * 2
+        if column["drawn"]:
+            badge_x = column["center_x"] + column["width"] // 2 - badge_w
+        else:
+            badge_x = column["center_x"] - badge_w // 2
+        badge_y = badge_line_bottom - badge_h
+        draw.rounded_rectangle(
+            (badge_x, badge_y, badge_x + badge_w, badge_y + badge_h),
+            radius=badge_h // 2, fill=(0, 0, 0, 150))
+        draw.text((badge_x + pad_x - tag_box[0], badge_y + pad_y - tag_box[1]),
+                  tag_text, font=tag_font, fill=(255, 255, 255, 235))
+
+    if merged:
+        # 一条加粗的分隔线把 logo 行和数字行分开，示意这个数字是上面所有服务器共用的
+        center_x = (VERSION_PANEL_LEFT + VERSION_PANEL_RIGHT) // 2
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        # 与标题横幅同宽：横幅白边在 1446 / 1876，线两端各内缩 2/4px，不再额外留 18px
+        ImageDraw.Draw(overlay).line(
+            (1448, 1002, 1872, 1002),
+            fill=(50, 50, 50, 110), width=3)
+        image.alpha_composite(overlay)
+        # 合并时数字下移一点：分隔线和数字之间留出呼吸空间，否则紧贴在一起
+        TextDraw(image, f"{value_list[0]:.1f}", (center_x, VERSION_PANEL_VALUE_Y + 8),
+                 font_path=title_font_path, font_size=45,
+                 font_color=current_color, h_align="center")
 
     return image
 
@@ -554,6 +672,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                     temp_img = draw_version_columns(
                         temp_img, version_columns, version_levels or {},
                         color['level']['current'], color['level']['next'],
+                        value_font_size=size.get('level', 45),
                     )
                 else:
                     # cur_pos = (1562, 1018)

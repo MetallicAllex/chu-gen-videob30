@@ -32,6 +32,19 @@ if "oauth_callback_msg" in st.session_state:
     else:
         st.error(msg_text, icon="❌")
 
+@st.cache_data(show_spinner=False)
+def _load_intr_export_script() -> str:
+    """读取随包发布的 CHUNITHM-NET 导出脚本，供「我玩外服」直接复制。"""
+    script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "external_scripts", "load_chunithm_score.js")
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as exc:
+        print(f"提示：导出脚本读取失败（不影响其它功能）：{exc}")
+        return ""
+
+
 # ========== 国服查分器参数表 ==========
 # 两家均已切到官方 OAuth 接口：取数只需要令牌，不需要用户名 / 好友码，
 # 因此下面「我玩国服」的授权区按这张表渲染，两种查分器共用同一套控件。
@@ -867,6 +880,21 @@ if st.session_state.get('config_saved', False):
                     - 在数据预览内，检查您的前几条数据是否正常
                     - 选择解析类型，点击 “解析并创建存档” 以开始解析
                     """, icon="ℹ️")
+            # 还没有存档的人先得有个导出脚本：脚本随包发在 external_scripts/，
+            # 这里读出来直接贴成可复制的代码块，省得再去仓库里翻文件
+            intr_export_script = _load_intr_export_script()
+            if intr_export_script and st.toggle("我还没有数据文件", key="intr_need_export",
+                                                help="在 CHUNITHM-NET 页面的控制台里运行脚本，导出成绩存档"):
+                st.markdown(
+                    "1. 用浏览器登录 [CHUNITHM-NET](https://chunithm-net-eng.com/)，按 `F12` 打开开发者工具，"
+                    "切到 **Console / 控制台**。\n"
+                    "2. 复制下面代码块右上角的全部内容，粘贴进控制台并回车"
+                    "（首次粘贴如果被浏览器拦下，按提示输入 `allow pasting`）。\n"
+                    "3. 左上角弹出面板后点「下载 .json」，把文件拖回上面的上传框。\n\n"
+                    "脚本只读取当前登录账号的「旧曲 Best30」与「新曲 New20」两个页面，"
+                    "定数和单曲 Rating 由本工具本地计算。"
+                )
+                st.code(intr_export_script, language="javascript")
             uploaded_file = st.file_uploader(
                 "选择数据文件", 
                 type=["json"], 

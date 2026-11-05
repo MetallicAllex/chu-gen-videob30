@@ -420,7 +420,10 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
     
     def process_intl_song(song, i, clip_id):
         try:
-            # 基础信息提取
+            # 第三方导出的存档不一定带 fullChainLv，缺了拿 None 当下标会 TypeError，整条成绩被静默丢掉
+            chain_lv = song.get(fields["fchain"])
+            chain_type = CHUNI_CHAIN_TYPES[chain_lv] if isinstance(chain_lv, int) and not isinstance(chain_lv, bool) \
+                and 0 <= chain_lv < len(CHUNI_CHAIN_TYPES) else None
             processed_song = {
                 "clip_id": clip_id,
                 "id": song[fields["id"]],
@@ -431,7 +434,7 @@ def _process_intl_data(b50_data, fields, best_or_new, song_db, jp_song_db, intl_
                 "levels": {"CN": None, "JP": None, "INT": None},  # 三服定数
                 "level_index": LEVEL_LABELS[song[fields["level_index"]].upper()],
                 "full_combo": CHUNI_COMBO_TYPES[2] if song.get("isAllJustice") else (CHUNI_COMBO_TYPES[1] if song.get("isFullCombo") else None),
-                "full_chain": CHUNI_CHAIN_TYPES[song.get(fields["fchain"], None)],   
+                "full_chain": chain_type,
                 "play_count": None
             }
             

@@ -549,7 +549,8 @@ def backfill_pool_fields(b50_data_file, apply_changes=False):
             rec.get('song_name'), rec.get('level_index'), indexes, cn_by_title=True)
 
         if artist is None and all(value is None for value in levels.values()):
-            reason = (f"该 id 在曲库里是《{cn_song.get('title')}》，与存档曲名不符（曲名也没对上三服曲库）"
+            cn_title = cn_song.get('title') if cn_song is not None else ''
+            reason = (f"该 id 在曲库里是《{cn_title}》，与存档曲名不符（曲名也没对上三服曲库）"
                       if conflict else "三服曲库里都查不到这个 id / 曲名")
             skipped.append((clip_id, rec.get('id'), reason))
             continue

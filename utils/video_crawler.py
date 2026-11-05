@@ -1135,7 +1135,7 @@ class BilibiliQrCodeLoginSession:
             qr = qrcode.QRCode()
             qr.add_data(data["url"])
             buffer = io.BytesIO()
-            qr.make_image().save(buffer, format="PNG")
+            qr.make_image().save(buffer, kind="PNG")
             buffer.seek(0)
             self._generated = True
             return Image.open(buffer)

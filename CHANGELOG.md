@@ -3,6 +3,30 @@
 > 仓库内只维护这一份全量更新日志（相对上一个发布版本的全部改动），含实测数字、成因、完整已知问题、发行包注意事项。
 > 面向自己人与反馈排查；对外简略说明在出包时另行摘录，仓库内不留第二份。
 
+## [未发布] - 2026-11-05
+
+### 国际服（CHUNITHM-NET）导出脚本
+
+- 新增 `external_scripts/load_chunithm_score.js`：登录 CHUNITHM-NET 后在控制台运行，抓
+  「旧曲 Best30」（`/home/playerData/ratingDetailBest/`）与「新曲 New20」（`/home/playerData/ratingDetailRecent/`），
+  输出 `{source, host, exportedAt, best, new}`，每条 `{idx, title, difficulty, score, isAllJustice, isFullCombo, fullChainLv}`
+  —— 正是 `_process_intl_data` 吃的 `intr` 契约，下载的 json 直接拖进「我玩外服」即可建档，中间不做任何转换。
+- 与上游 issue #121 那份脚本的取舍：不请求第三方定数表（`chuni_fusion_data.json`）、不预计算单曲 rating、
+  个别谱面查不到定数时不整体 throw。定数按曲名查三服曲库、rating 由 `calculate_rating` 本地算，
+  口径与国服 / 落雪存档保持一致；导出端只负责把页面上的成绩原样搬下来。
+- 「我玩外服」折叠栏加「我还没有数据文件」开关：勾选后给出脚本与三步指引（控制台粘贴 → 面板上「下载 .json」→ 上传），
+  脚本从 `external_scripts/` 读取，随包发布，不依赖 GitHub Pages 之类的托管。
+- 修 `_process_intl_data`：`fullChainLv` 缺失或越界时不再拿 `None` 去索引 `CHUNI_CHAIN_TYPES`
+  （TypeError 被 `except` 吞掉，整条成绩连 artist / rating 一起静默消失）；缺字段按「未达成」处理。
+  第三方导出工具常常不写这个字段，此前只有自带的完整导出能进档。`tests/test_intl_lookup.py` 补第 5 组用例。
+- `README.md` 数据源条目补上脚本位置。
+- 实测（2026-11-05）：拿一份第三方导出的国际服存档（50 条：Best 30 + New 20，玩家 rating 15.59）跑
+  `_process_b50_data(..., "intr", "全都要")`，50 条全部解析、rating 记 0 的 0 条、`save_meta.json` 落
+  `server=intr / region=INT / region_source=build`；按 (30×Best + 20×New)/50 算出的总分为 15.5754，
+  与存档自带 15.59 基本吻合（差值来自我们优先用国服定数、与导出方国际服定数的版本差）。
+  `tests/test_intl_lookup.py` 5 组全 PASS；`node --check external_scripts/load_chunithm_score.js` 通过。
+  脚本本身依赖 CHUNITHM-NET 页面结构，尚无真机核验（需登录账号），页面改版时改 `PAGES` / `parseRows`。
+
 ## [1.2.6b] - 2026-11-04 出包
 
 ### 三服定数拆成三个字段

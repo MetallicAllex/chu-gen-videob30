@@ -267,11 +267,12 @@ with st.container(border=True):
         region = (meta or {}).get('region')
         if region in ('CN', 'INT'):
             region_label = '国服' if region == 'CN' else '国际服'
+            region_source = (meta or {}).get('region_source')
             source_label = {
                 'build': '建档记录',
                 'inferred': '旧存档按曲目推断',
                 'user': '手动指定',
-            }.get((meta or {}).get('region_source'), '来源未知')
+            }.get(region_source if isinstance(region_source, str) else '', '来源未知')
             st.caption(f"存档区域：{region_label}（{source_label}）")
         else:
             st.warning("这份存档看不出是国服还是国际服（歌曲 id 都落在三服交集里）。选一次会记到"

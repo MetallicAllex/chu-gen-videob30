@@ -486,8 +486,9 @@ class _IPv6CallbackServer(ThreadingHTTPServer):
 def _port_holder_hint():
     """端口绑不上时判断是谁在听：能按我们的特征回 204 的，就是另一个生成器实例"""
     try:
+        # 空串 = 显式不走代理（typeshed 的 proxies 只接受 str，None 同样能禁用但不合类型）
         r = requests.get(f"http://127.0.0.1:{OAUTH_CALLBACK_PORT}/favicon.ico",
-                         timeout=1, proxies={"http": None, "https": None})
+                         timeout=1, proxies={"http": "", "https": ""})
         if r.status_code == 204:
             return "该端口正被另一个生成器实例监听"
     except Exception:

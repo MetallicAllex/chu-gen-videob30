@@ -39,7 +39,7 @@ Auto search and generate your best 30 videoes of CHUNITHM
 
 - [x] [落雪查分器](https://maimai.lxns.net/)：同样走 OAuth 授权（scope `read_player`），不再需要提供好友码
 
-- [x] [CHUNITHM-NET](https://lng-tgk-aime-gw.am-all.net)：国际服没有可用的查分器，需要在 CHUNITHM-NET 网页端用 JavaScript 控制台导出成绩存档（.json），再到【获取 / 管理存档】页「我玩外服」折叠栏上传建档
+- [x] [CHUNITHM-NET](https://lng-tgk-aime-gw.am-all.net)：国际服没有可用的查分器，需要在 CHUNITHM-NET 网页端用 JavaScript 控制台导出成绩存档（.json），再到【获取 / 管理存档】页「我玩外服」折叠栏上传建档。导出脚本随包发布在 `external_scripts/load_chunithm_score.js`，也可以在「我玩外服」里勾选「我还没有数据文件」直接复制
 
 - [ ] [神秘私人服务器？](#)：私人服务器建议使用存档进行存档建立，但没有可以使用的样本，因此目前无法做适配支持
 
