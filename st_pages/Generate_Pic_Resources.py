@@ -10,7 +10,8 @@ from utils.DataUtils import load_config_with_types, _load_optional_json, backfil
 from utils.ImageUtils import (generate_single_image, version_selection_changed,
                               save_version_selection, positive_constant)
 
-def st_generate_b30_images(placeholder, save_paths, force_regen=False, version_columns=None):
+def st_generate_b30_images(placeholder, save_paths, force_regen=False, version_columns=None,
+                           merge_equal=True, badge_delta=False):
     b50_data = load_config(save_paths['data_file'])
     image_path = f"{save_paths['image_dir']}/background"
     
@@ -26,9 +27,9 @@ def st_generate_b30_images(placeholder, save_paths, force_regen=False, version_c
             _load_optional_json(intl_music_info_path) or [],
         )
 
-    # 版本组合变了就忽略旧底图；否则切完版本点生成会继续用旧图
+    # 版本组合/显示选项变了就忽略旧底图；否则切完版本点生成会继续用旧图
     force_regen = force_regen or version_selection_changed(
-        save_paths['image_dir'], version_columns)
+        save_paths['image_dir'], version_columns, merge_equal, badge_delta)
 
     def check_image_exists(record_detail):
         """检查图片是否已存在（强制重生成时一律视为不存在）"""
@@ -68,6 +69,8 @@ def st_generate_b30_images(placeholder, save_paths, force_regen=False, version_c
                     image_path,
                     version_columns=version_columns,
                     version_levels=version_levels,
+                    merge_equal=merge_equal,
+                    badge_delta=badge_delta,
                 )
             else:
                 generate_single_image(
@@ -184,7 +187,8 @@ def st_generate_b30_images(placeholder, save_paths, force_regen=False, version_c
             # 不自动 rerun：重跑会把上面这份失败清单一起抹掉，而生成结果都在磁盘上，没有需要重新探测的状态
 
         try:
-            save_version_selection(save_paths['image_dir'], version_columns)
+            save_version_selection(save_paths['image_dir'], version_columns,
+                                   merge_equal, badge_delta)
         except Exception as e:
             # 写不进去只会导致下次重复生成，不该拦住本次已经完成的底图
             st.warning(f"版本布局记录写入失败（下次会重新生成）：{e}", icon="⚠️")
@@ -532,6 +536,20 @@ with st.container(border=True):
                                 st.success(f"✅ {version_labels[v]}：全部有数据")
                             else:
                                 st.info(f"ℹ️ {version_labels[v]}：{missing} 首缺失")
+
+                opt_col1, opt_col2 = st.columns(2)
+                with opt_col1:
+                    st.checkbox(
+                        "合并相同定数的服务器数值显示",
+                        value=True, key="version_merge_equal",
+                        help="所选服务器的定数完全相同时只画一个居中数字；关闭后每列各画各的。",
+                    )
+                with opt_col2:
+                    st.checkbox(
+                        "在服务器角标显示升降幅度",
+                        value=False, key="version_badge_delta",
+                        help="对比列的服务器角标后追加与基准的差值（如「日服 +0.1」）；基准列不显示。",
+                    )
     ### Version Selector Section - End ###
 
         # 「定数变动」面板只在默认模板里；init 模板仍走原来的两栏定数
@@ -552,6 +570,9 @@ with st.container(border=True):
             if len(selected_versions) >= 2 and style_theme in ("default", "custom_default")
             else None
         )
+        # 两个显示选项只在三服面板生效；没渲染过选择框时（无数据/无对比版本）用默认值
+        merge_equal = bool(st.session_state.get("version_merge_equal", True))
+        badge_delta = bool(st.session_state.get("version_badge_delta", False))
         if len(selected_versions) >= 2 and version_columns is None:
             st.info("当前模板不是 default/custom_default，三服对比面板不会生效；如需对比请先切换模板。", icon="ℹ️")
 
@@ -574,7 +595,8 @@ with st.container(border=True):
                     try:
                         if not os.path.exists(image_path):
                             os.makedirs(image_path, exist_ok=True)
-                        st_generate_b30_images(generate_info_placeholder, current_paths, force_regen, version_columns)
+                        st_generate_b30_images(generate_info_placeholder, current_paths, force_regen, version_columns,
+                                               merge_equal, badge_delta)
                         # st.success("操作成功完成。")
                     except Exception as e:
                         st.toast(f"生成时发生错误: {e}", icon="❌")

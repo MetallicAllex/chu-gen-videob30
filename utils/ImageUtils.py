@@ -65,7 +65,7 @@ DEFAULT_TEXT_MAX_WIDTH = 2000
 
 # 默认模板右下「定数变动」面板。原底图把 CN/Mate 两枚 logo 烘死在像素里，
 # 三服对比要用 content_base_versions.png（同尺寸，logo 区已清空）再按所选版本重画。
-VERSION_COLUMN_LAYOUT_VERSION = 2  # 面板布局改动时 +1，让旧底图失效
+VERSION_COLUMN_LAYOUT_VERSION = 3  # 面板布局改动时 +1，让旧底图失效
 VERSION_COLUMN_MANIFEST_NAME = "versions_manifest.json"
 VERSION_PANEL_IMAGE_NAME = "content_base_versions.png"
 VERSION_PANEL_LEFT = 1452
@@ -164,8 +164,9 @@ def positive_constant(value) -> Optional[float]:
     return parsed if parsed >= 1.0 else None
 
 
-def version_selection_changed(image_dir: str, versions) -> bool:
-    """当前版本组合是否需要重画成绩板；没有清单时只在启用三服时强制。"""
+def version_selection_changed(image_dir: str, versions, merge_equal: bool = True,
+                              badge_delta: bool = False) -> bool:
+    """当前版本组合/显示选项是否需要重画成绩板；没有清单时只在启用三服时强制。"""
     manifest_path = os.path.join(image_dir, VERSION_COLUMN_MANIFEST_NAME)
     current = [v for v in (versions or []) if v][:3]
     if not os.path.exists(manifest_path):
@@ -178,27 +179,40 @@ def version_selection_changed(image_dir: str, versions) -> bool:
         return bool(current)
     stored_versions = manifest.get('versions')
     last_versions = [str(v) for v in stored_versions] if isinstance(stored_versions, list) else []
+    # 旧清单没有这两个键：按默认值比较，默认组合不触发重画
+    stored_merge = bool(manifest.get('merge_equal', True))
+    stored_delta = bool(manifest.get('badge_delta', False))
     return (current != last_versions
-            or manifest.get('layout') != VERSION_COLUMN_LAYOUT_VERSION)
+            or manifest.get('layout') != VERSION_COLUMN_LAYOUT_VERSION
+            or stored_merge != bool(merge_equal)
+            or stored_delta != bool(badge_delta))
 
 
-def save_version_selection(image_dir: str, versions) -> None:
+def save_version_selection(image_dir: str, versions, merge_equal: bool = True,
+                           badge_delta: bool = False) -> None:
     save_config(os.path.join(image_dir, VERSION_COLUMN_MANIFEST_NAME), {
         "versions": [v for v in (versions or []) if v][:3],
         "layout": VERSION_COLUMN_LAYOUT_VERSION,
+        "merge_equal": bool(merge_equal),
+        "badge_delta": bool(badge_delta),
     })
 
 
 def draw_version_columns(image: Image.Image, versions: list, levels: dict,
                          current_color, next_color,
-                         value_font_size: int = 45) -> Image.Image:
+                         value_font_size: int = 45,
+                         merge_equal: bool = True,
+                         badge_delta: bool = False) -> Image.Image:
     """在面板里按列画各版本的 logo、定数与服务器角标。
 
-    第一列是基准版本，只写数值不画箭头（与原面板一致）；其余列与基准比较，
-    写 ↑/↓/→。缺定数写 --，缺 logo 退回文本缩写。定数默认用模板 level 字号；
-    三列时列宽只有 140，压到 42 以免 "15.0→" 顶到面板边。箭头与数字同字号、
-    单独绘制并做墨迹对齐：字体里 ↑/↓ 的左侧留白远大于 →，混在一个字符串里
-    会撑出空隙。
+    第一列是基准版本，只写数值不画标记（与原面板一致）；其余列与基准比较，
+    用三角标记升降：涨 ▲ 红、跌 ▼ 蓝，定数没变就不画标记。缺定数写 --，缺
+    logo 退回文本缩写。定数默认用模板 level 字号；三列时列宽只有 140，压到 42
+    以免 "15.0▲" 顶到面板边。标记单独绘制并做墨迹对齐：三角的左留白与数字不同，
+    混在一个字符串里会撑出空隙。
+
+    merge_equal: 所选服务器定数完全相同时只画一个居中数字（默认开）；
+    badge_delta: 在服务器角标后追加与基准的差值，如「日服 +0.1」（默认关）。
     """
     versions = [v for v in (versions or []) if v][:3]
     if not versions:
@@ -206,9 +220,10 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
     centers, column_width = _version_column_layout(len(versions))
     base_level = positive_constant(levels.get(versions[0]))
     # 全等合并：所选服务器的定数完全相同时只画一个数字（放面板中间），
-    # 避免三列重复写同一个值；部分相等仍按列显示。
+    # 避免三列重复写同一个值；部分相等仍按列显示。可由 merge_equal 关闭。
     value_list = [positive_constant(levels.get(key)) for key in versions]
-    merged = (len(versions) >= 2
+    merged = (merge_equal
+              and len(versions) >= 2
               and all(value is not None for value in value_list)
               and len({round(value, 1) for value in value_list if value is not None}) == 1)
     # 按列宽缩放、垂直居中：与旧底图里烘死的 logo 同大（两列约 186 宽）。
@@ -219,12 +234,12 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
     value_size = max(20, int(value_font_size or 45))
     if len(versions) >= 3:
         value_size = min(value_size, 42)
-    # 箭头与数字同字号：旧设计里 "14.1→" 的箭头就是 45px 的 →（墨迹 43×21），
-    # 不是上标式小箭头；缩到 0.58 会让箭头明显比数字小一圈。
-    arrow_size = value_size
+    # 升降标记用三角：方向一眼可辨，颜色再强化（涨红、跌蓝、平灰）。
+    # 两列 30px、三列 26px——三列数字只有 42，三角再大就挤到相邻列。
+    marker_size = 30 if len(versions) <= 2 else 26
     draw = ImageDraw.Draw(image)
     value_font = ImageFont.truetype(title_font_path, value_size)
-    arrow_font = ImageFont.truetype(title_font_path, arrow_size)
+    marker_font = ImageFont.truetype(title_font_path, marker_size)
     # 三列时 logo 本身只有两列的三分之二宽，角标也要收小，免得盖住半个 logo
     tag_size = 15 if len(versions) <= 2 else 12
     tag_font = ImageFont.truetype(title_font_path, tag_size)
@@ -265,6 +280,8 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
         # 角标统一画在循环外，保证所有服务器标签落在同一条横线上
         columns.append({
             "key": str(key),
+            "index": index,
+            "level": positive_constant(levels.get(key)),
             "center_x": center_x,
             "drawn": logo_drawn,
             "width": logo_width_used,
@@ -273,47 +290,51 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
         })
 
         level_value = positive_constant(levels.get(key))
+        marker_text, marker_color = "", next_color
         if level_value is None:
-            value_text, arrow = "--", ""
-        elif index == 0:
-            # 旧设计里基准列只写数值（"14.1"），箭头只标在对比列上
-            value_text, arrow = f"{level_value:.1f}", ""
-        elif base_level is None:
-            value_text, arrow = f"{level_value:.1f}", ""
+            value_text = "--"
+        elif index == 0 or base_level is None:
+            # 基准列只写数值（"14.1"），标记只标在对比列上
+            value_text = f"{level_value:.1f}"
         else:
             value_text = f"{level_value:.1f}"
-            arrow = "↑" if level_value > base_level else "↓" if level_value < base_level else "→"
+            if level_value > base_level:
+                marker_text, marker_color = "▲", (214, 69, 69)
+            elif level_value < base_level:
+                marker_text, marker_color = "▼", (66, 118, 209)
+            # 定数没变就不加标记，数字自己说明一切
 
-        # 用墨迹边界而不是字体步进量来排数字和箭头：字体给 "0" 的右侧留白
-        # 会让箭头看起来悬空，而 ↑/↓ 本身的左右留白更大。
+        # 用墨迹边界而不是字体步进量来排数字和标记：字体给 "0" 的右侧留白
+        # 会让标记看起来悬空，而三角本身几乎没有左留白。
         if not merged:
             value_mask = value_font.getmask(value_text).getbbox()
             value_ink_right = value_mask[2] if value_mask else int(value_font.getlength(value_text))
-            arrow_ink = arrow_shift = 0
-            if arrow:
-                mask_box = arrow_font.getmask(arrow).getbbox()
+            marker_ink = marker_shift = 0
+            if marker_text:
+                mask_box = marker_font.getmask(marker_text).getbbox()
                 if mask_box:
-                    arrow_shift = mask_box[0]
-                    arrow_ink = mask_box[2] - mask_box[0]
+                    marker_shift = mask_box[0]
+                    marker_ink = mask_box[2] - mask_box[0]
                 else:
-                    arrow_ink = arrow_font.getlength(arrow)
-            gap = 3
-            total_w = value_ink_right + (gap + arrow_ink if arrow else 0)
+                    marker_ink = marker_font.getlength(marker_text)
+            gap = 6
+            total_w = value_ink_right + (gap + marker_ink if marker_ink else 0)
             start_x = center_x - total_w / 2
             color = next_color if index else current_color
             TextDraw(image, value_text, (int(start_x), VERSION_PANEL_VALUE_Y),
                      font_path=title_font_path, font_size=value_size,
                      font_color=color, h_align="left", max_width=int(column_width) - 6)
-            if arrow:
-                # 单独绘制时 TextDraw 按各自的 ink 高度垂直居中，↑/↓ 会比数字低半截；
-                # 用 bbox 顶部偏移把箭头 ink 中心对到数字 ink 中心（与原字符串渲染一致）。
+            if marker_text:
+                # TextDraw 垂直按 ink 居中（ink 中心 = pos_y + bbox[1]），
+                # 三角字号比数字小，用 bbox[1] 把两者的 ink 中心对到同一条线。
                 value_bbox = value_font.getbbox(value_text)
-                arrow_bbox = arrow_font.getbbox(arrow)
-                arrow_y = VERSION_PANEL_VALUE_Y + value_bbox[1] - arrow_bbox[1]
-                TextDraw(image, arrow,
-                         (int(start_x + value_ink_right + gap - arrow_shift), arrow_y),
-                         font_path=title_font_path, font_size=arrow_size,
-                         font_color=color, h_align="left", max_width=int(column_width) - 6)
+                marker_bbox = marker_font.getbbox(marker_text)
+                marker_y = VERSION_PANEL_VALUE_Y + value_bbox[1] - marker_bbox[1]
+                TextDraw(image, marker_text,
+                         (int(start_x + value_ink_right + gap - marker_shift), marker_y),
+                         font_path=title_font_path, font_size=marker_size,
+                         font_color=marker_color, h_align="left",
+                         max_width=int(column_width) - 6)
 
     # 角标统一贴在同一条横线上：按最高的 logo 底边算，避免 logo 高度不同导致高低不齐
     pad_x, pad_y = (6, 2) if len(versions) <= 2 else (5, 2)
@@ -323,9 +344,23 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
     for column in columns:
         tag_key = str(column["key"])
         tag_text = SERVER_TAGS.get(tag_key, tag_key)
+        # 角标里的升降幅度：只对比对列（且没被全等合并时）追加，基准列不写，
+        # 数字缺失时也不写——「-- +0.1」没有意义；定数没变同样不写，只留服务器名。
+        delta_text, delta_color = "", None
+        if (badge_delta and not merged and column["index"] > 0
+                and base_level is not None and column["level"] is not None):
+            diff = round(column["level"] - base_level, 1)
+            if diff > 0:
+                delta_text, delta_color = f"+{diff:.1f}", (240, 122, 122, 255)
+            elif diff < 0:
+                delta_text, delta_color = f"-{abs(diff):.1f}", (132, 172, 246, 255)
         tag_box = draw.textbbox((0, 0), tag_text, font=tag_font)
         tag_w, tag_h = tag_box[2] - tag_box[0], tag_box[3] - tag_box[1]
-        badge_w, badge_h = tag_w + pad_x * 2, tag_h + pad_y * 2
+        delta_box = draw.textbbox((0, 0), delta_text, font=tag_font) if delta_text else (0, 0, 0, 0)
+        delta_w = delta_box[2] - delta_box[0]
+        inner_gap = 4 if delta_text else 0
+        badge_w = tag_w + delta_w + inner_gap + pad_x * 2
+        badge_h = max(tag_h, delta_box[3] - delta_box[1]) + pad_y * 2
         if column["drawn"]:
             badge_x = column["center_x"] + column["width"] // 2 - badge_w
         else:
@@ -334,8 +369,11 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
         draw.rounded_rectangle(
             (badge_x, badge_y, badge_x + badge_w, badge_y + badge_h),
             radius=badge_h // 2, fill=(0, 0, 0, 150))
-        draw.text((badge_x + pad_x - tag_box[0], badge_y + pad_y - tag_box[1]),
-                  tag_text, font=tag_font, fill=(255, 255, 255, 235))
+        tag_pos = (badge_x + pad_x - tag_box[0], badge_y + pad_y - tag_box[1])
+        draw.text(tag_pos, tag_text, font=tag_font, fill=(255, 255, 255, 235))
+        if delta_text:
+            draw.text((tag_pos[0] + tag_w + inner_gap - delta_box[0], tag_pos[1]),
+                      delta_text, font=tag_font, fill=delta_color)
 
     if merged:
         # 一条加粗的分隔线把 logo 行和数字行分开，示意这个数字是上面所有服务器共用的
@@ -552,7 +590,9 @@ def TextDraw(image, text: str = "", pos: tuple = (0, 0), offset: tuple = (0, 0),
 # def generate_single_image(record_detail: dict, style_config: dict, output_path, prefix, index: int):
 def generate_single_image(record_detail: dict, style_config: dict, output_path,
                           version_columns: Optional[list] = None,
-                          version_levels: Optional[dict] = None):
+                          version_levels: Optional[dict] = None,
+                          merge_equal: bool = True,
+                          badge_delta: bool = False):
     """
     生成单个 Best50 成绩记录图。
 
@@ -572,6 +612,8 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
         output_path (str): 输出目录
         version_columns (list | None): 三服对比的版本顺序（2-3 个）；None 保持旧两栏
         version_levels (dict | None): 各版本定数 {版本: 定数}，仅 version_columns 生效
+        merge_equal (bool): 各服定数全等时只画一个数字
+        badge_delta (bool): 服务器角标后追加与基准的升降幅度
         prefix (str): 文件名前缀(deprecated)
         index (int): 索引编号(deprecated)
 
@@ -673,6 +715,8 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                         temp_img, version_columns, version_levels or {},
                         color['level']['current'], color['level']['next'],
                         value_font_size=size.get('level', 45),
+                        merge_equal=merge_equal,
+                        badge_delta=badge_delta,
                     )
                 else:
                     # cur_pos = (1562, 1018)
