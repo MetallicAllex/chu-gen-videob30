@@ -43,14 +43,74 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # 必须与两家开发者控制台里登记的回调地址完全一致（水鱼明写：协议、端口、路径、尾斜杠都计入比较）。
 # 之所以另起端口而不是复用 Streamlit 的 8501：回调若落在应用首页，会在那个小标签页里
 # 再渲染一遍生成器（表现为「重复打开一个存档页」），并且换 session，存档状态容易乱。
-OAUTH_CALLBACK_PORT = 8599
-OAUTH_REDIRECT_URI = f"http://localhost:{OAUTH_CALLBACK_PORT}"
 
 # 一次授权等待回调的上限（秒）。水鱼授权码本身 60 秒即过期，超这个时间就该重新发起
 OAUTH_WAIT_SECONDS = 300
 
+# 公开客户端配置：随包默认值在 static/oauth_public_clients.json，本地可用 oauth_config.json
+# 或环境变量覆盖。优先级：环境变量 > 本地覆盖 > 随包配置 > 代码内默认值。
+# 换应用时不必改源码；改端口后记得同步查分器控制台登记的回调地址。
+_DEFAULT_LXNS_CLIENT_ID = "4153eb3c-2587-4464-b135-62d673c972ab"
+_DEFAULT_FISH_CLIENT_ID = "c1050dcfebca5ceb01dd22e7bbc9437d"
+_DEFAULT_OAUTH_PORT = 8599
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_OAUTH_CONFIG_FILE = os.path.join(_APP_ROOT, "static", "oauth_public_clients.json")
+_OAUTH_LOCAL_CONFIG_FILE = os.path.join(_APP_ROOT, "oauth_config.json")
+
+
+def _read_oauth_config(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _resolve_oauth_config():
+    config = {"port": _DEFAULT_OAUTH_PORT,
+              "fish": {"client_id": _DEFAULT_FISH_CLIENT_ID},
+              "lxns": {"client_id": _DEFAULT_LXNS_CLIENT_ID}}
+    for path in (_OAUTH_CONFIG_FILE, _OAUTH_LOCAL_CONFIG_FILE):
+        section = _read_oauth_config(path)
+        port = section.get("port")
+        if isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535:
+            config["port"] = port
+        for provider in ("fish", "lxns"):
+            item = section.get(provider)
+            client_id = item.get("client_id") if isinstance(item, dict) else None
+            if isinstance(client_id, str) and client_id.strip():
+                config[provider]["client_id"] = client_id.strip()
+    for provider in ("fish", "lxns"):
+        env_id = os.environ.get(f"CHUGEN_OAUTH_{provider.upper()}_CLIENT_ID")
+        if env_id and env_id.strip():
+            config[provider]["client_id"] = env_id.strip()
+    env_port = os.environ.get("CHUGEN_OAUTH_PORT")
+    if env_port:
+        try:
+            port = int(env_port)
+        except ValueError:
+            port = 0
+        if 1024 <= port <= 65535:
+            config["port"] = port
+    return config
+
+
+_OAUTH_CONFIG = _resolve_oauth_config()
+OAUTH_CALLBACK_PORT = _OAUTH_CONFIG["port"]
+OAUTH_REDIRECT_URI = f"http://localhost:{OAUTH_CALLBACK_PORT}"
+
+
+def effective_oauth_config(server):
+    """界面展示用：该查分器当前生效的公开客户端配置。"""
+    flow = _AUTH_FLOWS.get(server) or {}
+    return {"client_id": flow.get("client_id", ""),
+            "port": OAUTH_CALLBACK_PORT,
+            "redirect_uri": OAUTH_REDIRECT_URI}
+
+
 # ==================== 落雪 OAuth 配置（公开客户端，client_id 可公开） ====================
-LXNS_CLIENT_ID = "4153eb3c-2587-4464-b135-62d673c972ab"
+LXNS_CLIENT_ID = _OAUTH_CONFIG["lxns"]["client_id"]
 LXNS_SCOPE = "read_player"
 LXNS_BASE_URL = "https://maimai.lxns.net"
 
@@ -65,20 +125,22 @@ CRED_DIR = "./cred_datas"
 LXNS_TOKEN_FILE = os.path.join(CRED_DIR, "lxns_oauth.json")
 
 # ==================== 水鱼 OAuth 配置（公开客户端，client_id 可公开） ====================
-FISH_CLIENT_ID = "c1050dcfebca5ceb01dd22e7bbc9437d"
+FISH_CLIENT_ID = _OAUTH_CONFIG["fish"]["client_id"]
 # 只申请只读成绩权限：openid 换来的 id_token 实测仅含 sub（即 Player.id），
 # 而 /query/player 顶层已返回 username / nickname，多申请一个 scope 没有收益
 FISH_SCOPE = "chunithm.records.read"
 FISH_BASE_URL = "diving-fish.com"
+FISH_BASE_POINT = f"https://www.{FISH_BASE_URL}/api/chunithmprober"
+FISH_AUTHORIZE_POINT = f"https://auth.{FISH_BASE_URL}/"
 
-FISH_AUTHORIZE_URL = f"https://auth.{FISH_BASE_URL}/oauth/authorize"
-FISH_TOKEN_URL = F"https://auth.{FISH_BASE_URL}/oauth/token"
-FISH_QUERY_PLAYER_URL = F"https://www.{FISH_BASE_URL}/api/chunithmprober/query/player"
+FISH_AUTHORIZE_URL = f"{FISH_AUTHORIZE_POINT}/oauth/authorize"
+FISH_TOKEN_URL = f"{FISH_AUTHORIZE_POINT}/oauth/token"
+FISH_QUERY_PLAYER_URL = F"{FISH_BASE_POINT}/query/player"
 # 每谱面一条历史最佳，支持服务端过滤参数；沿用已授权的 chunithm.records.read
-FISH_PLAYER_RECORDS_URL = F"https://www.{FISH_BASE_URL}/api/chunithmprober/player/records"
+FISH_PLAYER_RECORDS_URL = F"{FISH_BASE_POINT}/player/records"
 # 以下两个无需验证，不占水鱼 200 次/日的认证调用配额
-FISH_MUSIC_DATA_URL = F"https://www.{FISH_BASE_URL}/api/chunithmprober/music_data"
-FISH_LATEST_VERSION_URL = F"https://www.{FISH_BASE_URL}/api/chunithmprober/latest_version"
+FISH_MUSIC_DATA_URL = F"{FISH_BASE_POINT}/music_data"
+FISH_LATEST_VERSION_URL = F"{FISH_BASE_POINT}/latest_version"
 
 FISH_TOKEN_FILE = os.path.join(CRED_DIR, "fish_oauth.json")
 
@@ -126,32 +188,32 @@ def generate_code_challenge(verifier):
 
 
 # ==================== 落雪令牌流程 ====================
-def exchange_lxns_token(code, verifier):
+def exchange_lxns_token(code, verifier, client_id=None, redirect_uri=None):
     """授权码换 token（PKCE，公开客户端不传 client_secret）"""
     response = requests.post(LXNS_TOKEN_URL, data={
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": OAUTH_REDIRECT_URI,
-        "client_id": LXNS_CLIENT_ID,
+        "redirect_uri": redirect_uri or OAUTH_REDIRECT_URI,
+        "client_id": client_id or LXNS_CLIENT_ID,
         "code_verifier": verifier,
     }, timeout=10)
     response.raise_for_status()
     return response.json()
 
 
-def refresh_lxns_token(refresh_token):
+def refresh_lxns_token(refresh_token, client_id=None):
     """尝试刷新 access token（落雪是否支持刷新以实测为准，失败时抛出）"""
     response = requests.post(LXNS_TOKEN_URL, data={
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "client_id": LXNS_CLIENT_ID,
+        "client_id": client_id or LXNS_CLIENT_ID,
     }, timeout=10)
     response.raise_for_status()
     return response.json()
 
 
 # ==================== 令牌持久化 ====================
-def save_lxns_token(token_data):
+def save_lxns_token(token_data, client_id=None):
     """
     保存令牌，附带本地时间戳用于计算过期时刻。
 
@@ -161,6 +223,8 @@ def save_lxns_token(token_data):
     """
     if isinstance(token_data.get("data"), dict):
         token_data = {**token_data, **token_data.pop("data")}
+    if client_id:
+        token_data["client_id"] = client_id
     _ensure_cred_dir()
     token_data["saved_at"] = time.time()
     if token_data.get("expires_in"):
@@ -230,11 +294,12 @@ def get_lxns_access_token(stale_token=None):
     # 过期：尝试刷新
     refresh_token = token_data.get("refresh_token")
     if refresh_token:
+        client_id = token_data.get("client_id") or LXNS_CLIENT_ID
         try:
-            new_data = refresh_lxns_token(refresh_token)
+            new_data = refresh_lxns_token(refresh_token, client_id)
             # 若响应未签发新的 refresh token 则沿用旧的（避免丢失）
             new_data.setdefault("refresh_token", refresh_token)
-            save_lxns_token(new_data)
+            save_lxns_token(new_data, client_id)
             return new_data.get("access_token")
         except (requests.ConnectionError, requests.Timeout) as e:
             # 传输入口失败（断网、超时、代理不通）不等于这个 refresh_token 作废。
@@ -256,32 +321,32 @@ def is_lxns_logged_in():
 
 
 # ==================== 水鱼令牌流程 ====================
-def exchange_fish_token(code, verifier):
+def exchange_fish_token(code, verifier, client_id=None, redirect_uri=None):
     """授权码换 token（PKCE，公开客户端不传 client_secret）"""
     response = requests.post(FISH_TOKEN_URL, data={
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": OAUTH_REDIRECT_URI,
-        "client_id": FISH_CLIENT_ID,
+        "redirect_uri": redirect_uri or OAUTH_REDIRECT_URI,
+        "client_id": client_id or FISH_CLIENT_ID,
         "code_verifier": verifier,
     }, timeout=10)
     response.raise_for_status()
     return response.json()
 
 
-def refresh_fish_token(refresh_token):
+def refresh_fish_token(refresh_token, client_id=None):
     """刷新 access token（水鱼实测支持，且每次刷新都会轮换 refresh_token）"""
     response = requests.post(FISH_TOKEN_URL, data={
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "client_id": FISH_CLIENT_ID,
+        "client_id": client_id or FISH_CLIENT_ID,
     }, timeout=10)
     response.raise_for_status()
     return response.json()
 
 
 # ==================== 水鱼令牌持久化 ====================
-def save_fish_token(token_data):
+def save_fish_token(token_data, client_id=None):
     """
     保存令牌，附带本地时间戳用于计算过期时刻。
     水鱼响应是扁平结构（access_token / expires_in / refresh_token / scope），无需拆包。
@@ -289,6 +354,8 @@ def save_fish_token(token_data):
     用临时文件 + os.replace 原子写入：刷新令牌轮换后若写入中途失败，
     旧的已作废、新的没落盘，整条令牌链就废了，用户只能重新走浏览器授权。
     """
+    if client_id:
+        token_data["client_id"] = client_id
     _ensure_cred_dir()
     token_data["saved_at"] = time.time()
     if token_data.get("expires_in"):
@@ -359,14 +426,15 @@ def get_fish_access_token(stale_token=None):
         if not refresh_token:
             clear_fish_token()
             return None
+        client_id = token_data.get("client_id") or FISH_CLIENT_ID
         try:
-            new_data = refresh_fish_token(refresh_token)
+            new_data = refresh_fish_token(refresh_token, client_id)
         except Exception:
             clear_fish_token()  # 刷新失败说明授权已不可用，清掉让界面回到「去授权」
             return None
         # 响应按理会带轮换后的新 refresh_token；万一缺失就沿用旧的，避免断链
         new_data.setdefault("refresh_token", refresh_token)
-        save_fish_token(new_data)
+        save_fish_token(new_data, client_id)
         return new_data.get("access_token")
 
 
@@ -483,11 +551,11 @@ class _IPv6CallbackServer(ThreadingHTTPServer):
     allow_reuse_address = False
 
 
-def _port_holder_hint():
+def _port_holder_hint(port):
     """端口绑不上时判断是谁在听：能按我们的特征回 204 的，就是另一个生成器实例"""
     try:
         # 空串 = 显式不走代理（typeshed 的 proxies 只接受 str，None 同样能禁用但不合类型）
-        r = requests.get(f"http://127.0.0.1:{OAUTH_CALLBACK_PORT}/favicon.ico",
+        r = requests.get(f"http://127.0.0.1:{port}/favicon.ico",
                          timeout=1, proxies={"http": "", "https": ""})
         if r.status_code == 204:
             return "该端口正被另一个生成器实例监听"
@@ -496,17 +564,17 @@ def _port_holder_hint():
     return "该端口被其他程序占用"
 
 
-def _ensure_callback_server():
+def _ensure_callback_server(port):
     """惰性启动回环监听，返回错误说明（None 表示已就绪）"""
     with _auth_lock:
-        if _callback_servers:
+        if any(srv.server_address[1] == port for srv in _callback_servers):
             return None
         # 浏览器可能把 localhost 解析成 ::1，也可能解析成 127.0.0.1，两个都要监听；
         # 但不能绑双栈通配地址（那会把局域网来的连接一起收下），所以分别绑两个回环地址
         started, failures = [], []
         for server_cls, host in ((_IPv4CallbackServer, "127.0.0.1"), (_IPv6CallbackServer, "::1")):
             try:
-                srv = server_cls((host, OAUTH_CALLBACK_PORT), _CallbackHandler)
+                srv = server_cls((host, port), _CallbackHandler)
             except OSError as e:
                 failures.append(f"{host}: {e}")
                 continue
@@ -514,8 +582,8 @@ def _ensure_callback_server():
             started.append(srv)
         if not started:
             print(f"[OAuth] 回环监听启动失败: {failures}")
-            return (f"本地授权回调端口 {OAUTH_CALLBACK_PORT} 无法监听，收不到授权结果："
-                    f"{_port_holder_hint()}。请关掉占用该端口的程序后重试。")
+            return (f"本地授权回调端口 {port} 无法监听，收不到授权结果："
+                    f"{_port_holder_hint(port)}。请关掉占用该端口的程序后重试。")
         _callback_servers.extend(started)   # 必须原地改，赋值会让盒子与实际脱节
         if failures:
             print(f"[OAuth] 回环监听只启动了一部分: {failures}")
@@ -535,6 +603,8 @@ def _handle_callback(query):
                               _CLOSE_LABEL)
         _rt["pending"] = None
         server, verifier = pending["server"], pending["verifier"]
+        client_id = pending.get("client_id") or _AUTH_FLOWS[server]["client_id"]
+        redirect_uri = pending.get("redirect_uri") or OAUTH_REDIRECT_URI
     name = _AUTH_FLOWS[server]["name"]
 
     error = query.get("error", [None])[0]
@@ -554,11 +624,12 @@ def _handle_callback(query):
 
     flow = _AUTH_FLOWS[server]
     try:
-        flow["save"](flow["exchange"](code, verifier))
+        token = flow["exchange"](code, verifier, client_id=client_id, redirect_uri=redirect_uri)
+        flow["save"](token, client_id=client_id)
     except Exception as e:
         # 细节只打到控制台（本项目一贯如此）：异常文本里只有令牌端点 URL，不含授权码
         print(f"[OAuth] {name} 换取令牌失败: {e}\n"
-              f"        若为 400/invalid_client，请联系开发者确认控制台登记的回调地址是 {OAUTH_REDIRECT_URI}")
+              f"        若为 400/invalid_client，请联系开发者确认控制台登记的回调地址是 {redirect_uri}")
         message = "换取令牌失败，请重新授权。详细原因见终端窗口。"
         with _auth_lock:
             _rt["result"] = {"server": server, "ok": False, "message": message}
@@ -572,28 +643,40 @@ def _handle_callback(query):
                       "\n生成器后续将尝试自动更新授权状态。", _CLOSE_LABEL)
 
 
-def begin_auth(server):
+def begin_auth(server, client_id=None, port=None):
     """
     发起一次授权：起监听、生成 PKCE 参数、记下待核对的 state，把授权链接交给调用方打开。
     回调到达后由监听线程完成换票与落盘，界面用 pop_auth_result 取结果。
 
     Args:
         server: "fish" 或 "lxns"
+        client_id: 临时覆盖公开客户端 ID；不传用配置解析结果
+        port: 临时覆盖回调端口；不传用配置解析结果
 
     Returns:
         (auth_url, None) 或 (None, 错误说明)
     """
-    error = _ensure_callback_server()
+    flow = _AUTH_FLOWS[server]
+    client_id = (client_id or flow["client_id"]).strip()
+    if not client_id:
+        return None, "OAuth client_id 为空，请检查 oauth_config.json 或页面上的应用配置。"
+    try:
+        port = int(port or OAUTH_CALLBACK_PORT)
+    except (TypeError, ValueError):
+        return None, "OAuth 回调端口无效，请填写 1024–65535 的整数。"
+    if not 1024 <= port <= 65535:
+        return None, "OAuth 回调端口无效，请填写 1024–65535 的整数。"
+    error = _ensure_callback_server(port)
     if error:
         return None, error
 
-    flow = _AUTH_FLOWS[server]
+    redirect_uri = f"http://localhost:{port}"
     verifier = generate_code_verifier()
     state = secrets.token_urlsafe(16)
     params = {
         "response_type": "code",
-        "client_id": flow["client_id"],
-        "redirect_uri": OAUTH_REDIRECT_URI,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
         "scope": flow["scope"],
         "state": state,
         "code_challenge": generate_code_challenge(verifier),
@@ -601,6 +684,7 @@ def begin_auth(server):
     }
     with _auth_lock:
         _rt["pending"] = {"server": server, "state": state, "verifier": verifier,
+                          "client_id": client_id, "redirect_uri": redirect_uri,
                           "created_at": time.time()}
         _rt["result"] = None
     return f"{flow['authorize_url']}?{urlencode(params)}", None

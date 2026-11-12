@@ -12,8 +12,8 @@ from utils.DataUtils import (_process_b50_data, st_init_cache_pathes, update_b50
                              POOL_BRIEF, POOL_FULL, MODE_SERVER, MODE_LOCAL, PART_BEST, PART_NEW,
                              PART_ORDER, EmptyFilterResult, music_data_state, MUSIC_DATA_FILTER_ONLY)
 from utils.FilterUtils import FIELD_LABELS
-from utils.Variables import (jp_music_info_path, music_info_path, image_root_path, CN_FILTER_RANGES,
-                             CHUNI_LEVEL_NAMES, CHUNI_FULL_CHAIN_TYPES, CHUNI_CLEAR_TYPES,
+from utils.Variables import (image_root_path, CN_FILTER_RANGES, REVERSE_LEVEL_LABELS,
+                             CHUNI_FULL_CHAIN_TYPES, CHUNI_CLEAR_TYPES,
                              CHUNI_RANK_TYPES)
 from utils import OAuthUtils
 
@@ -111,7 +111,8 @@ def _close_oauth_dialog():
 
 def restart_oauth_auth(server):
     """重新发起授权：换一对全新的 PKCE 参数与 state，浮窗回到等待态"""
-    auth_url, error = OAuthUtils.begin_auth(server)
+    auth_url, error = OAuthUtils.begin_auth(
+        server, st.session_state.get("oauth_client_id"), st.session_state.get("oauth_port"))
     if error:
         st.session_state.oauth_callback_msg = ("error", error)
         st.session_state.pop("oauth_pending", None)
@@ -297,7 +298,7 @@ def _cn_choice(label, options, key, mapping=None, disabled=False, help=None, def
 
 def _cn_frames_ready():
     """底图素材实际齐了哪几个难度编号——素材缺一个，选中它的筛选结果就到生成阶段才炸。"""
-    return {i for i in CHUNI_LEVEL_NAMES if os.path.exists(f"{image_root_path}/Frames/{i}.png")}
+    return {i for i in REVERSE_LEVEL_LABELS if os.path.exists(f"{image_root_path}/Frames/{i}.png")}
 
 
 def cn_filter_panel(server, name, assets, options, pool_source, best_or_new,
@@ -323,14 +324,14 @@ def cn_filter_panel(server, name, assets, options, pool_source, best_or_new,
     row = st.columns(2)
 
     with row[0]:
-        levels = _cn_choice("难度", list(CHUNI_LEVEL_NAMES), "cnflt_level",
-                            fmt=lambda i: f"{i} {CHUNI_LEVEL_NAMES[i]}",
+        levels = _cn_choice("难度", list(REVERSE_LEVEL_LABELS), "cnflt_level",
+                            fmt=lambda i: f"{i} {REVERSE_LEVEL_LABELS[i]}",
                             help="按谱面难度筛选；不含 WORLD'S END（素材与渲染均不支持）")
         if levels:
             spec["level_index"] = [int(v) for v in levels]
         lacking = sorted(set(int(v) for v in (levels or [])) - _cn_frames_ready())
         if lacking:
-            st.warning("、".join(f"{i} {CHUNI_LEVEL_NAMES[i]}" for i in lacking)
+            st.warning("、".join(f"{i} {REVERSE_LEVEL_LABELS[i]}" for i in lacking)
                        + " 的底图素材缺失，筛选能命中但生成底图时会失败。", icon="⚠️")
     with row[1]:
         rng = _cn_range_control("ds_range", "定数区间",
@@ -427,7 +428,7 @@ def cn_filter_panel(server, name, assets, options, pool_source, best_or_new,
                 spec["bpm_range"] = rng
 
     result = {"filters": spec, "caps": None, "include_selections": False,
-              "filter_mode": MODE_LOCAL, "new_versions": None}
+              "filter_mode": MODE_LOCAL, "new_versions": None, "keep_floor": False}
 
     # --- 筛选执行位置：只有水鱼 + 完整历史有得选 ---
     if is_fish and full_history:
@@ -472,6 +473,11 @@ def cn_filter_panel(server, name, assets, options, pool_source, best_or_new,
                                 for v in ahead)
                 st.info(f"落雪曲库里已有比当前窗口更新的版本（{names}），水鱼的版本表还没跟上 —— 这些曲子"
                         f"会落进旧曲组。关掉上面的「分成 Best / New 两组」就不受这个口径影响。", icon="ℹ️")
+    if result["caps"]:
+        result["keep_floor"] = st.checkbox(
+            "保留组上限处同 Rating 的谱面", key="cnflt_keep_floor",
+            help="截断到第 N 条后，如果后面还有与第 N 条同 Rating 的谱面，也一并留下；"
+                 "入库总量可能超过组上限。不勾时按 Rating 降序硬切。")
     if not full_history:
         if not is_fish:
             result["include_selections"] = st.toggle(
@@ -522,7 +528,8 @@ def cn_pool_preview(server, name, best_or_new, pool_source, panel, assets, can_f
                          filter_mode=panel["filter_mode"], spec=panel["filters"], caps=panel["caps"],
                          include_selections=panel["include_selections"],
                          new_versions=panel["new_versions"], assets=assets, raw=cache["raw"],
-                         group_parts=panel.get("group_parts", True))
+                         group_parts=panel.get("group_parts", True),
+                         keep_floor=panel.get("keep_floor", False))
     _cn_render_stats(pool, server)
     return cache["raw"]
 
@@ -547,6 +554,11 @@ def _cn_render_stats(pool, server):
     if stats.get("grouped", True) and stats.get("no_version"):
         st.warning(f"有 {stats['no_version']} 条成绩在本地曲库里查不到，判不出新旧，一律按旧曲留下了。"
                    f"曲库补齐后可以解出一部分（程序启动时自动进行，也可到首页手动强制一次）。", icon="⚠️")
+    if stats.get("invalid_rows"):
+        detail = "　".join(f"{reason} {count} 条"
+                          for reason, count in stats.get("invalid_reasons", {}).items())
+        st.warning(f"已跳过 {stats['invalid_rows']} 条非普通谱面或身份无效的成绩（{detail}）；"
+                   f"它们不参与分组与组上限。", icon="⚠️")
     if stats["missing"]:
         st.warning("因缺信息被排除："
                    + "　".join(f"{FIELD_LABELS.get(k, k)} {v} 条" for k, v in stats["missing"].items())
@@ -568,7 +580,7 @@ def _cn_render_stats(pool, server):
             [{
                 "组": item["_part"],
                 "曲目": item["_title"],
-                "难度": CHUNI_LEVEL_NAMES.get(item["_level_index"], "—"),
+                "难度": REVERSE_LEVEL_LABELS.get(item["_level_index"], "—"),
                 "定数": item["_ds"],
                 "分数": item["_score"],
                 "Rating": item["_rating"],
@@ -776,6 +788,21 @@ if st.session_state.get('config_saved', False):
             provider = CN_SERVER_PROVIDERS[data_server_selected]
             authorized = provider["is_authorized"]()
 
+            oauth_defaults = OAuthUtils.effective_oauth_config(provider["server"])
+            with st.expander("OAuth 应用配置（通常无需修改）", icon="⚙️"):
+                oauth_client_id = st.text_input(
+                    "公开客户端 client_id", oauth_defaults["client_id"],
+                    key=f"oauth_client_id_{provider['server']}",
+                    help="公开客户端 ID 可以随包分发；换成自己的应用时，回调地址也要在查分器控制台同步登记。")
+                oauth_port = st.number_input(
+                    "本机回调端口", min_value=1024, max_value=65535,
+                    value=int(oauth_defaults["port"]), step=1,
+                    key=f"oauth_port_{provider['server']}",
+                    help="落雪要求控制台登记的回调与这里逐字符一致；水鱼允许回环动态端口。")
+                st.code(f"http://localhost:{int(oauth_port)}", language=None)
+                st.caption("也可以写在项目根目录 oauth_config.json，或用环境变量 "
+                           "CHUGEN_OAUTH_FISH_CLIENT_ID / CHUGEN_OAUTH_LXNS_CLIENT_ID / CHUGEN_OAUTH_PORT 覆盖。")
+
             # ===== OAuth 授权区 =====
             oauth_col1, oauth_col2 = st.columns([0.68, 0.32], vertical_alignment="center")
             with oauth_col1:
@@ -792,7 +819,8 @@ if st.session_state.get('config_saved', False):
                         st.rerun()
                 elif st.button(f"授权{provider['name']}账号", icon=provider["icon"], width="stretch"):
                     # 起本地回环监听并生成 PKCE 参数；回调由监听线程完成换票，本页面不跳转
-                    auth_url, error = OAuthUtils.begin_auth(provider["server"])
+                    auth_url, error = OAuthUtils.begin_auth(
+                        provider["server"], oauth_client_id, int(oauth_port))
                     if error:
                         st.session_state.oauth_pending = None
                         st.error(error, icon="❌")
@@ -800,6 +828,8 @@ if st.session_state.get('config_saved', False):
                         st.session_state.oauth_pending = provider["server"]
                         st.session_state.oauth_auth_url = auth_url
                         st.session_state.oauth_started_at = time.time()
+                        st.session_state.oauth_client_id = oauth_client_id
+                        st.session_state.oauth_port = int(oauth_port)
                         st.rerun()
 
             # 只要发起过授权就得让浮窗跑起来：结果取不走会丢提示，pending 也会一直挂着
@@ -862,6 +892,7 @@ if st.session_state.get('config_saved', False):
                 "include_selections": panel["include_selections"],
                 "new_versions": panel["new_versions"],
                 "group_parts": panel["group_parts"],
+                "keep_floor": panel["keep_floor"],
             }
             if reuse_cache and cached_raw is not None:
                 data_params["raw"] = cached_raw

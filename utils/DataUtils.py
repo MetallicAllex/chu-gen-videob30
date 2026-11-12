@@ -496,6 +496,7 @@ def update_b50_data(b50_raw_file, b50_data_file, req_param):
         raw=req_param.get('raw'),
         new_versions=req_param.get('new_versions'),
         group_parts=req_param.get('group_parts', True),
+        keep_floor=req_param.get('keep_floor', False),
     )
     if not pool["prefixes"]:
         raise EmptyFilterResult(describe_spec(req_param.get('filters')))
@@ -1331,6 +1332,58 @@ def selected_parts(best_or_new, include_selections=False):
     return [PART_BEST, PART_SELECT, PART_NEW] if include_selections else [PART_BEST, PART_NEW]
 
 
+# 单次导入上限：两家的「全部成绩」接口目前都不分页，真出现分页或异常膨胀时
+# 继续往下做只会得到一份缺条目的存档，不如在写文件之前停下。
+MAX_FETCHED_SCORES = 20000
+
+
+def _score_rows(raw, server, pool_source):
+    """按数据源与成绩来源取出成绩行；结构不认识时返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+    if server == "lxns":
+        container = raw.get("data")
+        if pool_source == POOL_FULL:
+            return container if isinstance(container, list) else None
+        if not isinstance(container, dict):
+            return None
+        keys = ("bests", "new_bests", "selections")
+    else:
+        container = raw.get("records")
+        if pool_source == POOL_FULL and isinstance(container, list):
+            return container
+        if not isinstance(container, dict):
+            return None
+        keys = ("b30", "n20") if pool_source == POOL_BRIEF else ("best",)
+    if not any(key in container for key in keys):
+        return None
+    rows = []
+    for key in keys:
+        value = container.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            return None
+        rows.extend(value)
+    return rows
+
+
+def _payload_problem(raw, server, pool_source):
+    """检查一次响应是否完整、结构可信；返回 None 表示可以进入规范化。"""
+    if not isinstance(raw, dict):
+        return "查分器返回的数据不是 JSON 对象"
+    if raw.get("has_more") or raw.get("next"):
+        return "查分器返回了分页数据（has_more / next），本次导入会不完整，已停止"
+    rows = _score_rows(raw, server, pool_source)
+    if rows is None:
+        return "查分器返回的成绩结构无法识别，已停止导入"
+    if any(not isinstance(row, dict) for row in rows):
+        return "查分器返回的成绩列表含非法条目，已停止导入"
+    if len(rows) > MAX_FETCHED_SCORES:
+        return f"查分器返回了 {len(rows)} 条成绩，超过单次导入上限 {MAX_FETCHED_SCORES} 条"
+    return None
+
+
 def _fetch_cn_pool(server, pool_source, params):
     """取一次候选池原始响应，返回 (raw, error)。"""
     from utils.OAuthUtils import (FISH_QUERY_PLAYER_URL, FISH_PLAYER_RECORDS_URL,
@@ -1338,11 +1391,17 @@ def _fetch_cn_pool(server, pool_source, params):
     if server == "fish":
         if pool_source == POOL_FULL:
             # /player/records 是 GET，服务端过滤参数就挂在这里；简略模式没有过滤能力
-            return _fish_authorized_request(FISH_PLAYER_RECORDS_URL, params=params or None)
-        return _fish_authorized_request(FISH_QUERY_PLAYER_URL, method="POST", json_body={})
-    if pool_source == POOL_FULL:
-        return _lxns_authorized_request(LXNS_SCORES_URL)
-    return _lxns_authorized_request(LXNS_BESTS_URL)
+            raw, error = _fish_authorized_request(FISH_PLAYER_RECORDS_URL, params=params or None)
+        else:
+            raw, error = _fish_authorized_request(FISH_QUERY_PLAYER_URL, method="POST", json_body={})
+    elif pool_source == POOL_FULL:
+        raw, error = _lxns_authorized_request(LXNS_SCORES_URL)
+    else:
+        raw, error = _lxns_authorized_request(LXNS_BESTS_URL)
+    if error:
+        return None, error
+    problem = _payload_problem(raw, server, pool_source)
+    return (None, problem) if problem else (raw, None)
 
 
 def fetch_cn_pool_raw(server, pool_source):
@@ -1363,7 +1422,7 @@ def _normalize_pool(server, pool_source, raw, assets, include_selections=False):
 
 def build_cn_pool(server, best_or_new, pool_source=POOL_BRIEF, filter_mode=MODE_LOCAL,
                   spec=None, caps=None, include_selections=False, raw=None, assets=None,
-                  new_versions=None, group_parts=True) -> dict:
+                  new_versions=None, group_parts=True, keep_floor=False) -> dict:
     """
     取数 → 规范化 →（服务端模式先粗筛一次）→ 本地精筛 → 分组截断 → 按原形状重建 raw。
 
@@ -1392,16 +1451,26 @@ def build_cn_pool(server, best_or_new, pool_source=POOL_BRIEF, filter_mode=MODE_
         raise Exception(error)
 
     items = _normalize_pool(server, pool_source, raw, assets, include_selections)
+    invalid_rows = [item for item in items if item.get("_invalid")]
+    if invalid_rows:
+        items = [item for item in items if not item.get("_invalid")]
     unsupported = list(FISH_UNSUPPORTED) if server == "fish" else []
     unsupported = [key for key in unsupported if spec_is_active(spec, key)]
 
     hits, stats = apply_filters(items, spec, unsupported=unsupported)
+    if invalid_rows:
+        stats["invalid_rows"] = len(invalid_rows)
+        reasons = {}
+        for item in invalid_rows:
+            reason = item.get("_invalid") or "未知原因"
+            reasons[reason] = reasons.get(reason, 0) + 1
+        stats["invalid_reasons"] = reasons
     if not group_parts:
         # 不分新旧：筛完就是最终名单，一律算 Best 一组，由单一上限按 Rating 降序截断。
         # 版本窗口在这种模式下没有任何用途（它唯一的职责就是切新旧），不读它。
         for item in hits:
             item["_part"] = PART_BEST
-    hits = cap_parts(hits, caps)
+    hits = cap_parts(hits, caps, keep_floor)
 
     wanted = {PART_BEST} if not group_parts else set(selected_parts(best_or_new, include_selections))
     groups = group_by_part(hits)

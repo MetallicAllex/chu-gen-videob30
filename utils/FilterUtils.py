@@ -8,6 +8,8 @@
 都先 join 一次曲库再落成同一套键，缺失值为 None。
 """
 
+import math
+
 CANON_KEYS = (
     "_id", "_title", "_level_index", "_level", "_ds", "_score", "_rating",
     "_fc", "_chain", "_clear", "_rank", "_over_power",
@@ -82,6 +84,35 @@ def _num(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _int_value(value):
+    """整数身份字段：整数、整数浮点、纯数字串都算；布尔值不算（它是 int 子类）。"""
+    if isinstance(value, bool):
+        return None
+    number = _num(value)
+    if number is None or not math.isfinite(number) or number != int(number):
+        return None
+    return int(number)
+
+
+def identity_issue(song, provider):
+    """
+    过滤掉不该进 B30/N20 的条目：WORLD'S END、越界/缺失难度、无效曲目 ID。
+
+    这类条目留在候选池里会占掉组上限的坑位，最后被下游当成一条没有定数的成绩，
+    既不会报错也查不到原因。返回 None 表示普通谱面。
+    """
+    level = _int_value(song.get("level_index"))
+    if level is None or not 0 <= level <= 4:
+        return "难度不在 0–4"
+    chart_type = str(song.get("type", "")).strip().lower()
+    if chart_type in ("we", "worldsend"):
+        return "WORLD'S END 谱面"
+    raw_id = song.get("id") if provider == "lxns" else song.get("mid")
+    if _int_value(raw_id) is None:
+        return "曲目 ID 无效"
+    return None
 
 
 def _loose_eq(left, right):
@@ -203,6 +234,7 @@ def _fish_item(song, part, chart_index, alias_index):
     item.update(_fish_meta(chart_index, item["_id"], item["_level_index"]))
     if alias_index:
         item["_aliases"] = list(alias_index.get(item["_id"]) or alias_index.get(str(item["_id"])) or [])
+    item["_invalid"] = identity_issue(song, "fish")
     return item
 
 
@@ -291,6 +323,7 @@ def _lxns_song(song, part, song_index, new_versions):
     if part is None:
         new_versions = set(new_versions or [])
         item["_part"] = (PART_NEW if new_versions and item["_version"] in new_versions else PART_BEST)
+    item["_invalid"] = identity_issue(song, "lxns")
     return item
 
 
@@ -478,13 +511,16 @@ def _trim_number(value):
 
 # --- 截断与回显 -----------------------------------------------------------------
 
-def cap_parts(items, caps):
+def cap_parts(items, caps, keep_floor=False):
     """
     各组按单曲 Rating 稳定降序取前 k 条，组内截断、组间保持首次出现的顺序。
 
     排序而非原样输出，是因为下游 clip_id 直接按列表顺序编号：完整历史池截断后
     如果不按 Rating 排，做出来的存档会出现 Best_5 比 Best_1 分高。
     caps 里没有的组原样保留（简略成绩模式不下限，也就不会被重排）。
+
+    keep_floor=True 时把与第 k 条同 Rating 的后续谱面一并保留，组总量可以超过
+    上限。B30/N20 的边界上同分很常见，硬切会让玩家在「留哪几条」上凭列表顺序。
     """
     if not caps:
         return list(items)
@@ -500,7 +536,18 @@ def cap_parts(items, caps):
             kept.extend(members)
             continue
         members.sort(key=lambda pair: (-(_num(pair[1].get("_rating")) or 0.0), pair[0]))
-        kept.extend(members[:limit])
+        selected = members[:limit]
+        floor = _num(selected[-1][1].get("_rating")) if selected else None
+        if keep_floor and floor is not None and 0 < limit < len(members):
+            floor = round(floor, 2)
+            index = limit
+            while index < len(members):
+                rating = _num(members[index][1].get("_rating"))
+                if rating is None or round(rating, 2) != floor:
+                    break
+                selected.append(members[index])
+                index += 1
+        kept.extend(selected)
 
     return [item for _, item in kept]
 

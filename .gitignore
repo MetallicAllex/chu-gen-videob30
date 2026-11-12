@@ -213,3 +213,5 @@ assets/images/Base/content/init/*-bak.png
 assets/images/Frames/*-bak.png
 # 定数版本对比的预留底图，渲染实现尚未接入，先不入库
 assets/images/Base/content/versions/
+# 本机 OAuth 覆盖（公开客户端 ID / 回调端口），随包默认在 static/oauth_public_clients.json
+oauth_config.json
