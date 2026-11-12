@@ -48,15 +48,7 @@ fish_latest_version_path = './music_datasets/fish_latest_version.json'
 # 这份是筛选层要读的数据（不是记账），所以留在库那一层。
 cn_song_meta_path = './music_datasets/cn_songs_meta.json'
 
-# 难度等级映射关系
-REVERSE_LEVEL_LABELS = {
-    0: "BASIC",
-    1: "ADVANCED",
-    2: "EXPERT",
-    3: "MASTER",
-    4: "ULTIMA",
-}
-
+# 难度等级映射关系。0–4 有底图素材；5 是 WORLD'S END，素材与渲染都不支持，筛选项里不放开。
 LEVEL_LABELS = {
     "BASIC": 0,
     "ADVANCED": 1,
@@ -64,6 +56,8 @@ LEVEL_LABELS = {
     "MASTER": 3,
     "ULTIMA": 4,
 }
+
+REVERSE_LEVEL_LABELS = {v: k for k, v in LEVEL_LABELS.items()}
 
 # 连击达成类型
 CHUNI_COMBO_TYPES = [
@@ -117,15 +111,6 @@ CHUNI_RANK_TYPES = {
     "b": "B",
     "c": "C",
     "d": "D",
-}
-
-# 难度下标 -> 中文名。5 是 WORLD'S END，素材与渲染都不支持，筛选项里不放开
-CHUNI_LEVEL_NAMES = {
-    0: "BASIC",
-    1: "ADVANCED",
-    2: "EXPERT",
-    3: "MASTER",
-    4: "ULTIMA",
 }
 
 # 区间滑块的取值域 (min, max, step)。取的是两家实测范围的超集（水鱼完整历史

@@ -1,5 +1,6 @@
 import re
 import zlib
+from copy import deepcopy
 from typing import Sequence, cast
 import pandas as pd
 import streamlit as st
@@ -8,6 +9,10 @@ from utils.PageUtils import calculate_rating
 from utils.PathUtils import get_data_paths, get_user_versions, load_config
 from utils.DataUtils import load_config_with_types, save_song_data, _load_optional_json
 from utils.Variables import REVERSE_LEVEL_LABELS, CHUNI_COMBO_TYPES, CHUNI_CHAIN_TYPES, music_info_path, jp_music_info_path, intl_music_info_path
+from utils.CsvImport import (ALIASES as CSV_ALIASES, FIELD_LABELS as CSV_FIELD_LABELS,
+                             build_csv, build_template,
+                             build_indexes as build_csv_indexes,
+                             convert_rows as convert_csv_rows, read_csv, suggest_mapping)
 
 st.title("编辑 Best50 数据")
 
@@ -18,6 +23,11 @@ SORT_FIELDS = {
     "分数": "score",
     "Rating": "rating",
 }
+
+
+@st.cache_data(show_spinner=False)
+def _read_csv_cached(data: bytes):
+    return read_csv(data)
 
 def sort_b50_rows(rows, field, descending, group_by_prefix):
     """按所选字段重排。勾选分组时同前缀（Best / New / …）聚成一组，组内按该字段排"""
@@ -254,7 +264,120 @@ with st.container(border=True):
                     st.session_state.editing_b50_data = load_config_with_types(current_paths['data_file'])
                 
                 b50_data = st.session_state.editing_b50_data
-                
+
+                with st.expander("从 CSV 批量导入自定义记录", icon="📥"):
+                    st.caption("必选：曲名、难度、分数；Rating 建议一并填（结算页就有，留空会按分数和定数计算）。"
+                               "定数、游玩次数可不写，代码会按曲库补；曲师和曲目 ID 也自动补全。"
+                               "难度可写 BASIC / ADVANCED / EXPERT / MASTER / ULTIMA（或 绿/黄/红/紫/黑、0–4），分数 0–1010000。"
+                               "Combo / Chain 成片里用不到，不必填；真要带这两列也能识别。"
+                               "只收 .csv（Excel 里选「另存为 CSV UTF-8」）。")
+                    csv_file = st.file_uploader("选择 CSV 文件", type=["csv"], key="csv_upload",
+                                                disabled=not st.session_state.editing_enabled)
+                    if csv_file is None:
+                        st.session_state.pop("csv_preview", None)
+                    else:
+                        data = csv_file.getvalue()
+                        try:
+                            table = _read_csv_cached(data)
+                            mapping, suggestions = suggest_mapping(table.headers)
+                            st.caption(f"已识别 {len(table.headers)} 列（{table.encoding}）。"
+                                       "每个字段只能对应一列；拿不准的表头只给候选，请手动确认。")
+                            options = [None, *CSV_ALIASES]
+                            for index, header in enumerate(table.headers):
+                                mapping[index] = st.selectbox(
+                                    f"第 {index + 1} 列：{header or '空表头'}", options,
+                                    index=options.index(mapping[index]),
+                                    format_func=lambda field: "忽略此列" if field is None
+                                    else f"{CSV_FIELD_LABELS[field]} ({field})",
+                                    key=f"csv_map_{index}_{header}",
+                                    disabled=not st.session_state.editing_enabled,
+                                    help="候选：" + "、".join(suggestions[index]) if suggestions[index] else None)
+                            assigned = [field for field in mapping.values() if field]
+                            mapping_ok = len(assigned) == len(set(assigned))
+                            if not mapping_ok:
+                                st.warning("同一个字段只能映射一列，请先修正重复映射。", icon="⚠️")
+                            prefix = st.text_input("剪辑 ID 前缀", "PickUp", key="csv_prefix",
+                                                   disabled=not st.session_state.editing_enabled,
+                                                   help="只允许英文字母；实际写入为 前缀_序号，自动避开已有序号")
+                            mode = st.radio("导入方式", ["追加到当前存档", "替换整个存档"], horizontal=True,
+                                            key="csv_mode", disabled=not st.session_state.editing_enabled,
+                                            captions=["保留现有记录，只在末尾追加", "清空现有记录，只保留表内行"])
+                            prefix_ok = re.fullmatch(r"[a-zA-Z]+", prefix) is not None
+                            if not prefix_ok:
+                                st.warning("剪辑 ID 前缀只能包含英文字母。", icon="⚠️")
+                            signature = (zlib.crc32(data), tuple(mapping.items()), prefix, mode)
+                            if st.button("预览导入结果", icon="🔎",
+                                         disabled=not st.session_state.editing_enabled
+                                         or not prefix_ok or not mapping_ok):
+                                indexes = build_csv_indexes(load_config(music_info_path, use_cache=True),
+                                                            load_config(jp_music_info_path, use_cache=True),
+                                                            _load_optional_json(intl_music_info_path) or [])
+                                records, preview_rows = convert_csv_rows(
+                                    table, mapping, indexes, prefix=prefix,
+                                    existing_rows=b50_data if mode == "追加到当前存档" else [])
+                                st.session_state["csv_preview"] = {
+                                    "signature": signature, "records": records,
+                                    "preview": preview_rows, "consumed": False}
+                            draft = st.session_state.get("csv_preview")
+                            if draft and draft["signature"] == signature:
+                                st.dataframe(draft["preview"], hide_index=True, width="stretch")
+                                bad = sum(row["状态"] == "无法导入" for row in draft["preview"])
+                                st.write(f"可导入 {len(draft['records'])} 条；无法导入 {bad} 条。")
+                                accepted = st.checkbox(
+                                    "我已检查预览；无法导入的行会被跳过",
+                                    key=f"csv_accept_{zlib.crc32(repr(signature).encode())}",
+                                    disabled=not st.session_state.editing_enabled)
+                                replacing = mode == "替换整个存档"
+                                replace_ok = (not replacing) or st.checkbox(
+                                    "确认替换当前存档的全部记录", key="csv_replace_ok",
+                                    disabled=not st.session_state.editing_enabled)
+                                if st.button(f"导入 {len(draft['records'])} 条到当前存档", icon="📥",
+                                             type="primary",
+                                             disabled=not draft["records"] or draft["consumed"]
+                                             or not accepted or not replace_ok):
+                                    if replacing:
+                                        rows = deepcopy(draft["records"])
+                                    else:
+                                        rows = deepcopy(b50_data) + deepcopy(draft["records"])
+                                    dups = duplicate_clip_ids(rows)
+                                    if dups:
+                                        st.error(f"剪辑 ID {'、'.join(dups)} 重复，已拒绝写入。请换一个前缀。", icon="🚫")
+                                    else:
+                                        draft["consumed"] = True
+                                        st.session_state.pop("csv_preview", None)
+                                        save_song_data(rows, current_paths,
+                                                       f"已从 CSV 导入 {len(draft['records'])} 条记录")
+                            elif draft:
+                                st.info("文件或列映射已改变，请重新点「预览导入结果」。")
+                        except Exception as exc:
+                            st.error(f"CSV 导入失败：{exc}", icon="❌")
+
+                with st.expander("导出当前存档为 CSV", icon="📤"):
+                    st.caption("导出当前编辑中的全部记录（含三服定数），表头与导入功能完全一致，"
+                               "改完可以直接用上面的导入回填；「剪辑 ID」仅作参考，导入时会忽略。"
+                               "文件为 UTF-8（带 BOM），Excel 直接双击打开不会乱码。")
+                    export_col, template_col = st.columns(2)
+                    if export_col.button("生成导出文件", icon="🧾", key="csv_export_rows"):
+                        try:
+                            st.session_state["csv_export_bytes"] = (
+                                build_csv(b50_data),
+                                f"best50_{st.session_state.get('username', 'save')}_"
+                                f"{st.session_state.get('save_id', '')}.csv")
+                        except Exception as exc:
+                            st.error(f"生成 CSV 失败：{exc}", icon="❌")
+                    if template_col.button("下载空白模板", icon="📄", key="csv_export_template"):
+                        try:
+                            st.session_state["csv_export_bytes"] = (
+                                build_template(), "best50_template.csv")
+                        except Exception as exc:
+                            st.error(f"生成模板失败：{exc}", icon="❌")
+                    payload = st.session_state.get("csv_export_bytes")
+                    if payload:
+                        data, file_name = payload
+                        st.download_button("下载 .csv", data, file_name=file_name,
+                                           mime="text/csv; charset=utf-8",
+                                           key="csv_export_download")
+
                 # ========== 排序控制器（结果直接写入存档文件）==========
                 with st.expander("排序设置", expanded=False, icon="↕️"):
                     st.info("""
