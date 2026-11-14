@@ -9,7 +9,8 @@ asset_paths = {}
 root_path = "./assets"
 font_path = f"{root_path}/fonts"
 bgclips_path = f"{root_path}/BgClips"
-audios_path = f"{root_path}/Audios"
+# 只有 bgm.mp3 一个音频文件，直接放 assets 根目录，不再单独建 Audios/
+audios_path = root_path
 image_root_path = f"{root_path}/images"
 thumbnails_dir = f"{root_path}/thumbnails"
 combo_img_path = f"{image_root_path}/ComboStatus"

@@ -22,7 +22,7 @@
 ### CHUNITHM 开场视频与 BGM（MATE）
 
 - `assets/bgclips/bg.mp4` 换成 MATE 背景的 60fps 无音轨版本：1920×1080 / 60fps / 40.28s（原 50.47s，16.5MB → 14.2MB）。仍按现有取模逻辑循环；逐帧扫描无黑帧，设置页预览不会出声。
-- `assets/audios/bgm.mp3` 换成 `opening_chunithm_mate.mp3`：300.07s / 44.1kHz（原 86.86s / 48kHz，1.39MB → 4.80MB）。
+- `bgm.mp3` 换成 `opening_chunithm_mate.mp3`：300.07s / 44.1kHz（原 86.86s / 48kHz，1.39MB → 4.80MB）；文件从 `assets/Audios/` 移到 `assets/` 根目录，代码走 `audios_path = assets`，设置页备份改为 `assets/bgm_bak.mp3`。
 - 2 秒信息片段实测通过：1280×720 60fps、AAC 44.1kHz，BGM 有实际电平（mean -20.6 dB / max -3.9 dB）；40.28s 循环首尾帧差异 3.62，与旧 bg 的 3.89 同量级。
 - 上游 MATE 的 opening/ending BGM 是两份不同文件；本项目只有一条 `bgm.mp3`，结尾也使用开场 BGM，分开需再加 ending 路径与接线。
 

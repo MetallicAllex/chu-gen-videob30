@@ -207,7 +207,7 @@ _chat_text.txt
 
 # 素材兜底备份：样式编辑器在覆写前自动 copy2(当前→bak)，不随仓库/包体分发
 assets/BgClips/bg_bak.mp4
-assets/Audios/bgm_bak.mp3
+assets/bgm_bak.mp3
 assets/images/Base/content/content_base-bak.png
 assets/images/Base/content/default/content_base-bak.png
 assets/images/Base/content/init/*-bak.png
