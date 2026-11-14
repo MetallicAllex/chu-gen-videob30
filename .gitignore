@@ -189,6 +189,7 @@ cloudflare/
 # *.json
 
 # debug and test resources
+logs/
 tests/
 ffmpeg.exe
 ffprobe.exe
