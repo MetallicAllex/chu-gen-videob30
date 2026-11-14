@@ -18,7 +18,7 @@
             "bestNum": [245, 1017],
             "playCount": {
                 "base": [1170, 840],
-                "text": [1359, 865]
+                "text": [1350, 862]
             }
         },
         "video": {
@@ -79,7 +79,7 @@
         "title": 48,
         "artist": 36,
         "bestNum": 28,
-        "playCount": 30
+        "playCount": 24
     },
     "color": {
         "level": {
@@ -96,7 +96,7 @@
         "title": 900,
         "artist": 420,
         "bestNum": 200,
-        "playCount": 2000
+        "playCount": 59
     },
     "align": {
         "level": "center",

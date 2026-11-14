@@ -63,22 +63,36 @@ def create_blank_image(width, height, color=(0, 0, 0, 0)):
 # 文字允许的最大宽度：TextDraw 的默认值，也是存档里没配 maxWidth 时的取值。
 DEFAULT_TEXT_MAX_WIDTH = 2000
 
-# 默认模板右下「定数变动」面板。原底图把 CN/Mate 两枚 logo 烘死在像素里，
-# 三服对比要用 content_base_versions.png（同尺寸，logo 区已清空）再按所选版本重画。
-VERSION_COLUMN_LAYOUT_VERSION = 3  # 面板布局改动时 +1，让旧底图失效
+# 默认模板右下「定数变动」面板统一用 content_base.png（原 content_base_versions 的内容，
+# logo 区已清空），logo 由渲染时按所选版本重画；单版本/未选版本补默认 CN/Mate 两列。
+VERSION_COLUMN_LAYOUT_VERSION = 7  # 面板布局改动时 +1，让旧底图失效
 VERSION_COLUMN_MANIFEST_NAME = "versions_manifest.json"
-VERSION_PANEL_IMAGE_NAME = "content_base_versions.png"
+VERSION_PANEL_IMAGE_NAME = "content_base.png"
 VERSION_PANEL_LEFT = 1452
 VERSION_PANEL_RIGHT = 1873
-# 原底图把 logo 按列宽缩放后垂直居中在 y≈944：宽约 186，高随宽高比（94/82）。
-# 固定高度会让 logo 只有原设计的一半大，所以这里也按列宽反推高度。
-VERSION_PANEL_LOGO_CENTER_Y = 944
+# 三列时左右各留 18px，避免首尾 logo 贴住 MATE 白框边缘；两列仍用旧底图烤死的位置
+VERSION_PANEL_SIDE_PADDING = 18
+# 三列 logo 与列宽的间距；8 → 图标宽 120px，首尾仍有约 12px 白框留白
+VERSION_PANEL_LOGO_PADDING_3COL = 8
+# 定数区整体比旧底图上移 10px，给 MATE 面板底部留白；logo 按列宽缩放后
+# 垂直居中在 y=934，高随宽高比（94/82）。固定高度会让 logo 只有原设计的一半大。
+VERSION_PANEL_LOGO_CENTER_Y = 934
 VERSION_PANEL_LOGO_MAX_HEIGHT = 104
-VERSION_PANEL_VALUE_Y = 1018
+VERSION_PANEL_VALUE_Y = 1008
+# 三列时数值/三角再小一档：带上 ▲/▼ 后一列宽度只剩 128px，原 42/26 会挤在一起
+VERSION_PANEL_VALUE_SIZE_3COL = 36
+VERSION_PANEL_MARKER_SIZE_3COL = 22
+# 单版本（无选择列）的数值仍读模板 position，渲染时同步上移
+CONSTANT_VALUE_OFFSET_Y = -10
 VERSION_LOGO_DIR = f"{image_root_path}/Base/content/versions"
 VERSION_LOGO_FILES = {"CN": "cn.png", "JP": "jp.png", "INT": "int.png"}
 # 面板角标文案：logo 只画图案，哪一服靠这行小字点明
 SERVER_TAGS = {"CN": "国服", "JP": "日服", "INT": "国际服"}
+
+# MATE 底图的 SCORE/RATING 内框比旧卡面偏左上，数字粘贴点按底图补偿；
+# 换回旧底图时要一并撤掉。
+SCORE_NUMBER_OFFSET = (-10, -7)
+RATING_NUMBER_OFFSET = (-2, -14)
 
 # 文字/整图渲染指纹：目录存在、文件非空都不能证明图是最新的。
 # 改文本、改样式、换底图都要让对应产物失效；版本号用于以后合并逻辑变化时整体作废。
@@ -144,13 +158,19 @@ def _version_column_layout(count: int):
     """把「定数变动」面板按版本数量分列，返回每列中心与列宽。
 
     两列沿用原底图烤死的 logo 位置（1472-1658 / 1665-1848，中心 1565 / 1756），
-    数字也对齐这两个中心；三列才等分面板宽度。
+    数字也对齐这两个中心；三列等分面板宽度，但左右各留 18px，避免首尾 logo
+    贴住 MATE 白框边缘。
     """
     count = max(1, min(count, 3))
     width = VERSION_PANEL_RIGHT - VERSION_PANEL_LEFT
     column_width = width / count
     if count == 2:
         return [1565, 1756], column_width
+    if count == 3:
+        column_width = (width - VERSION_PANEL_SIDE_PADDING * 2) / count
+        centers = [int(VERSION_PANEL_LEFT + VERSION_PANEL_SIDE_PADDING
+                       + column_width * (i + 0.5)) for i in range(count)]
+        return centers, column_width
     centers = [int(VERSION_PANEL_LEFT + column_width * (i + 0.5)) for i in range(count)]
     return centers, column_width
 
@@ -226,17 +246,19 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
               and len(versions) >= 2
               and all(value is not None for value in value_list)
               and len({round(value, 1) for value in value_list if value is not None}) == 1)
-    # 按列宽缩放、垂直居中：与旧底图里烘死的 logo 同大（两列约 186 宽）。
-    logo_target_width = max(1, int(column_width - 24))
+    # 按列宽缩放、垂直居中：两列与旧底图里烘死的 logo 同大（约 186 宽）；
+    # 三列用独立 padding，便于在不挪列中心的前提下调图标大小。
+    logo_padding = 24 if len(versions) <= 2 else VERSION_PANEL_LOGO_PADDING_3COL
+    logo_target_width = max(1, int(column_width - logo_padding))
     logo_max_height = VERSION_PANEL_LOGO_MAX_HEIGHT
-    # 定数字号：旧底图/旧两栏一律是模板 level 字号（45）；三列时列宽只有 140，
-    # "15.0→" 用 45 会顶到面板边，压到 42 才能留出间距。
+    # 定数字号：旧底图/旧两栏一律是模板 level 字号（45）；三列时列宽只有 128，
+    # 带 ▲/▼ 后压到 36 才不挤到相邻列。
     value_size = max(20, int(value_font_size or 45))
     if len(versions) >= 3:
-        value_size = min(value_size, 42)
+        value_size = min(value_size, VERSION_PANEL_VALUE_SIZE_3COL)
     # 升降标记用三角：方向一眼可辨，颜色再强化（涨红、跌蓝、平灰）。
-    # 两列 30px、三列 26px——三列数字只有 42，三角再大就挤到相邻列。
-    marker_size = 30 if len(versions) <= 2 else 26
+    # 两列 30px、三列 22px——三列数字只有 36，三角再大就挤到相邻列。
+    marker_size = 30 if len(versions) <= 2 else VERSION_PANEL_MARKER_SIZE_3COL
     draw = ImageDraw.Draw(image)
     value_font = ImageFont.truetype(title_font_path, value_size)
     marker_font = ImageFont.truetype(title_font_path, marker_size)
@@ -380,8 +402,10 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
         center_x = (VERSION_PANEL_LEFT + VERSION_PANEL_RIGHT) // 2
         overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
         # 与标题横幅同宽：横幅白边在 1446 / 1876，线两端各内缩 2/4px，不再额外留 18px
+        # y 跟随定数块一起上移，保持 logo 行/数字行的原有间距
+        line_y = VERSION_PANEL_VALUE_Y - 16
         ImageDraw.Draw(overlay).line(
-            (1448, 1002, 1872, 1002),
+            (1448, line_y, 1872, line_y),
             fill=(50, 50, 50, 110), width=3)
         image.alpha_composite(overlay)
         # 合并时数字下移一点：分隔线和数字之间留出呼吸空间，否则紧贴在一起
@@ -433,12 +457,8 @@ def ScoreLoader(score: int = 0):
                 
                 char_y = 28 if char == ',' else 4
                 
-                # ========== 修改这里：只调整逗号的 X 偏移 ==========
-                if char == ',':
-                    comma_x_offset = -12  # 向左偏移3px，根据需要调整
-                    paste_x = current_x + comma_x_offset
-                else:
-                    paste_x = current_x
+                # 逗号素材右半是透明留白，槽位左对齐即可，不能再左移压住前一位
+                paste_x = current_x
                     
                 # 正确使用 paste：第三个参数是蒙版（alpha通道）
                 score_number_img.paste(char_img, (paste_x, char_y), char_img)
@@ -453,12 +473,24 @@ def RatingLoader(rating: float):
         raise ValueError("Rating 无效")
     
     # 按数值选择图像样式
-    if rating >= 17:
-        digit_style = "ex_rainbow"
-    elif rating >= 16:
-        digit_style = "rainbow"
-    else:
-        digit_style = "gold"
+    # CHUNITHM 用同一套 rating 数字字形，只按数值换颜色；
+    # 分档见 https://chunithm.org/intermediate/rating/
+    rating_styles = (
+        (17.00, "ex_rainbow"),
+        (16.00, "rainbow"),
+        (15.25, "platinum"),
+        (14.50, "gold"),
+        (13.25, "silver"),
+        (12.00, "bronze"),
+        (10.00, "purple"),
+        (7.00, "red"),
+        (4.00, "orange"),
+    )
+    digit_style = "green"
+    for threshold, style_name in rating_styles:
+        if rating >= threshold:
+            digit_style = style_name
+            break
     
     ra_number_formatted = f"{rating:.2f}"
     ra_number_img = Image.new('RGBA', (160, 50), (0, 0, 0, 0))
@@ -672,13 +704,10 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
         if template in ("default", "custom_default"):
             if record_detail['level_index'] not in range(0, 5):
                 raise ValueError(f"未知的等级索引: {record_detail['level_index']!r}（可选：0-4）")
-            if version_columns:
-                image_base_path = os.path.join(
-                    f"{image_root_path}/Base/content/default", VERSION_PANEL_IMAGE_NAME)
-                if not is_artifact_valid(image_base_path):
-                    raise FileNotFoundError(f"三服对比底图不存在：{image_base_path}")
-            else:
-                image_base_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base.png")
+            image_base_path = os.path.join(
+                f"{image_root_path}/Base/content/default", VERSION_PANEL_IMAGE_NAME)
+            if not is_artifact_valid(image_base_path):
+                raise FileNotFoundError(f"谱面确认底图不存在：{image_base_path}")
             with Image.open(image_base_path) as background:
                 background = background.convert("RGBA")
                 if background.size != (1920, 1080):
@@ -719,14 +748,33 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                         badge_delta=badge_delta,
                     )
                 else:
-                    # cur_pos = (1562, 1018)
-                    # next_pos = (1756, 1018)
-                    cur_pos = position['level']['current']
-                    next_pos = position['level']['next']
+                    # 模板坐标 (1562/1756, 1018)，渲染时叠定数块上移量
+                    cur_pos = (position['level']['current'][0],
+                               position['level']['current'][1] + CONSTANT_VALUE_OFFSET_Y)
+                    next_pos = (position['level']['next'][0],
+                                position['level']['next'][1] + CONSTANT_VALUE_OFFSET_Y)
                     cur_color = color['level']['current']
                     next_color = color['level']['next']
                     cur_next_size = size['level']
                     cur_next_align = align['level']
+
+                    # 底板不再烘死 logo：单版本/未选版本时补默认 CN/Mate 两列
+                    logo_centers, logo_column_width = _version_column_layout(2)
+                    logo_target_width = max(1, int(logo_column_width - 24))
+                    for logo_name, center_x in zip(("cn.png", "jp.png"), logo_centers):
+                        logo_path = os.path.join(VERSION_LOGO_DIR, logo_name)
+                        if not is_artifact_valid(logo_path):
+                            continue
+                        with Image.open(logo_path) as source:
+                            logo = source.convert("RGBA")
+                        scale = min(logo_target_width / logo.width,
+                                    VERSION_PANEL_LOGO_MAX_HEIGHT / logo.height)
+                        logo = logo.resize(
+                            (max(1, round(logo.width * scale)),
+                             max(1, round(logo.height * scale))),
+                            Resampling.LANCZOS)
+                        top = VERSION_PANEL_LOGO_CENTER_Y - logo.height // 2
+                        temp_img.alpha_composite(logo, (center_x - logo.width // 2, top))
 
                     cur_level = level_value
                     next_level = level_next_value
@@ -750,16 +798,18 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                                         font_size=cur_next_size, font_color=next_color, h_align=cur_next_align)
                 
                 # 分数
-                # score_pos = (706, 958)
-                score_pos = position['score']
+                # 模板坐标 (706, 958)，再叠 MATE 内框补偿
+                score_pos = (position['score'][0] + SCORE_NUMBER_OFFSET[0],
+                             position['score'][1] + SCORE_NUMBER_OFFSET[1])
                 score = ScoreLoader(record_detail["score"])
                 if score.mode != 'RGBA':
                     score = score.convert('RGBA')
                 temp_img.paste(score, score_pos, score)
 
                 # Rating
-                # rating_pos = (1216, 980)
-                rating_pos = position['rating']
+                # 模板坐标 (1216, 980)，再叠 MATE 内框补偿
+                rating_pos = (position['rating'][0] + RATING_NUMBER_OFFSET[0],
+                              position['rating'][1] + RATING_NUMBER_OFFSET[1])
                 rating = RatingLoader(record_detail["rating"])
                 if rating.mode != 'RGBA':
                     rating = rating.convert('RGBA')
@@ -831,14 +881,16 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                         temp_img.paste(play_count_base, play_count_base_pos, play_count_base)
                     
                     # 绘制游玩次数文字
-                    # text_central_pos = (1359, 865)
+                    # 文本居中在 PlayCountBase 的白框内（模板默认 1350,862）
                     text_central_pos = position['playCount']['text']
                     
                     play_count_text = str(PlayCount)
                     play_count_color = color['playCount']
                     play_count_size = size['playCount']
                     play_count_align = align['playCount']
+                    play_count_width = max_width.get('playCount') or DEFAULT_TEXT_MAX_WIDTH
                     temp_img = TextDraw(temp_img, play_count_text, text_central_pos,
+                                    max_width=play_count_width,
                                     font_path=title_font_path, font_size=play_count_size,
                                     font_color=play_count_color, h_align=play_count_align)
                 

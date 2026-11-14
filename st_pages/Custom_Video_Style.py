@@ -1,7 +1,7 @@
 import streamlit as st
 import os, shutil, time
 from utils.PathUtils import *
-from utils.ImageUtils import generate_single_image
+from utils.ImageUtils import generate_single_image, VERSION_PANEL_IMAGE_NAME
 from utils.Variables import root_path, bgclips_path, audios_path, image_root_path, thumbnails_dir
 
 # 页面标题
@@ -297,29 +297,33 @@ if os.path.exists(custom_dir):
                 tab_bg, tab_frames = st.tabs(["🎨 谱面确认框架", "🖼️ 难度框"])
                 with tab_bg:
                     if themes in ("default", "custom_default"):
-                        st.info("上传谱面确认框架（.png，分辨率 1920 × 1080）")
+                        st.info("上传谱面确认框架（.png，分辨率 1920 × 1080，底图请勿包含 CN/Mate logo）")
                         
                         # 初始化状态
                         if "bg_image_upload_info" not in st.session_state:
                             st.session_state.bg_image_upload_info = None
                         
+                        bg_image_name = VERSION_PANEL_IMAGE_NAME
+                        bg_image_bak_name = f"{os.path.splitext(bg_image_name)[0]}-bak.png"
                         # 检查备份文件是否存在
-                        bg_image_bak_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base-bak.png")
+                        bg_image_bak_path = os.path.join(
+                            f"{image_root_path}/Base/content/default", bg_image_bak_name)
                         has_bg_image_backup = os.path.exists(bg_image_bak_path)
                         
                         # 显示当前图片信息
-                        current_bg_image_path = os.path.join(f"{image_root_path}/Base/content/default", "content_base.png")
+                        current_bg_image_path = os.path.join(
+                            f"{image_root_path}/Base/content/default", bg_image_name)
                         if current_bg_image_path and os.path.exists(current_bg_image_path):
                             st.image(current_bg_image_path, caption="素材预览窗") # 添加窗口预览
                             bginfo_col1, bginfo_col2 = st.columns([.45, .55])
                             with bginfo_col1:
                                 file_size = os.path.getsize(current_bg_image_path) / (1024 * 1024)  # MB
-                                st.caption(f"当前使用 content_base.png ({file_size:.2f} MB)")
+                                st.caption(f"当前使用 {bg_image_name} ({file_size:.2f} MB)")
                             with bginfo_col2:
                                 # 显示备份文件信息（如果有）
                                 if has_bg_image_backup:
                                     bak_size = os.path.getsize(bg_image_bak_path) / (1024 * 1024)  # MB
-                                    st.caption(f"原始备份 content_base-bak.png ({bak_size:.2f} MB)", help="如果自动还原失败，请手动复制 content_base-bak.png 修改为 content_base.png 还原")
+                                    st.caption(f"原始备份 {bg_image_bak_name} ({bak_size:.2f} MB)", help=f"如果自动还原失败，请手动复制 {bg_image_bak_name} 修改为 {bg_image_name} 还原")
                         
                         # 如果已经有上传信息，显示上传状态
                         if st.session_state.bg_image_upload_info:
@@ -358,7 +362,7 @@ if os.path.exists(custom_dir):
                             # 显示文件上传器
                             bg_image_file = st.file_uploader(
                                 "选择自定义背景图片", type="png",key="bg_image_uploader", disabled=sel_preset_style != "自定义", 
-                                help="❌️ 仅自定义样式可修改" if sel_preset_style != "自定义" else "将替换现有的 content_base.png 文件（将应用到所有谱面确认）"
+                                help="❌️ 仅自定义样式可修改" if sel_preset_style != "自定义" else f"将替换现有的 {bg_image_name} 文件（将应用到所有谱面确认）"
                             )
                             
                             # 如果选择了文件，显示文件信息和确认按钮
