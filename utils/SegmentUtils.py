@@ -14,9 +14,11 @@ from moviepy import ImageClip
 from utils.DataUtils import sort_video_files
 from utils.ImageUtils import create_blank_image
 from utils.PageUtils import format_time_difference
-from utils.PathUtils import is_artifact_valid, load_config, save_config, ERROR_LOG_DIR, TEMP_GENERATED_DIR
+from utils.PathUtils import (is_artifact_valid, load_config, save_config,
+                             ERROR_LOG_DIR, TEMP_GENERATED_DIR, write_error_log)
 from utils.Variables import (REVERSE_LEVEL_LABELS, image_root_path,
-                             SOFTWARE_ENCODER, fallback_encoder_on_failure)
+                             SOFTWARE_ENCODER, XFADE_TRANSITIONS,
+                             fallback_encoder_on_failure)
 
 
 # ==================== 常量定义 ====================
@@ -130,7 +132,9 @@ def global_render_signature(encoder_param: dict, style_config: dict,
         'overlay': position.get('overlay'),
         'height': position.get('height'),
         'transition': 'bake' if bake_fades else 'xfade',
-        'trans_enabled': bool(trans.get('enabled')),
+        # xfade 在 IslandConcat 拼接阶段执行，不属于片段编码内容；否则用户只改
+        # 转场方向/时长就会在未勾选覆盖时整批重渲，违背“已有片段默认复用”的开关语义。
+        # 片段内烘焙淡变时才把转场参数记入片段指纹。
         # 响度口径的版本号。修复前 Quadrants 路的 main 片段不施加逐段增益
         # （QuadRenderer 里 volume_adjust_db 写死 0），修复后两路共用
         # measure_audio_gain_db。这个键必须进指纹：否则升级前渲好的 GPU 片段会被
@@ -138,11 +142,12 @@ def global_render_signature(encoder_param: dict, style_config: dict,
         # 而界面上看不出来。代价是升级后第一次渲染会整批重编（两条路各一次）。
         'loudness': 'per-clip-v2',
     }
-    # duration 只在启用转场时影响产物（xfade/acrossfade 的窗口长度，或片段内烘焙的
-    # 淡变时长）。禁用转场时它被两边都忽略——旧写法无条件收进指纹，改一个不生效的
-    # 数值就触发整批重渲。
-    if trans.get('enabled'):
-        payload['trans_duration'] = trans.get('duration')
+    if bake_fades:
+        payload['trans_enabled'] = bool(trans.get('enabled'))
+        payload['trans_name'] = ((trans.get('name') or trans.get('transition') or 'fade')
+                                 if trans.get('enabled') else 'fade')
+        if trans.get('enabled'):
+            payload['trans_duration'] = trans.get('duration')
     return _digest(payload)
 
 
@@ -1237,6 +1242,12 @@ def render_all_video_clips(
             （与 quad 路径保持一致，回退与 GPU 片段混用时过渡风格统一）。
     """
     from utils.Variables import bgclips_path
+
+    transition_name = (trans_param or {}).get('name') or (trans_param or {}).get('transition') or 'fade'
+    if transition_name not in XFADE_TRANSITIONS:
+        raise ValueError(
+            f"不支持的 xfade 转场: {transition_name!r}；可选值见 utils.Variables.XFADE_TRANSITIONS"
+        )
     
     resolution = encoder_param['resolution']
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1391,7 +1402,7 @@ def render_all_video_clips(
             print(f"    - {_one}")
         if len(failed) > 12:
             print(f"    … 其余 {len(failed) - 12} 段从略")
-        print("[SegmentUtils] ffmpeg 失败详情见 ./videos/error_logs/ 下本次生成的日志；"
+        print(f"[SegmentUtils] ffmpeg 失败详情见 logs/video_generate/ 下本次生成的日志；"
               "带原因括号的属于缺素材，补素材后重新生成配置即可")
     return failed
 

@@ -216,6 +216,158 @@ XFADE_TRANSITIONS = [
     "revealdown",     # 57 向下方显示
 ]
 
+XFADE_TRANSITION_LABELS = {
+    "fade": "渐变",
+    "wipeleft": "向左擦除",
+    "wiperight": "向右擦除",
+    "wipeup": "向上擦除",
+    "wipedown": "向下擦除",
+    "slideleft": "向左滑动",
+    "slideright": "向右滑动",
+    "slideup": "向上滑动",
+    "slidedown": "向下滑动",
+    "circlecrop": "圆形裁剪",
+    "rectcrop": "矩形裁剪",
+    "distance": "距离",
+    "fadeblack": "黑色渐变",
+    "fadewhite": "白色渐变",
+    "radial": "径向",
+    "smoothleft": "平滑向左滑动",
+    "smoothright": "平滑向右滑动",
+    "smoothup": "平滑向上滑动",
+    "smoothdown": "平滑向下滑动",
+    "circleopen": "圆形打开",
+    "circleclose": "圆形关闭",
+    "vertopen": "垂直打开",
+    "vertclose": "垂直关闭",
+    "horzopen": "水平打开",
+    "horzclose": "水平关闭",
+    "dissolve": "溶解",
+    "pixelize": "像素化",
+    "diagtl": "左上到右下对角线",
+    "diagtr": "右上到左下对角线",
+    "diagbl": "左下到右上对角线",
+    "diagbr": "右下到左上对角线",
+    "hlslice": "水平向左切片",
+    "hrslice": "水平向右切片",
+    "vuslice": "垂直向上切片",
+    "vdslice": "垂直向下切片",
+    "hblur": "水平模糊",
+    "fadegrays": "灰度渐变",
+    "wipetl": "左上到右下擦除",
+    "wipetr": "右上到左下擦除",
+    "wipebl": "左下到右上擦除",
+    "wipebr": "右下到左上擦除",
+    "squeezeh": "水平挤压",
+    "squeezev": "垂直挤压",
+    "zoomin": "放大",
+    "fadefast": "快速渐变",
+    "fadeslow": "慢速渐变",
+    "hlwind": "水平向左风",
+    "hrwind": "水平向右风",
+    "vuwind": "垂直向上风",
+    "vdwind": "垂直向下风",
+    "coverleft": "从左侧覆盖",
+    "coverright": "从右侧覆盖",
+    "coverup": "从上方覆盖",
+    "coverdown": "从下方覆盖",
+    "revealleft": "向左侧显示",
+    "revealright": "向右侧显示",
+    "revealup": "向上方显示",
+    "revealdown": "向下方显示",
+}
+
+XFADE_TRANSITION_GROUPS = {
+    "基础与渐变": [
+        "fade", "fadeblack", "fadewhite", "fadegrays", "dissolve",
+    ],
+    "方向擦除": [
+        "wipeleft", "wiperight", "wipeup", "wipedown",
+        "wipetl", "wipetr", "wipebl", "wipebr",
+    ],
+    "方向滑动": [
+        "slideleft", "slideright", "slideup", "slidedown",
+        "smoothleft", "smoothright", "smoothup", "smoothdown",
+    ],
+    "覆盖与显示": [
+        "coverleft", "coverright", "coverup", "coverdown",
+        "revealleft", "revealright", "revealup", "revealdown",
+    ],
+    "几何形状": [
+        "circlecrop", "rectcrop", "circleopen", "circleclose",
+        "vertopen", "vertclose", "horzopen", "horzclose", "radial",
+    ],
+    "对角线与切片": [
+        "diagtl", "diagtr", "diagbl", "diagbr",
+        "hlslice", "hrslice", "vuslice", "vdslice",
+    ],
+    "模糊与像素": [
+        "hblur", "pixelize", "distance",
+    ],
+    "挤压与缩放": [
+        "squeezeh", "squeezev", "zoomin",
+    ],
+    "速度变化": [
+        "fadefast", "fadeslow",
+    ],
+    "风向效果": [
+        "hlwind", "hrwind", "vuwind", "vdwind",
+    ],
+}
+
+XFADE_DIRECTION_FAMILIES = {
+    "擦除": {
+        "直线擦除": {
+            "向左": "wipeleft", "向右": "wiperight",
+            "向上": "wipeup", "向下": "wipedown",
+        },
+        "对角线擦除": {
+            "左上到右下": "wipetl", "右上到左下": "wipetr",
+            "左下到右上": "wipebl", "右下到左上": "wipebr",
+        },
+    },
+    "滑动": {
+        "普通滑动": {
+            "向左": "slideleft", "向右": "slideright",
+            "向上": "slideup", "向下": "slidedown",
+        },
+        "平滑滑动": {
+            "向左": "smoothleft", "向右": "smoothright",
+            "向上": "smoothup", "向下": "smoothdown",
+        },
+    },
+    "覆盖": {
+        "覆盖": {
+            "从左侧": "coverleft", "从右侧": "coverright",
+            "从上方": "coverup", "从下方": "coverdown",
+        },
+    },
+    "显示": {
+        "显示": {
+            "向左侧": "revealleft", "向右侧": "revealright",
+            "向上方": "revealup", "向下方": "revealdown",
+        },
+    },
+    "风向": {
+        "风": {
+            "向左": "hlwind", "向右": "hrwind",
+            "向上": "vuwind", "向下": "vdwind",
+        },
+    },
+    "切片": {
+        "水平/垂直切片": {
+            "水平向左": "hlslice", "水平向右": "hrslice",
+            "垂直向上": "vuslice", "垂直向下": "vdslice",
+        },
+    },
+    "对角线": {
+        "对角线": {
+            "左上到右下": "diagtl", "右上到左下": "diagtr",
+            "左下到右上": "diagbl", "右下到左上": "diagbr",
+        },
+    },
+}
+
 # xfade 滤镜前缀
 XFADE_TRANSITIONS_PREFIX = [
     "wipe",           # 1  从左向右（右向左、下向上、上向下）擦除
@@ -258,19 +410,27 @@ XFADE_TRANSITIONS_SUFFIX = [
 SOFTWARE_ENCODER = 'libx264'      # 兜底那行：不参与实探（探它没意义），永远最后被选
 SOFTWARE_ENCODERS = ['libx264', 'libx265']   # 可在页面上点名的软件档；后者随构建可选
 HW_ENCODERS = [
-    {'codec': 'h264_videotoolbox', 'name': 'macOS VideoToolbox', 'brand': None,
+    {'codec': 'h264_videotoolbox', 'name': 'VideoToolbox H.264 / AVC', 'brand': None,
      'tuning': ['-allow_sw', '1']},
-    {'codec': 'h264_nvenc', 'name': 'NVIDIA NVENC', 'brand': 'NVIDIA',
+    {'codec': 'hevc_videotoolbox', 'name': 'VideoToolbox H.265 / HEVC', 'brand': None,
+     'tuning': ['-allow_sw', '1', '-tag:v', 'hvc1']},
+    {'codec': 'h264_nvenc', 'name': 'NVENC H.264 / AVC', 'brand': 'NVIDIA',
      'tuning': ['-preset', 'p4', '-tune', 'hq']},
-    {'codec': 'h264_amf', 'name': 'AMD AMF', 'brand': 'AMD',
+    {'codec': 'hevc_nvenc', 'name': 'NVENC H.265 / HEVC', 'brand': 'NVIDIA',
+     'tuning': ['-preset', 'p4', '-tune', 'hq', '-tag:v', 'hvc1']},
+    {'codec': 'h264_amf', 'name': 'AMF H.264 / AVC', 'brand': 'AMD',
      'tuning': ['-quality', 'balanced']},
-    {'codec': 'h264_qsv', 'name': 'Intel QuickSync', 'brand': 'Intel',
+    {'codec': 'hevc_amf', 'name': 'AMF H.265 / HEVC', 'brand': 'AMD',
+     'tuning': ['-quality', 'balanced', '-tag:v', 'hvc1']},
+    {'codec': 'h264_qsv', 'name': 'QuickSync H.264 / AVC', 'brand': 'Intel',
      'tuning': ['-preset', 'medium']},
-    {'codec': SOFTWARE_ENCODER, 'name': 'CPU H.264 / AVC (libx264)', 'brand': None,
+    {'codec': 'hevc_qsv', 'name': 'QuickSync H.265 / HEVC', 'brand': 'Intel',
+     'tuning': ['-preset', 'medium', '-tag:v', 'hvc1']},
+    {'codec': SOFTWARE_ENCODER, 'name': 'H.264 / AVC (libx264)', 'brand': None,
      'software': True, 'tuning': ['-preset', 'medium']},
     # AVC 与 H.264 是同一个东西，x264 就是它的软件编码器；H.265/HEVC 单独一档。
     # hvc1 标签让 mp4 在 QuickTime/苹果系播放器里可识别（ffmpeg 默认写 hev1）。
-    {'codec': 'libx265', 'name': 'CPU H.265 / HEVC (libx265)', 'brand': None,
+    {'codec': 'libx265', 'name': 'H.265 / HEVC (libx265)', 'brand': None,
      'software': True, 'tuning': ['-preset', 'medium', '-tag:v', 'hvc1']},
 ]
 ENCODER_BY_CODEC = {row['codec']: row for row in HW_ENCODERS}
@@ -335,13 +495,15 @@ def encoder_choices(available, software_available=()):
     auto_name = available[0][1] if available else f"无可用硬件编码，将回退 {SOFTWARE_ENCODER}"
     # 标注成 list：不写就被推成 list[tuple[str, None]]（第一项恒为 None），
     # 后面 append 带编码器名的元组时类型对不上。
-    opts: list = [(f"自动（本机探测：{auto_name}）", None)]
+    opts: list = [(f"自动 ({auto_name})", None)]
     for codec, name in available:
         brand = (ENCODER_BY_CODEC.get(codec) or {}).get('brand')
         if brand:
-            opts.append((f"【硬件】{name}（{brand}）", codec))
+            opts.append((f"[H] {name} ({brand})", codec))
+        else:
+            opts.append((f"[H] {name}", codec))
     for codec, name in software_available:
-        opts.append((f"【软件】{name}", codec))
+        opts.append((f"[S] {name}", codec))
     return opts
 
 # 预设视频列表/合集源

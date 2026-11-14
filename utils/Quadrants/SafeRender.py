@@ -6,8 +6,7 @@ SafeRender.py - 安全渲染入口（Quadrants 优先，失败优雅回退 Segme
 - 任一步抛异常 / Quadrants 不可用 → 打印 traceback 并回退到现有 proven 路径
   utils.SegmentUtils（render_all_video_clips + combine_full_video_direct）。
 
-回退时强制 force_render，覆盖 Quadrants 可能产生的半成品片段，保证回退输出自洽
-（SegmentUtils 片段含烘焙淡入淡出 + 普通 concat）。回退仅在失败时触发，重渲染可接受。
+- 回退时沿用用户的 force_render 开关：未勾选则复用有效片段，仅补渲缺失/过期片段；勾选后才覆盖全部片段。
 
 本模块**不修改任何页面**；将来接线只需把 6_Compostie_Videos.py 的
 render_all_video_clips(...) + combine_full_video_direct(...) 两行换成
@@ -23,28 +22,49 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Set
 
-from utils.PathUtils import TEMP_GENERATED_DIR
+from utils.PathUtils import APP_ROOT, TEMP_GENERATED_DIR
 
 from .RenderIO import (get_ffmpeg_binary, detect_hw_encoder, retry_on_lock,
                        is_transient_lock_error, run_owned_complete,
                        get_active_render_job, SegmentRenderError)
 
 
+def _render_output_dir(path: str) -> str:
+    """Resolve page-relative output paths once, before the worker can change cwd."""
+    if os.path.isabs(path):
+        return os.path.abspath(path)
+    return os.path.abspath(os.path.join(APP_ROOT, path))
+
+
+def _final_video_path(video_output_path: str, username: str) -> str:
+    return os.path.join(_render_output_dir(video_output_path), f"{username}_Best50.mp4")
+
+
+def _require_final_video(video_output_path: str, username: str) -> str:
+    path = _final_video_path(video_output_path, username)
+    if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+        raise RuntimeError(f"成片未落盘到用户存档目录：{path}")
+    return path
+
+
 def _normalize_video_audio(input_path: str, output_path: str):
-    """对成片做单次 ffmpeg loudnorm 音频均衡（视频流拷贝），失败则直接用原文件。
+    """对成片做 loudnorm，并以原子替换方式保存到最终目录。
 
-    节选自 utils/VideoUtils-mgv.py 的 _normalize_video_audio。
-    成品名被其他程序占用（常见：旧成片还在播放器里开着）时退让重试；
-    重试穷尽后抛出占用类异常，由调用方判定「不回退 CPU、直接报可操作错误」。
-
-    子进程必须登记给当前 job：这一步是整场渲染的最后一段，而它以前用的是裸
-    `subprocess.run`——Popen 归 run() 私有，cancel_render 手里没有句柄，
-    用户在「音频处理」阶段点取消只能等整片 loudnorm 自己跑完。这条线路其他地方
-    早就为取消改用了登记通道（见 IslandConcat._run_subprocess_checked）。
+    中间成片位于 ``videos/temp_generated``，最终文件位于存档的 ``videos`` 目录。
+    不能让 ffmpeg 直接打开最终文件名：失败时可能留下空壳，收尾清理也可能让日志
+    看似成功但用户找不到文件。先写同目录临时文件，确认非空后再替换最终文件。
     """
-    if os.path.exists(output_path):
-        retry_on_lock(lambda: os.remove(output_path),
-                      what=f"清理旧成片 {os.path.basename(output_path)}")
+    input_path = os.path.abspath(input_path)
+    output_path = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    temp_output = f"{output_path}.rendering-{uuid.uuid4().hex}.tmp.mp4"
+
+    def _valid(path: str) -> bool:
+        try:
+            return os.path.isfile(path) and os.path.getsize(path) > 0
+        except OSError:
+            return False
+
     try:
         cmd = [
             get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'warning',
@@ -53,28 +73,44 @@ def _normalize_video_audio(input_path: str, output_path: str):
             '-af', 'loudnorm=I=-20:TP=-1.5:LRA=11,aresample=48000:first_pts=0,asetpts=N/SR/TB',
             '-c:a', 'aac', '-b:a', '192k',
             '-ar', '48000',
-            output_path
+            temp_output
         ]
         rc, _out, err = run_owned_complete(cmd)
         job = get_active_render_job()
         if job is not None:
-            # 被取消终止的 loudnorm 返回码非零，形状和"均衡失败"一模一样：
-            # 不先过这道检查点，取消会把下面那个 os.replace 执行掉——把半成品
-            # 直接挂上成品名，还报"已跳过音频均衡"。
             job.check_cancelled()
-        if rc != 0:
-            raise RuntimeError(f"ffmpeg 返回码 {rc}：{(err or '').strip()[-300:]}")
+        if rc != 0 or not _valid(temp_output):
+            detail = (err or '').strip()[-300:]
+            raise RuntimeError(f"ffmpeg 返回码 {rc} 或未生成有效临时成片：{detail}")
+        retry_on_lock(lambda: os.replace(temp_output, output_path),
+                      what=f"落盘成片 {os.path.basename(output_path)}")
+        if not _valid(output_path):
+            raise RuntimeError(f"原子替换后成片不存在或为空：{output_path}")
         print(f"[SafeRender] 音频均衡化完成: {output_path}")
     except RenderCancelled:
         raise
     except Exception as e:
+        try:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+        except OSError:
+            pass
         print(f"[SafeRender] Warning: 音频均衡化失败 ({e})，尝试直接使用拼接结果")
-        # 均衡失败也要把拼接结果落到成品名上；目标被占用时重试后仍失败则上抛，
-        # 绝不能在这条路径上静默吞掉——否则用户拿到的成片缺了最后一步还不知情
+        if not _valid(input_path):
+            raise RuntimeError(f"音频均衡失败且拼接中间文件无效：{input_path}") from e
         retry_on_lock(lambda: os.replace(input_path, output_path),
                       what=f"落盘成片 {os.path.basename(output_path)}")
+        if not _valid(output_path):
+            raise RuntimeError(f"直接落盘后成片不存在或为空：{output_path}") from e
         print(f"[SafeRender] 已跳过音频均衡，直接使用拼接结果: {output_path}")
         return
+    finally:
+        try:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+        except OSError as e:
+            print(f"[SafeRender] Warning: 清理音频临时文件失败（不影响成片）: {e}")
+
     # 均衡成功后清理中间产物；失败不影响成片
     try:
         if os.path.exists(input_path) and input_path != output_path:
@@ -360,6 +396,8 @@ def render_full_video_safe(
     """
     job = _render_job or RenderJob(uuid.uuid4().hex)
     job.check_cancelled()
+    # 页面给出的存档目录通常是相对路径；后台线程必须在入队前锚定到应用根。
+    video_output_path = _render_output_dir(video_output_path)
     if not _RENDER_LOCK.acquire(blocking=False):
         print("[SafeRender] 拒绝渲染：已有渲染任务在进行中")
         return {
@@ -395,10 +433,10 @@ def _render_classic(video_configs, video_output_path, trans_param, encoder_param
 
     为什么要搬进线程：以前它直接在 Streamlit 脚本线程里跑，脚本不返回 → 页面整场冻结，
     浏览器里既没有进度也点不动任何东西，「取消」更无从下手（进度只存在于控制台）。
-    语义与原来一致：片段内烘焙淡变（bake_fades 默认 True）+ concat 流拷贝拼接，
-    不走 xfade islands，也不做loudnorm 二次编码。
+    片段由 SegmentUtils 生成，转场交给 FFmpeg xfade island 拼接；未配置名称时使用 fade。
     """
-    from utils.SegmentUtils import render_all_video_clips, combine_full_video_direct
+    from utils.SegmentUtils import render_all_video_clips
+    from utils.Quadrants.IslandConcat import combine_full_video_xfade_islands
 
     RENDER_STATUS.job = job
     RENDER_STATUS.phase = "初始化"
@@ -421,7 +459,7 @@ def _render_classic(video_configs, video_output_path, trans_param, encoder_param
         RENDER_STATUS.phase = "渲染片段（CPU）"
         failed = render_all_video_clips(
             video_configs, video_output_path, trans_param, encoder_param,
-            style_config, force_render, progress=_cb,
+            style_config, force_render, bake_fades=False, progress=_cb,
         ) or []
         if failed:
             detail = "、".join(str(x) for x in failed[:12])
@@ -429,15 +467,24 @@ def _render_classic(video_configs, video_output_path, trans_param, encoder_param
             raise RuntimeError(f"有 {len(failed)} 段没有产出文件，不拼接成片：{detail}{more}")
         if not clips_only:
             RENDER_STATUS.phase = "拼接成片"
-            out = combine_full_video_direct(video_output_path, username)
+            trans_enabled = trans_param.get('enabled', True) if trans_param else True
+            trans_time = trans_param.get('duration', 1.0) if (trans_param and trans_enabled) else 0
+            out = combine_full_video_xfade_islands(
+                video_output_path,
+                trans_time=trans_time,
+                codec=encoder_param.get('codec'),
+                bitrate=f"{encoder_param.get('bitrate', 5000)}k",
+                video_fps=int(encoder_param.get('fps') or 60),
+                transition_name=(trans_param or {}).get('name') or (trans_param or {}).get('transition') or 'fade',
+            )
+            final_path = _final_video_path(video_output_path, username)
+            _normalize_video_audio(out, final_path)
+            final_path = _require_final_video(video_output_path, username)
             RENDER_STATUS.note = (
-                # 一段都没渲（参数与素材都没变，全被指纹判为"已完成"）时必须说清原因：
-                # 浮窗的「无事可渲」提示认的就是这个前缀。实测把成片路径塞进 note 会让它
-                # 显示成「⚠️ 成片：…一秒结束」，看着像坏了，其实是没活可干。
-                f"成片：{out}" if RENDER_STATUS.total_clips else
+                f"成片：{final_path}" if RENDER_STATUS.total_clips else
                 "未渲染任何片段：参数与素材都没变，全部片段按渲染指纹跳过；"
                 "需要重渲请勾选「覆盖已存在的视频」。"
-                + ("" if clips_only else f"（成片沿用上一次的结果：{out}）")
+                + ("" if clips_only else f"（成片沿用上一次的结果：{final_path}）")
             )
         RENDER_STATUS.phase = "完成"
         print(f"[SafeRender] 经典路径渲染完成（backend=segmentutils, 线程内）")
@@ -469,7 +516,7 @@ def _render_full_video_safe_impl(
     Args:
         video_configs:    {'intro': [...], 'main': [...], 'ending': [...]}
         video_output_path:片段与成片输出目录
-        trans_param:      {'enabled': bool, 'duration': float}
+        trans_param:      {'enabled': bool, 'duration': float, 'name': str}
         encoder_param:    {'resolution': (w,h), 'bitrate': int(kbps), ...}
         style_config:     customization.json 内容
         username:         用于成片命名 {username}_Best50.mp4
@@ -564,10 +611,12 @@ def _render_full_video_safe_impl(
                 island_out = combine_full_video_xfade_islands(
                     video_output_path, trans_time=trans_time, codec=codec,
                     bitrate=bitrate, video_fps=video_fps,
+                    transition_name=(trans_param or {}).get('name') or (trans_param or {}).get('transition') or 'fade',
                 )
                 RENDER_STATUS.phase = "音频处理"
-                final_path = os.path.join(video_output_path, f"{username}_Best50.mp4")
+                final_path = _final_video_path(video_output_path, username)
                 _normalize_video_audio(island_out, final_path)
+                final_path = _require_final_video(video_output_path, username)
                 print(f"[SafeRender] Quadrants 成片完成: {final_path}")
 
             RENDER_STATUS.phase = "完成"
@@ -684,10 +733,12 @@ def _render_full_video_safe_impl(
             island_out = combine_full_video_xfade_islands(
                 video_output_path, trans_time=trans_time, codec=codec,
                 bitrate=bitrate, video_fps=video_fps,
+                transition_name=(trans_param or {}).get('name') or (trans_param or {}).get('transition') or 'fade',
             )
             RENDER_STATUS.phase = "音频处理"
-            final_path = os.path.join(video_output_path, f"{username}_Best50.mp4")
+            final_path = _final_video_path(video_output_path, username)
             _normalize_video_audio(island_out, final_path)
+            final_path = _require_final_video(video_output_path, username)
             print(f"[SafeRender] 回退成片完成: {final_path}")
         RENDER_STATUS.phase = "完成"
         RENDER_STATUS.backend = "segmentutils"

@@ -5,7 +5,7 @@ import streamlit as st
 from PIL.Image import Resampling
 from PIL import Image, ImageDraw, ImageFont
 from utils.PageUtils import calculate_rating, parse_oped_text_markers
-from utils.PathUtils import load_config, save_config, is_artifact_valid
+from utils.PathUtils import load_config, save_config, is_artifact_valid, write_error_log
 from utils.TextRenderer import get_failed_emojis, render_text_to_image
 from utils.Variables import image_root_path, ui_font_path, title_font_path, level_font_path, combo_img_path, font_path, REVERSE_LEVEL_LABELS
 
@@ -1043,8 +1043,11 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
 
         _save_png_atomic(background, os.path.join(output_path, f"{prefix}_{index}.png"))
     except Exception as e:
-        print(f"生成 {prefix} 第 {index} 张图像失败：{e}")
-        print(traceback.format_exc())
+        error_log_path = write_error_log(
+            "image_generate", "image_generation_errors.log",
+            f"生成 {prefix} 第 {index} 张图像失败：{e}\n{traceback.format_exc()}"
+        )
+        print(f"生成 {prefix} 第 {index} 张图像失败，详细日志：{error_log_path}")
         raise
 
 def render_all_images(video_config_file, style_config_file_path, save_paths, force_regen=False):

@@ -23,9 +23,36 @@ TEMP_GENERATED_DIR = os.path.join(APP_ROOT, "videos", "temp_generated")
 # 改成绝对路径会连带改动存档里的路径格式。可写性由 st_app.py 启动时的 chdir 保证。
 DOWNLOADS_DIR = os.path.join("videos", "downloads")
 
-# 渲染失败日志的目录。收成一条常量除了"别处不再各写一遍"，还要让离线测试能把它指到沙盒里——
-# 否则跑一次取消实验就往仓库的 videos/error_logs 丢三条日志。可写性同样由启动时的 chdir 保证。
-ERROR_LOG_DIR = os.path.join("videos", "error_logs")
+# 所有诊断日志按功能归档；目录使用应用根路径，避免启动目录变化导致日志散落。
+LOG_ROOT = os.path.join(APP_ROOT, "logs")
+LOG_DIRS = {
+    "startup": os.path.join(LOG_ROOT, "startup"),
+    "video_generate": os.path.join(LOG_ROOT, "video_generate"),
+    "image_generate": os.path.join(LOG_ROOT, "image_generate"),
+    "download": os.path.join(LOG_ROOT, "download"),
+    "auth": os.path.join(LOG_ROOT, "auth"),
+    "data": os.path.join(LOG_ROOT, "data"),
+}
+STARTUP_LOG_DIR = LOG_DIRS["startup"]
+ERROR_LOG_DIR = LOG_DIRS["video_generate"]
+IMAGE_ERROR_LOG_DIR = LOG_DIRS["image_generate"]
+DOWNLOAD_LOG_DIR = LOG_DIRS["download"]
+AUTH_LOG_DIR = LOG_DIRS["auth"]
+DATA_LOG_DIR = LOG_DIRS["data"]
+
+
+def write_error_log(category, filename, content):
+    """将功能错误写入 logs 下对应分类目录，并返回绝对路径。"""
+    log_dir = LOG_DIRS.get(category)
+    if log_dir is None:
+        raise ValueError(f"未知日志分类：{category}")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, filename)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(content)
+        if content and not content.endswith("\n"):
+            f.write("\n")
+    return log_path
 
 def get_user_base_dir(username):
     """Get base directory for user data"""

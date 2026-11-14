@@ -3,7 +3,9 @@ from datetime import datetime
 from utils.PathUtils import *
 import time, traceback
 from utils.ImageUtils import render_all_images
-from utils.Variables import ENCODER_BY_CODEC, encoder_choices
+from utils.Variables import (ENCODER_BY_CODEC, XFADE_TRANSITIONS,
+                             XFADE_DIRECTION_FAMILIES, XFADE_TRANSITION_GROUPS,
+                             XFADE_TRANSITION_LABELS, encoder_choices)
 from utils.PageUtils import get_ffmpeg_version
 
 from utils.Quadrants.SafeRender import (RENDER_STATUS, submit_render,
@@ -223,15 +225,18 @@ os.makedirs(TEMP_GENERATED_DIR, exist_ok=True)
 # 定义默认值
 trans_enable = _trans_enable
 trans_time = _trans_time
+transition_name = 'fade'
 
 trans_params = {
     'enabled': G_config['VIDEO_TRANS_ENABLE'],
-    'duration': G_config['VIDEO_TRANS_TIME']
+    'duration': G_config['VIDEO_TRANS_TIME'],
+    'name': 'fade'
 }
 
 with st.container(border=True):
-    st.write("渲染设置")
-    st.info("已生成的片段不会受到影响，除非您重新渲染它们", icon="ℹ️")
+    st.subheader("渲染设置")
+    st.info("下列选项中，除【强制覆盖】外，其余选项不会影响已生成片段。", icon="ℹ️")
+    st.markdown("**渲染任务**")
     encoder_param = {
         "hwaccel": False,
         "brand": None,
@@ -240,29 +245,37 @@ with st.container(border=True):
         "bitrate": 5000,
         "resolution": [1920, 1080]
     } 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5, vertical_alignment="center")
     with col1:
-        force_render_clip = st.checkbox("覆盖已存在的视频", value=False, help="强制对所有片段重新渲染，不论其是否存在。")
+        # 解码后端不给选项：能不能硬解由实探决定，用户唯一需要能做的，是清掉
+        # 可能过期的探测结果（换了驱动/显卡后重试）。
+        if st.button("重新探测渲染器", disabled=button_disable_stat,
+                    help="""清除本进程已缓存的 AV1 硬解探测结果，下次渲染对每条 AV1 源重新实探（约 0.2 秒/文件）。
+                            - AV1 解码后端：自动——本机对该 AV1 流能硬解时用 MSMF，否则 FFMPEG；H.264 始终 FFMPEG。"""):
+            clear_av1_hw_decode_cache()
+            st.toast("已清除探测缓存，下次渲染会重新探测", icon="🔍")
 
     with col2:
-        clips_only = st.checkbox("仅渲染每个片段", help="只渲染片段，不拼接为完整视频。", key='clips_only')
+        force_render_clip = st.checkbox("强制覆盖", value=False, key="render_force_existing",
+                                       help="仅勾选后才会强制对所有片段重新渲染；默认复用已有有效片段。")
 
     with col3:
-        # 这里原来是一个"使用 GPU 硬件加速"复选框：disabled=True 且恒 False，而下面的
-        # 【加速方案】又把 disabled 挂在它身上 → 那个下拉框永远点不动，SegmentUtils 里
-        # "勾选了就以用户选的品牌为准（同机多卡时自动探测可能挑错）"这条分支根本进不去。
-        # 现在两件事合并成下面这一个选择，不再留一个点不动的开关。
-        # 这一格原来放那个点不动的复选框；现在改成读一条本机状态（探测结果进程级缓存，
-        # 与下方下拉框共用同一份答案），让"为什么只有这几个牌子可选"当场看得见。
-        _got = probe_hw_encoders()
-        st.caption("本机实探可用硬件编码器：" + (
-            "、".join(_n for _c, _n in _got) if _got else "无（自动档将用 CPU 软编）"))
+        clips_only = st.checkbox("片段模式", help="只渲染每个成绩的片段，不进行拼接。", key='clips_only')
 
     with col4:
-        preset_bitrate = st.checkbox("使用预设的码率", True, help="均为常用值，如自定义可删除填入的数值查看范围")
+        trans_enable = st.checkbox(
+            "启用片段过渡",
+            value=_trans_enable,
+            help="关闭后片段会直接拼接。" if not clips_only else "仅渲染片段时此项不可用。",
+            disabled=clips_only)
+        trans_params["enabled"] = trans_enable
 
-    # 画面设置代码（分辨率部分优化）
-    display_col1, display_col2, display_col3 = st.columns(3, vertical_alignment="center")
+    with col5:
+        preset_bitrate = st.checkbox("使用预设码率", True, help="均为常用值，如自定义可删除填入的数值查看范围")
+
+    st.divider()
+    st.markdown("**编码与画面**")
+    display_col1, display_col2, display_col3 = st.columns([1.15, 1, 1], vertical_alignment="top")
 
     with display_col1:
         # 硬件档只列**实探可用**的品牌（probe_hw_encoders 会真编一帧 nullsrc 验证，驱动
@@ -272,11 +285,8 @@ with st.container(border=True):
         _opts = encoder_choices(probe_hw_encoders(), probe_software_encoders())
         _enc_choice = st.selectbox("编码器方案", [o[0] for o in _opts], 0,
             disabled=button_disable_stat,
-            help="两个按钮共用这一个选择（判据只有一份）：选「自动」按本机实探结果编；"
-                 "也可以点名【硬件】品牌或【软件】CPU 档（AVC 就是 H.264，HEVC 即 H.265）。"
-                 "硬件档只列实探可用的，运行期仍可能编不动；软件档始终在列，随时可改回 CPU 渲染。"
-                 "H.265 同画质下体积更小，但纯 CPU 编码明显更慢，老播放器也可能不认；"
-                 "真编不动时渲染器会退回 libx264 重试，不会因此丢片段。")
+            help=f"""[H] = 硬件加速（只显示探测可用选项），[S] = 软件编码
+- 自动渲染失败时请选择 [S] libx264""")
         # selectbox 回的是"选中的那个字符串"，不是下标：写成 _opts[_enc_choice] 会把标签
         # 当索引用（旧引擎直接报 __getitem__ 重载不匹配，新引擎也一样会崩在运行时）。
         # 按标签查回编码器名即可；查不到就是第一项「自动」，None → 交给实探。
@@ -296,9 +306,9 @@ with st.container(border=True):
             "2K (2560 × 1440)": (2560, 1440),
             "4K (3840 × 2160)": (3840, 2160)
         }
-        selected_preset_res = st.selectbox("生成清晰度与分辨率", list(res_presets.keys()), 
+        selected_preset_res = st.selectbox("生成清晰度", list(res_presets.keys()),
                                            list(res_presets.values()).index(tuple(_video_res)), 
-                                           help="不再支持自定义分辨率，这会导致排版错位")
+                                           help="不支持自定义分辨率，这会导致排版错位")
         v_res_width, v_res_height = res_presets[selected_preset_res]
         encoder_param["resolution"] = res_presets[selected_preset_res]
         res_display = selected_preset_res  # 使用完整预设字符串
@@ -315,7 +325,7 @@ with st.container(border=True):
                 "超高（8000kbps）": 8000,
                 "极高（10000kbps）": 10000
             }
-            selected_bitrate = st.selectbox("选择预设值码率 (kbps)", list(bitrate_presets.keys()), 2,
+            selected_bitrate = st.selectbox("选择预设值码率", list(bitrate_presets.keys()), 2,
                 placeholder="选择一个预设的码率",
                 help="不会影响视频长度，且越大越不容易糊，但文件大小和生成时间也会随之增加"
             )
@@ -325,7 +335,7 @@ with st.container(border=True):
         else:
             st.toast("高码率可使您的视频更清晰，但视频生成时间会变得更长，且输出文件大小也会变的更大", icon="⚠️")
             v_bitrate = st.number_input("输入自定义码率 (kbps)",1000,20000, None, 100,
-                help="将添加上限【两倍码率】和缓冲区【四倍码率】，防止因超限导致生成时间变长",
+                help="若未填写自定义码率则使用默认值[5000kbps]",
                 placeholder="1000 ≤ 码率 ≤ 20000"
             )
             # 两条路线都必须把码率落到 encoder_param：旧写法只在预设分支赋值，
@@ -335,46 +345,77 @@ with st.container(border=True):
                 bitrate_display = f"自定义（{v_bitrate}kbps）"
             else:
                 # 没填就用默认值，但要把"你的输入没生效"说破，别让人以为已经按自定义编码了
-                bitrate_display = f"自定义（未填，按默认 {encoder_param['bitrate']}kbps）"
-                st.warning(f"自定义码率还没有值，本次按默认 {encoder_param['bitrate']}kbps 编码。",
-                           icon="⚠️")
-
-    decode_col1, decode_col2 = st.columns([1, 2], vertical_alignment="center")
-    with decode_col1:
-        # 解码后端不给选项：能不能硬解由实探决定，用户唯一需要能做的，是清掉
-        # 可能过期的探测结果（换了驱动/显卡后重试）。
-        if st.button("重新探测", disabled=button_disable_stat,
-                     help="清除本进程已缓存的 AV1 硬解探测结果，下次渲染对每条 AV1 源"
-                          "重新实探（约 0.2 秒/文件）。"):
-            clear_av1_hw_decode_cache()
-            st.toast("已清除探测缓存，下次渲染会重新探测", icon="🔍")
-    with decode_col2:
-        st.caption("AV1 解码后端：自动——本机对该 AV1 流能硬解时用 MSMF，否则 FFMPEG；"
-                   "H.264 始终 FFMPEG。")
+                bitrate_display = f"默认值（{encoder_param['bitrate']}kbps）"
 
 
 # trans_config_placeholder = st.empty()
 # 仅当选择 "完整视频" 时才显示过渡选项
     if not clips_only:
         st.divider()
+        st.markdown("**片段过渡**")
+        st.caption("仅完整视频生效；仅渲染片段时不会执行片段之间的转场。")
         trans_params = {
             'enabled': G_config['VIDEO_TRANS_ENABLE'],
-            'duration': G_config['VIDEO_TRANS_TIME']
+            'duration': G_config['VIDEO_TRANS_TIME'],
+            'name': 'fade'
         }
-        st.write("片段过渡（仅渲染完整视频时有效）")
-        col1, col2, col3 = st.columns([1, 2, .15], vertical_alignment="center")
-        with col1:
-            trans_enable = st.checkbox("启用，过渡时间为：", value=_trans_enable, help="勾选此设置但不自定义过渡效果时，默认使用 fade")
-            trans_params["enabled"] = trans_enable
+        col1, col2, col3 = st.columns([1.4, 1, 1.8], vertical_alignment="center")
+        # with col1:
+            # trans_enable = st.checkbox("启用片段过渡", value=_trans_enable, help="关闭后片段会直接拼接。")
+            # trans_params["enabled"] = trans_enable
         with col2:
-            trans_time = st.number_input("过渡时间", 0.5, 10.0, _trans_time, 0.5,
-                placeholder="过渡时间(s)",
-                disabled=not trans_enable,
-                label_visibility="collapsed"
+            trans_time = st.number_input("过渡时间（秒）", 0.5, 10.0, _trans_time, 0.5,
+                disabled=not trans_enable
             )
             trans_params["duration"] = trans_time
         with col3:
-            st.write("秒")
+            transition_group = st.selectbox(
+                "转场分类", list(XFADE_TRANSITION_GROUPS), index=0,
+                key="render_transition_group",
+                disabled=not trans_enable,
+                help="先按方向或效果类型筛选转场。",
+            )
+            transition_options = XFADE_TRANSITION_GROUPS[transition_group]
+            directional_choices = []
+            for family_name, family_styles in XFADE_DIRECTION_FAMILIES.items():
+                for style_name, direction_map in family_styles.items():
+                    filtered_directions = {
+                        label: codec for label, codec in direction_map.items()
+                        if codec in transition_options
+                    }
+                    if filtered_directions:
+                        directional_choices.append(
+                            (family_name, style_name, filtered_directions)
+                        )
+
+            if directional_choices:
+                direction_style_labels = [
+                    f"{family} · {style}"
+                    for family, style, _directions in directional_choices
+                ]
+                direction_style = st.selectbox(
+                    "方向类型", direction_style_labels, index=0,
+                    key=f"render_transition_direction_style_{transition_group}",
+                    disabled=not trans_enable,
+                    help="选择方向性转场的具体类型。",
+                )
+                _style_index = direction_style_labels.index(direction_style)
+                _family, _style, _directions = directional_choices[_style_index]
+                direction_label = st.selectbox(
+                    "转场方向", list(_directions), index=0,
+                    key=f"render_transition_direction_{transition_group}_{direction_style}",
+                    disabled=not trans_enable,
+                    help="选择该转场的运动方向。",
+                )
+                transition_name = _directions[direction_label]
+            else:
+                transition_name = st.selectbox(
+                    "转场效果", transition_options, index=0,
+                    format_func=lambda value: f"{XFADE_TRANSITION_LABELS.get(value, value)} ({value})",
+                    disabled=not trans_enable,
+                    help="使用 FFmpeg xfade 滤镜；未启用时不会影响成片。",
+                )
+            trans_params["name"] = transition_name
 
 v_mode_index = clips_only
 v_bitrate_kbps = f"{v_bitrate}"
@@ -420,27 +461,11 @@ else:
     opt_encoder, _ = detect_hw_encoder()
 encoder_param['codec'] = opt_encoder
 
-_trans_display = ("启用，淡入淡出 %.1f 秒" % float(trans_time or 0)) if trans_enable else "不启用"
+_trans_display = (f"启用，{transition_name} 转场 %.1f 秒" % float(trans_time or 0)) if trans_enable else "不启用"
 st.error(f"""
         **注意事项：**
         - 生成平均时间会因片段长度之间不同码率而变化
             - 如果您单个片段很长，渲染时间也会变久，这是事实
-        - 片段之间的过渡：本次{_trans_display}
-            - 「开始渲染」把淡变**烘焙进片段两端**（观感像经过一次黑），
-              「Quadrants GPU 渲染」改在拼接阶段做 xfade 交叉淡化；两者会互相作废对方渲好的片段
-            - 时长可在上方改；过渡**类型**目前固定为淡化(fade)，没有多种转场可选
-        - 本次参数：编码器 `{opt_encoder}`（自动档=本机实探结果；也可点名硬件品牌或
-          软件 H.264/AVC、H.265/HEVC 档；这就是两个按钮实际会用、也是渲染指纹会记下的
-          那一个），分辨率 {res_display}，码率 {bitrate_display}
-            - 帧率没有控件：经典路固定 60fps；Quadrants 路在渲染前探测本批全部 main 源，
-              取其中**最高**帧率（上限 60fps）。低帧率源按时间基重复帧，时长不变
-            - AV1 解码后端：自动探测（仅 Quadrants 路；缓存可点「重新探测」清除；
-              H.264 固定走 FFMPEG）
-            - H.265/HEVC 在同画质下通常更小，但纯 CPU 编码更慢，部分老播放器/网页预览
-              可能不认；上传前请确认目标平台接受 HEVC
-            - 编码器（含点名的硬件品牌或软件档）在某台机器上编不动时，渲染器会退回
-              libx264 再试一次，片段不会因为选错编码器而丢失；这时清单改记 libx264，
-              下次会按软编重渲
         - 若 GPU （或驱动）太旧而不支持当前 FFmpeg 版本将无法使用硬件加速
             - 当前 FFmpeg 版本为 `{get_ffmpeg_version()}`
         - 如有以下情况，请立即终止生成并检查素材（或同时反馈问题）：

@@ -23,8 +23,8 @@ from typing import Optional
 
 from utils.DataUtils import sort_video_files
 from utils.PathUtils import TEMP_GENERATED_DIR
-from utils.Variables import (SOFTWARE_ENCODER, fallback_encoder_on_failure,
-                             is_hevc_codec)
+from utils.Variables import (SOFTWARE_ENCODER, XFADE_TRANSITIONS,
+                             fallback_encoder_on_failure, is_hevc_codec)
 
 from .RenderIO import (get_ffmpeg_binary, get_ffmpeg_encoder_args, get_active_render_job,
                        run_owned_complete, check_ffmpeg_version)
@@ -194,6 +194,36 @@ def _run_ffmpeg_encode_with_fallback(cmd_prefix: list, output_path: str,
 # transition-island 各阶段
 # ============================================================================
 
+def _has_audio_stream(filepath: str) -> bool:
+    """Return whether an input contains an audio stream for island filters."""
+    result = subprocess.run(
+        [get_ffmpeg_binary('ffprobe'), '-v', 'error',
+         '-select_streams', 'a:0', '-show_entries', 'stream=index',
+         '-of', 'csv=p=0', filepath],
+        capture_output=True, text=True
+    )
+    return bool(result.stdout.strip())
+
+
+def _audio_window_available(filepath: str, start: float, duration: float) -> bool:
+    """Return whether an input has audio for the requested original-time window."""
+    result = subprocess.run(
+        [get_ffmpeg_binary('ffprobe'), '-v', 'error',
+         '-select_streams', 'a:0', '-show_entries', 'stream=duration',
+         '-of', 'default=noprint_wrappers=1:nokey=1', filepath],
+        capture_output=True, text=True
+    )
+    values = []
+    for line in result.stdout.splitlines():
+        try:
+            values.append(float(line.strip()))
+        except ValueError:
+            continue
+    if not values:
+        return _has_audio_stream(filepath)
+    return max(values) >= float(start) + float(duration) - 0.05
+
+
 def _audio_window(start: float, duration: float) -> str:
     """精确交出一条 duration 秒的音频窗口。
 
@@ -211,6 +241,15 @@ def _audio_window(start: float, duration: float) -> str:
             f"aformat=sample_fmts=fltp:channel_layouts=stereo")
 
 
+def _audio_source(index: int, has_audio: bool, start: float, duration: float) -> str:
+    """Build an audio window from the input, or a matching silent fallback."""
+    if has_audio:
+        return f"[{index}:a]{_audio_window(start, duration)}"
+    d = _format_seconds(duration)
+    return (f"anullsrc=channel_layout=stereo:sample_rate=48000,"
+            f"atrim=duration={d},asetpts=N/SR/TB")
+
+
 def _render_xfade_body_segment(input_path: str, start: float, duration: float,
                                output_path: str, codec: Optional[str], bitrate: str,
                                video_fps: int, stage: str):
@@ -221,10 +260,12 @@ def _render_xfade_body_segment(input_path: str, start: float, duration: float,
     （1080p60 软解约 9ms/帧，起点 20s 就是白烧 ~11 万帧）。-ss 放在 -i 前由 ffmpeg
     定位到关键帧后再精确解码到目标时刻，重编码下仍是帧级准确。
     """
+    has_audio = _has_audio_stream(input_path)
+    audio_filter = _audio_source(0, has_audio, 0, duration)
     filter_complex = (
         f"[0:v]trim=duration={_format_seconds(duration)},"
         f"setpts=PTS-STARTPTS,fps={video_fps},format=yuv420p,settb=AVTB[v];"
-        f"[0:a]{_audio_window(0, duration)}[a]"
+        f"{audio_filter}[a]"
     )
     cmd_prefix = [
         get_ffmpeg_binary('ffmpeg'), '-y', '-hide_banner', '-loglevel', 'warning',
@@ -239,23 +280,39 @@ def _render_xfade_body_segment(input_path: str, start: float, duration: float,
 def _render_xfade_transition_segment(left_path: str, right_path: str,
                                      left_start: float, duration: float,
                                      output_path: str, codec: Optional[str], bitrate: str,
-                                     video_fps: int, stage: str):
-    """对相邻两片的重叠窗口做 xfade（视频）+ acrossfade（音频）。
+                                     video_fps: int, stage: str,
+                                     transition_name: str = "fade"):
+    """对相邻两片的重叠窗口做 xfade（视频）+ 音频交叉淡化。
+
+    音频使用精确窗口上的显式 afade + amix，避免真实 AAC 尾部触发
+    acrossfade 的 EOF 判定，同时保留左片淡出、右片淡入的曲线。
 
     左片的窗口起点同样走输入侧 -ss（理由见 _render_xfade_body_segment）：转场窗口
     位于每段尾部，旧写法要从头解码整段才能拿到最后 1 秒。
     """
+    if transition_name not in XFADE_TRANSITIONS:
+        raise ValueError(f"不支持的 xfade 转场: {transition_name!r}")
     duration_s = _format_seconds(duration)
+    print(f"[Island] xfade transition={transition_name!r}, duration={duration_s}s")
+    left_audio = _audio_source(0, _audio_window_available(left_path, left_start, duration), 0, duration)
+    right_audio = _audio_source(1, _audio_window_available(right_path, 0, duration), 0, duration)
     filter_complex = (
         f"[0:v]trim=duration={duration_s},"
         f"setpts=PTS-STARTPTS,fps={video_fps},format=yuv420p,settb=AVTB[v0];"
         f"[1:v]trim=start=0:duration={duration_s},"
         f"setpts=PTS-STARTPTS,fps={video_fps},format=yuv420p,settb=AVTB[v1];"
-        f"[v0][v1]xfade=transition=fade:duration={duration_s}:offset=0,"
+        f"{left_audio}[a0];"
+        f"{right_audio}[a1];"
+        f"[v0][v1]xfade=transition={transition_name}:duration={duration_s}:offset=0,"
         f"format=yuv420p,settb=AVTB[vout];"
-        f"[0:a]{_audio_window(0, duration)}[a0];"
-        f"[1:a]{_audio_window(0, duration)}[a1];"
-        f"[a0][a1]acrossfade=d={duration_s}:c1=tri:c2=tri,"
+        # acrossfade 在真实 AAC 尾部仍可能因时间戳/编码器延迟提前 EOF；窗口已经
+        # 被 _audio_source 精确补齐到 D 秒，因此用等价的显式曲线替代它：左路全段
+        # 淡出、右路全段淡入，再混音。这样保留交叉淡化，同时不依赖 acrossfade 的
+        # 双输入 EOF 判定。
+        f"[a0]afade=t=out:st=0:d={duration_s}:curve=tri[a0f];"
+        f"[a1]afade=t=in:st=0:d={duration_s}:curve=tri[a1f];"
+        f"[a0f][a1f]amix=inputs=2:duration=longest:dropout_transition=0,"
+        f"atrim=duration={duration_s},"
         f"aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB[aout]"
     )
     cmd_prefix = [
@@ -323,7 +380,8 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
                                      codec: Optional[str] = None,
                                      bitrate: str = "5000k",
                                      video_fps: int = 60,
-                                     temp_dir_name: str = "xfade_islands_tmp"):
+                                     temp_dir_name: str = "xfade_islands_tmp",
+                                     transition_name: str = "fade"):
     """低内存 xfade 拼接：每次只处理相邻两片的转场窗口，再 concat。
 
     仅调用 FFmpeg/FFprobe，不依赖 MoviePy 或 GPU 计算框架。
@@ -331,6 +389,8 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
     """
     # 这道检查以前定义了却没有调用点；xfade/apad 等滤镜都有最低版本要求，
     # 低版本应在拼接开始前就给出可操作报错，而不是跑到一半才失败。
+    if transition_name not in XFADE_TRANSITIONS:
+        raise ValueError(f"不支持的 xfade 转场: {transition_name!r}")
     check_ffmpeg_version()
     print("[Info] --------------------开始 transition island 低内存拼接-------------------")
     t_concat_start = time.perf_counter()
@@ -410,7 +470,8 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
                     print(f"[Island] 生成转场 {i + 1}->{i + 2}: duration={transition_duration:.3f}")
                     _render_xfade_transition_segment(
                         file_path, file_paths[i + 1], left_start, transition_duration,
-                        transition_path, codec, bitrate, video_fps, f"转场 {i + 1}->{i + 2}"
+                        transition_path, codec, bitrate, video_fps, f"转场 {i + 1}->{i + 2}",
+                        transition_name
                     )
                     generated_segments.append(transition_path)
                     segment_index += 1
@@ -456,7 +517,8 @@ def combine_full_video_xfade_islands(video_clip_path: str, trans_time: float = 1
 
 def combine_full_video_direct(video_clip_path: str, auto_add_transition: bool = False,
                               trans_time: float = 1, codec: Optional[str] = None,
-                              bitrate: str = "5000k", video_fps: int = 60):
+                              bitrate: str = "5000k", video_fps: int = 60,
+                              transition_name: str = "fade"):
     """拼接文件夹下所有 {数字前缀}_*.mp4 片段。
 
     - auto_add_transition=False：TS remux + concat 流拷贝（无转场，最快、最低内存）。
@@ -466,7 +528,8 @@ def combine_full_video_direct(video_clip_path: str, auto_add_transition: bool = 
     if auto_add_transition and trans_time > 0:
         return combine_full_video_xfade_islands(
             video_clip_path, trans_time=trans_time, codec=codec,
-            bitrate=bitrate, video_fps=video_fps)
+            bitrate=bitrate, video_fps=video_fps,
+            transition_name=transition_name)
 
     print("[Info] --------------------开始拼接视频-------------------")
     t_concat_start = time.perf_counter()

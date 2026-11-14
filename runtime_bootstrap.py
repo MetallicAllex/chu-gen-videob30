@@ -63,18 +63,23 @@ def main():
     for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "PYTHONSTARTUP"):
         environment.pop(key, None)
     cmd = [sys.executable, "-I", "-X", "utf8", "-m", "streamlit", "run", str(root / "st_app.py"), *sys.argv[1:]]
-    with (logs / f"{stamp}-console.txt").open("wb") as log:
-        process = subprocess.Popen(cmd, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        try:
+    process = None
+    try:
+        with (logs / f"{stamp}-console.txt").open("wb") as log:
+            process = subprocess.Popen(cmd, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if process.stdout is None:
+                raise RuntimeError("子进程标准输出流未能成功建立。")
             for line in iter(process.stdout.readline, b""):
                 log.write(line)
                 log.flush()
                 sys.stdout.buffer.write(line)
                 sys.stdout.buffer.flush()
             return process.wait()
-        except KeyboardInterrupt:
-            process.terminate()
-            return process.wait()
+    except KeyboardInterrupt:
+        if process is None:
+            return 130
+        process.terminate()
+        return process.wait()
 
 
 if __name__ == "__main__":
