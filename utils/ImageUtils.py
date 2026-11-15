@@ -416,6 +416,70 @@ def draw_version_columns(image: Image.Image, versions: list, levels: dict,
     return image
 
 
+def _init_level_text(difficulty_name, old_const, new_const,
+                     version_columns=None, version_levels=None,
+                     merge_equal=True):
+    """init 模板的等级行：三服时用纯文字列，避免图标占位。"""
+    if not version_columns:
+        if new_const > old_const:
+            return f"{difficulty_name}[{old_const:.1f} ↑ {new_const:.1f}(NEXT)]"
+        if new_const < old_const:
+            return f"{difficulty_name}[{old_const:.1f} ↓ {new_const:.1f}(NEXT)]"
+        return f"{difficulty_name}[{old_const:.1f}(NEXT)]"
+
+    levels = version_levels or {}
+    values = [positive_constant(levels.get(key)) for key in version_columns]
+    if (merge_equal and len(version_columns) >= 2
+            and all(value is not None for value in values)
+            and len({round(value, 1) for value in values}) == 1):
+        return f"{difficulty_name}[{values[0]:.1f}]"
+
+    base = values[0] if values else None
+    parts = []
+    for index, (key, value) in enumerate(zip(version_columns, values)):
+        # init 行宽有限，用 CN/JP/INT 缩写，不用中文全称
+        label = str(key).upper()
+        if value is None:
+            parts.append(f"{label} --")
+            continue
+        text = f"{label} {value:.1f}"
+        if base is not None and index > 0:
+            if value > base:
+                text += " ▲"
+            elif value < base:
+                text += " ▼"
+        parts.append(text)
+    return f"{difficulty_name}[{' / '.join(parts)}]"
+
+
+def _init_rating_text(record_rating, score, old_const, new_const,
+                      version_columns=None, version_levels=None,
+                      merge_equal=True):
+    """init 模板的 Rating 行：三服时按各服定数计算并排，值+实心三角。"""
+    base_rating = float(record_rating)
+    if not version_columns:
+        new_rating = calculate_rating(score, new_const)
+        if new_const != old_const:
+            return f"{base_rating:.2f} → {new_rating:.2f}(NEXT)"
+        return f"{base_rating:.2f}(NEXT)"
+
+    levels = version_levels or {}
+    consts = [positive_constant(levels.get(key)) for key in version_columns]
+    if (merge_equal and len(version_columns) >= 2
+            and all(value is not None for value in consts)
+            and len({round(value, 1) for value in consts}) == 1):
+        return f"{base_rating:.2f}"
+
+    parts = []
+    for index, const in enumerate(consts):
+        if const is None:
+            parts.append("--")
+            continue
+        value = base_rating if index == 0 else calculate_rating(score, const)
+        parts.append(f"{value:.2f}")
+    return " / ".join(parts)
+
+
 def ScoreLoader(score: int = 0):
     if score < 0 or score > 1010000:
         raise ValueError("分数无效")
@@ -993,13 +1057,9 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                     )
                 old_const = level_value
                 new_const = level_next_value
-                
-                if new_const > old_const:
-                    level_text = f"{difficulty_name}[{old_const:.1f} ↑ {new_const:.1f}(NEXT)]"
-                elif new_const < old_const:
-                    level_text = f"{difficulty_name}[{old_const:.1f} ↓ {new_const:.1f}(NEXT)]"
-                else:
-                    level_text = f"{difficulty_name}[{old_const:.1f}(NEXT)]"
+                level_text = _init_level_text(
+                    difficulty_name, old_const, new_const,
+                    version_columns, version_levels, merge_equal)
                 
                 TextDraw(
                     level_layer,
@@ -1007,6 +1067,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                     pos=(level_center_x, level_center_y - 20),  # y_offset = -20
                     font_path=fonts['level']['path'],
                     font_size=fonts['level']['size'],
+                    max_width=level_layer.width,
                     # font_color=(0, 0, 0),
                     font_color=color['level'],
                     h_align="center"
@@ -1048,12 +1109,10 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                 rating_center_x = rating_layer.width // 2
                 rating_center_y = rating_layer.height // 2
                 
-                base_rating = f"{record_detail['rating']:.2f}"
-                new_rating = calculate_rating(record_detail['score'], new_const)
-                if new_const != old_const:
-                    rating_text = f'{base_rating} → {new_rating:.2f}(NEXT)'
-                else:
-                    rating_text = f'{base_rating}(NEXT)'
+                rating_text = _init_rating_text(
+                    record_detail['rating'], record_detail['score'],
+                    old_const, new_const, version_columns, version_levels,
+                    merge_equal)
                 
                 TextDraw(
                     rating_layer,
@@ -1061,6 +1120,7 @@ def generate_single_image(record_detail: dict, style_config: dict, output_path,
                     pos=(rating_center_x, rating_center_y - 15),  # y_offset = -15
                     font_path=fonts['rating']['path'],
                     font_size=fonts['rating']['size'],
+                    max_width=rating_layer.width,
                     # font_color=(0, 0, 0),
                     font_color=color['rating'],
                     h_align="center"
